@@ -1,0 +1,10 @@
+streamlit
+streamlit-plotly-events
+pandas
+numpy
+plotly
+pydeck
+matplotlib
+pvlib
+requests
+openpyxl
