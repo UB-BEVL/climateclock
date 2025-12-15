@@ -1261,34 +1261,9 @@ def render_station_picker():
     stations["display_label"] = stations.apply(make_label, axis=1)
 
     st.divider()
-    st.markdown("### Quick picks & search")
-    st.caption(f"{len(stations):,} verified download links. Choose a shortcut or search, then load once.")
+    st.markdown("### Station search")
+    st.caption(f"{len(stations):,} verified download links. Search, then load once.")
     st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
-
-    quick = st.columns(4)
-    demo_stations = [
-        {"name": "Buffalo, NY", "url": "https://climate.onebuilding.org/WMO_Region_4_North_and_Central_Americas/USA_United_States_of_America/NY_New_York/BUFFALO_NIAGARA_INTL_AP_725280_TMYx.2007-2021.zip", "lat": 42.94, "lon": -78.73, "country": "USA"},
-        {"name": "Denver, CO", "url": "https://climate.onebuilding.org/WMO_Region_4_North_and_Central_Americas/USA_United_States_of_America/CO_Colorado/DENVER_AURORA_BUCKLEY_AFB_724695_TMYx.2007-2021.zip", "lat": 39.72, "lon": -104.75, "country": "USA"},
-        {"name": "Chicago, IL", "url": "https://climate.onebuilding.org/WMO_Region_4_North_and_Central_Americas/USA_United_States_of_America/IL_Illinois/CHICAGO_MIDWAY_AP_725346_TMYx.2007-2021.zip", "lat": 41.79, "lon": -87.75, "country": "USA"},
-        {"name": "Phoenix, AZ", "url": "https://climate.onebuilding.org/WMO_Region_4_North_and_Central_Americas/USA_United_States_of_America/AZ_Arizona/PHOENIX_SKY_HARBOR_INTL_AP_722780_TMYx.2007-2021.zip", "lat": 33.43, "lon": -112.02, "country": "USA"},
-    ]
-    for i, demo in enumerate(demo_stations):
-        with quick[i]:
-            if st.button(f"🌤️ {demo['name']}", use_container_width=True, key=f"demo_{i}", type="secondary"):
-                station_info = {
-                    "name": demo["name"],
-                    "country": demo["country"],
-                    "lat": demo["lat"],
-                    "lon": demo["lon"],
-                    "elevation_m": "—",
-                    "timezone": "—",
-                    "zip_url": demo["url"],
-                    "period": "2007-2021",
-                    "heating_db": None,
-                    "cooling_db": None,
-                    "display_label": f"{demo['name']}, {demo['country']} (WMO —, —, 2007-2021)",
-                }
-                _stage_station_and_load(station_info)
 
     search_col, load_col = st.columns([3, 1])
     with search_col:
@@ -1515,15 +1490,11 @@ def fetch_epw_bytes(url: str) -> Optional[bytes]:
 
 # Alternative EPW sources as fallbacks
 ALTERNATIVE_EPW_SOURCES = [
-    # Buffalo (hyphen, not dot)
-    "https://climate.onebuilding.org/WMO_Region_4_North_and_Central_Americas/USA_United_States_of_America/NY_New_York/USA_NY_Buffalo-Niagara.Intl.AP.725280_TMYx.2007-2021.zip",
-    "https://climate.onebuilding.org/WMO_Region_4_North_and_Central_Americas/USA_United_States_of_America/NY_New_York/USA_NY_Buffalo-Niagara.Intl.AP.725280_TMY3.zip",
-
-    # Chicago Midway (hyphen, not dot)
-    "https://climate.onebuilding.org/WMO_Region_4_North_and_Central_Americas/USA_United_States_of_America/IL_Illinois/USA_IL_Chicago-Midway.AP.725346_TMYx.2007-2021.zip",
-
-    # Denver looks OK as you have it:
-    "https://climate.onebuilding.org/WMO_Region_4_North_and_Central_Americas/USA_United_States_of_America/CO_Colorado/USA_CO_Denver-Aurora-Buckley.AFB.724695_TMYx.2007-2021.zip",
+    # Keep a minimal, general-purpose fallback list for manual selections
+    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/NY/Buffalo/Buffalo_Greater_International_AP_725280_TMY3.epw",
+    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/AZ/Phoenix/Phoenix_Sky_Harbor_Intl_Airport_722780_TMY3.epw",
+    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/IL/Chicago/Chicago_OHare_Intl_Airport_725300_TMY3.epw",
+    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/FL/Miami/Miami_Intl_Airport_722020_TMY3.epw",
 ]
 
 def try_multiple_sources(sources: List[str]) -> Tuple[Optional[bytes], Optional[str]]:
@@ -1540,6 +1511,7 @@ if up is not None:
 
 elif ss.get("sel_station_url"):
     url = ss["sel_station_url"]
+    alt_urls = ss.get("sel_station_alt_urls", [])
     station_name = ss.get("sel_station", {}).get("name", "selected station")
 
     # If the URL is an HTML anchor, extract the href
@@ -1548,6 +1520,7 @@ elif ss.get("sel_station_url"):
 
     # Generate alternative URLs to try (station-specific first)
     urls_to_try = fix_station_url(url)
+    urls_to_try.extend(alt_urls)
     attempted_urls = list(urls_to_try)
 
     success = False
