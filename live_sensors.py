@@ -20,6 +20,7 @@ SENSOR_COLUMNS = [
     "relative_humidity",
     "ghi",
     "wind_speed",
+    "wind_dir",
     "lat",
     "lon",
     "source",
@@ -32,12 +33,22 @@ COLUMN_ALIASES = {
     "relative_humidity": ["relative_humidity", "rh", "humidity"],
     "ghi": ["ghi", "solar", "global_horizontal_irradiance"],
     "wind_speed": ["wind_speed", "windspeed", "wind"],
+    "wind_dir": ["wind_dir", "winddir", "wdir", "wd", "wind_direction"],
     "lat": ["lat", "latitude"],
     "lon": ["lon", "longitude"],
     "source": ["source", "provider"],
 }
 
-FLOAT_COLUMNS = ["temperature", "relative_humidity", "ghi", "wind_speed", "lat", "lon"]
+FLOAT_COLUMNS = ["temperature", "relative_humidity", "ghi", "wind_speed", "wind_dir", "lat", "lon"]
+
+
+def _calc_abs_humidity(temp_c: pd.Series, rh_pct: pd.Series) -> pd.Series:
+    """Compute absolute humidity (g/m³) from temperature (°C) and RH (%)."""
+    temp_c = pd.to_numeric(temp_c, errors="coerce")
+    rh_pct = pd.to_numeric(rh_pct, errors="coerce")
+    es = 610.94 * np.exp(17.625 * temp_c / (temp_c + 243.04))
+    vap = es * (rh_pct / 100.0)
+    return 216.7 * vap / (temp_c + 273.15)
 
 
 def _require_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -155,22 +166,49 @@ def _annotate_climatology(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_sensor_climatology(df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate sensor data by day-of-year/hour means."""
+    """Aggregate sensor data by day-of-year/hour means (temp, humidity, solar, wind)."""
     if df.empty:
-        return pd.DataFrame(columns=["doy", "hour", "sensor_temp", "sensor_rh", "sensor_ghi"])
+        return pd.DataFrame(columns=[
+            "doy", "hour", "sensor_temp", "sensor_rh", "sensor_ghi",
+            "sensor_abs_hum", "sensor_windspd", "sensor_winddir",
+        ])
     annotated = _annotate_climatology(df)
+
+    if {"temperature", "relative_humidity"}.issubset(annotated.columns):
+        annotated["abs_hum"] = _calc_abs_humidity(annotated["temperature"], annotated["relative_humidity"])
+    else:
+        annotated["abs_hum"] = np.nan
+
+    for col in ["ghi", "wind_speed", "wind_dir"]:
+        if col not in annotated.columns:
+            annotated[col] = np.nan
+
+    def _circular_mean(deg: pd.Series) -> float:
+        vals = pd.to_numeric(deg, errors="coerce").dropna()
+        if vals.empty:
+            return np.nan
+        rad = np.deg2rad(vals)
+        mean_angle = np.arctan2(np.sin(rad).mean(), np.cos(rad).mean())
+        return (np.degrees(mean_angle) + 360.0) % 360.0
+
     grouped = (
         annotated.groupby(["doy", "hour"], as_index=False)
         .agg({
             "temperature": "mean",
             "relative_humidity": "mean",
             "ghi": "mean",
+            "abs_hum": "mean",
+            "wind_speed": "mean",
+            "wind_dir": _circular_mean,
         })
         .rename(
             columns={
                 "temperature": "sensor_temp",
                 "relative_humidity": "sensor_rh",
                 "ghi": "sensor_ghi",
+                "abs_hum": "sensor_abs_hum",
+                "wind_speed": "sensor_windspd",
+                "wind_dir": "sensor_winddir",
             }
         )
     )
@@ -180,22 +218,49 @@ def build_sensor_climatology(df: pd.DataFrame) -> pd.DataFrame:
 def build_epw_climatology(cdf: pd.DataFrame) -> pd.DataFrame:
     """Aggregate EPW climate dataframe into typical doy/hour values."""
     if cdf.empty:
-        return pd.DataFrame(columns=["doy", "hour", "epw_temp", "epw_rh", "epw_ghi"])
+        return pd.DataFrame(columns=[
+            "doy", "hour", "epw_temp", "epw_rh", "epw_ghi",
+            "epw_abs_hum", "epw_windspd", "epw_winddir",
+        ])
     df = cdf.copy()
     df["doy"] = df.index.dayofyear
     df["hour"] = df.index.hour
+
+    if {"drybulb", "relhum"}.issubset(df.columns):
+        df["abs_hum"] = _calc_abs_humidity(df["drybulb"], df["relhum"])
+    else:
+        df["abs_hum"] = np.nan
+
+    for col in ["glohorrad", "windspd", "winddir"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    def _circular_mean(deg: pd.Series) -> float:
+        vals = pd.to_numeric(deg, errors="coerce").dropna()
+        if vals.empty:
+            return np.nan
+        rad = np.deg2rad(vals)
+        mean_angle = np.arctan2(np.sin(rad).mean(), np.cos(rad).mean())
+        return (np.degrees(mean_angle) + 360.0) % 360.0
+
     grouped = (
         df.groupby(["doy", "hour"], as_index=False)
         .agg({
             "drybulb": "mean",
             "relhum": "mean",
             "glohorrad": "mean",
+            "abs_hum": "mean",
+            "windspd": "mean",
+            "winddir": _circular_mean,
         })
         .rename(
             columns={
                 "drybulb": "epw_temp",
                 "relhum": "epw_rh",
                 "glohorrad": "epw_ghi",
+                "abs_hum": "epw_abs_hum",
+                "windspd": "epw_windspd",
+                "winddir": "epw_winddir",
             }
         )
     )
@@ -209,21 +274,44 @@ def compare_epw_vs_sensor(epw_clim: pd.DataFrame, sensor_clim: pd.DataFrame) -> 
             epw_temp=np.nan,
             epw_rh=np.nan,
             epw_ghi=np.nan,
+            epw_abs_hum=np.nan,
+            epw_windspd=np.nan,
+            epw_winddir=np.nan,
             temp_bias=np.nan,
             rh_bias=np.nan,
             ghi_bias=np.nan,
+            abs_hum_bias=np.nan,
+            windspd_bias=np.nan,
+            winddir_bias=np.nan,
         )
     if sensor_clim.empty:
         return epw_clim.assign(
             sensor_temp=np.nan,
             sensor_rh=np.nan,
             sensor_ghi=np.nan,
+            sensor_abs_hum=np.nan,
+            sensor_windspd=np.nan,
+            sensor_winddir=np.nan,
             temp_bias=np.nan,
             rh_bias=np.nan,
             ghi_bias=np.nan,
+            abs_hum_bias=np.nan,
+            windspd_bias=np.nan,
+            winddir_bias=np.nan,
         )
     merged = pd.merge(epw_clim, sensor_clim, on=["doy", "hour"], how="outer")
     merged["temp_bias"] = merged["sensor_temp"] - merged["epw_temp"]
     merged["rh_bias"] = merged["sensor_rh"] - merged["epw_rh"]
     merged["ghi_bias"] = merged["sensor_ghi"] - merged["epw_ghi"]
+    merged["abs_hum_bias"] = merged["sensor_abs_hum"] - merged["epw_abs_hum"]
+    merged["windspd_bias"] = merged["sensor_windspd"] - merged["epw_windspd"]
+
+    def _wind_dir_diff(row):
+        a, b = row.get("sensor_winddir"), row.get("epw_winddir")
+        if pd.isna(a) or pd.isna(b):
+            return np.nan
+        diff = (a - b + 540) % 360 - 180
+        return diff
+
+    merged["winddir_bias"] = merged.apply(_wind_dir_diff, axis=1)
     return merged

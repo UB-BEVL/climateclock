@@ -1113,6 +1113,7 @@ TAB_ORDER = [
     "☀️ Solar Analysis",
     "📈 Psychrometrics",
     "📡 Live Data vs EPW",
+    "Sensor Comparison",
     "📁 Raw Data",
     "📈 Short-Term Prediction (24–72h)",
     "🌍 Future Climate (2050 / 2080 SSP)",
@@ -4454,6 +4455,17 @@ if page == "📡 Live Data vs EPW":
     focus_threshold = float(st.session_state.get("custom_overheat_threshold", 30))
     st.session_state.setdefault("sensor_df", pd.DataFrame())
     st.session_state.setdefault("sensor_history", [])
+    st.session_state.setdefault("sensors", {})  # sensor_id -> dataframe
+    st.session_state.setdefault("sensor_meta", {})  # sensor_id -> metadata dict
+    st.session_state.setdefault("active_sensor_id", None)
+
+    def _calc_abs_humidity(temp_c: pd.Series, rh_pct: pd.Series) -> pd.Series:
+        """Compute absolute humidity (g/m³) from temperature (°C) and RH (%)."""
+        temp_c = pd.to_numeric(temp_c, errors="coerce")
+        rh_pct = pd.to_numeric(rh_pct, errors="coerce")
+        es = 610.94 * np.exp(17.625 * temp_c / (temp_c + 243.04))
+        vap = es * (rh_pct / 100.0)
+        return 216.7 * vap / (temp_c + 273.15)
 
     def _normalize_sensor_columns(df: pd.DataFrame, tz_assumed) -> pd.DataFrame:
         if df is None or df.empty:
@@ -4484,6 +4496,27 @@ if page == "📡 Live Data vs EPW":
         for alias in rh_aliases:
             if alias in cols:
                 rename_map[cols[alias]] = "RH"
+                break
+
+        ghi_aliases = [
+            "ghi", "glohorrad", "solar", "solar_radiation", "global_horizontal_irradiance",
+            "global_horizontal", "solar_wm2", "irradiance"
+        ]
+        for alias in ghi_aliases:
+            if alias in cols:
+                rename_map[cols[alias]] = "GHI"
+                break
+
+        windspd_aliases = ["windspd", "wind_speed", "windspeed", "wind", "ws"]
+        for alias in windspd_aliases:
+            if alias in cols:
+                rename_map[cols[alias]] = "windspd"
+                break
+
+        winddir_aliases = ["winddir", "wind_dir", "wdir", "wd", "winddirection", "wind_direction"]
+        for alias in winddir_aliases:
+            if alias in cols:
+                rename_map[cols[alias]] = "winddir"
                 break
 
         # Fallback: pick first likely temperature column if none mapped
@@ -4520,9 +4553,11 @@ if page == "📡 Live Data vs EPW":
             ts = ts.dt.tz_convert(tz_assumed)
         out = df.assign(timestamp=ts)
         # ensure float cols
-        for col in ["T_db", "RH"]:
+        for col in ["T_db", "RH", "GHI", "windspd", "winddir"]:
             if col in out.columns:
                 out[col] = pd.to_numeric(out[col], errors="coerce")
+        if "abs_hum" not in out.columns and {"T_db", "RH"}.issubset(out.columns):
+            out["abs_hum"] = _calc_abs_humidity(out["T_db"], out["RH"])
         out = out.dropna(subset=["timestamp"]).sort_values("timestamp")
         return out
 
@@ -4583,9 +4618,26 @@ if page == "📡 Live Data vs EPW":
                     if norm.empty:
                         st.warning("No rows after parsing; check timestamp column.")
                     else:
+                        # derive sensor id from filename; ensure uniqueness
+                        base_id = Path(uploaded_file.name).stem or "sensor_upload"
+                        sensor_id = base_id
+                        suffix = 1
+                        while sensor_id in st.session_state["sensors"]:
+                            sensor_id = f"{base_id}_{suffix}"
+                            suffix += 1
+
                         st.session_state["sensor_df"] = norm
+                        st.session_state["sensors"][sensor_id] = norm
+                        st.session_state["active_sensor_id"] = sensor_id
+                        st.session_state.setdefault("sensor_meta", {})[sensor_id] = {
+                            "label": uploaded_file.name,
+                            "source": "upload",
+                            "records": len(norm),
+                            "date_min": norm["timestamp"].min(),
+                            "date_max": norm["timestamp"].max(),
+                        }
                         _append_history(uploaded_file.name, "Upload", len(norm))
-                        st.success(f"Ingested {len(norm):,} rows from {uploaded_file.name}")
+                        st.success(f"Ingested {len(norm):,} rows into sensor '{sensor_id}'")
                 except Exception as exc:
                     st.error(f"Failed to ingest file: {exc}")
 
@@ -4605,11 +4657,36 @@ if page == "📡 Live Data vs EPW":
                     if norm.empty:
                         st.warning("API returned no usable rows.")
                     else:
-                        st.session_state["sensor_df"] = norm
-                        _append_history(api_url, "API", len(norm))
-                        st.success(f"Fetched {len(norm):,} rows from API")
+                        # derive sensor id from API hostname or timestamp
+                        try:
+                            from urllib.parse import urlparse
+                            host = urlparse(api_url).netloc or "api"
+                        except Exception:
+                            host = "api"
+                        base_id = host.replace(":", "_") or "api"
+                        sensor_id = base_id
+                        suffix = 1
+                        while sensor_id in st.session_state["sensors"]:
+                            sensor_id = f"{base_id}_{suffix}"
+                            suffix += 1
 
-    sensor_df = st.session_state.get("sensor_df", pd.DataFrame())
+                        st.session_state["sensor_df"] = norm
+                        st.session_state["sensors"][sensor_id] = norm
+                        st.session_state["active_sensor_id"] = sensor_id
+                        st.session_state.setdefault("sensor_meta", {})[sensor_id] = {
+                            "label": api_url,
+                            "source": "api",
+                            "records": len(norm),
+                            "date_min": norm["timestamp"].min(),
+                            "date_max": norm["timestamp"].max(),
+                        }
+                        _append_history(api_url, "API", len(norm))
+                        st.success(f"Fetched {len(norm):,} rows into sensor '{sensor_id}'")
+
+    # respect active sensor selection if available
+    active_sensor_id = st.session_state.get("active_sensor_id")
+    sensors_store = st.session_state.get("sensors", {})
+    sensor_df = sensors_store.get(active_sensor_id, st.session_state.get("sensor_df", pd.DataFrame()))
     epw_df = st.session_state.get("epw_df") or st.session_state.get("cdf")
 
     # ---------- Ingest history ----------
@@ -4621,6 +4698,31 @@ if page == "📡 Live Data vs EPW":
         hist_df = pd.DataFrame(history)
         cols = ["ingested_at", "source", "records", "label"]
         st.dataframe(hist_df[cols].sort_values("ingested_at", ascending=False), use_container_width=True, height=220)
+
+    # Show available sensors and allow switching active sensor
+    sensors_store = st.session_state.get("sensors", {})
+    sensor_meta = st.session_state.get("sensor_meta", {})
+    if sensors_store:
+        meta_rows = []
+        for sid, df_val in sensors_store.items():
+            meta = sensor_meta.get(sid, {})
+            meta_rows.append({
+                "sensor_id": sid,
+                "label": meta.get("label", sid),
+                "source": meta.get("source", ""),
+                "records": len(df_val),
+                "date_min": meta.get("date_min"),
+                "date_max": meta.get("date_max"),
+            })
+        st.dataframe(pd.DataFrame(meta_rows), use_container_width=True, height=200)
+        with st.expander("Choose active sensor for Live vs EPW", expanded=False):
+            chosen = st.selectbox(
+                "Active sensor",
+                options=list(sensors_store.keys()),
+                index=list(sensors_store.keys()).index(st.session_state.get("active_sensor_id")) if st.session_state.get("active_sensor_id") in sensors_store else 0,
+            )
+            st.session_state["active_sensor_id"] = chosen
+            st.caption(f"Active sensor set to {chosen}. This drives the Live Data vs EPW analysis.")
 
     st.divider()
 
@@ -4815,6 +4917,210 @@ if page == "📡 Live Data vs EPW":
 
     st.divider()
 
+    # ---------- Seasonal climatology diagnostics ----------
+    st.markdown("#### Seasonal climatology: Live sensors vs EPW")
+    st.caption("Day-of-year climatology (mean by hour) lets you see how the on-site sensors track the long-term EPW seasonality across key variables.")
+
+    if epw_df is None or len(epw_df) == 0:
+        st.info("Load an EPW to build the climatology baseline.")
+    elif sensor_df.empty:
+        st.info("Upload or fetch sensor data to compare against the EPW climatology.")
+    else:
+        # Prepare EPW climatology
+        epw_src = epw_df.copy()
+        if not isinstance(epw_src.index, pd.DatetimeIndex):
+            if "timestamp" in epw_src.columns:
+                epw_src = epw_src.set_index(pd.to_datetime(epw_src["timestamp"], errors="coerce"))
+            else:
+                epw_src.index = pd.to_datetime(epw_src.index, errors="coerce")
+        epw_clim = ls.build_epw_climatology(epw_src)
+
+        # Prepare sensor climatology
+        sensor_for_clim = sensor_df.rename(columns={
+            "T_db": "temperature",
+            "RH": "relative_humidity",
+            "GHI": "ghi",
+            "windspd": "wind_speed",
+            "winddir": "wind_dir",
+        }).copy()
+        sensor_clim = ls.build_sensor_climatology(sensor_for_clim)
+
+        merged_clim = ls.compare_epw_vs_sensor(epw_clim, sensor_clim)
+        if merged_clim.empty:
+            st.info("Not enough overlap to build climatology curves yet.")
+        else:
+            merged_clim = merged_clim.sort_values(["doy", "hour"])
+            merged_clim["doy_hr"] = merged_clim["doy"] + merged_clim["hour"] / 24.0
+
+            month_ticks = pd.date_range("2001-01-01", periods=12, freq="MS")
+            tick_vals = [d.dayofyear for d in month_ticks]
+            tick_text = [d.strftime("%b") for d in month_ticks]
+            season_bands = [
+                (80, 171, "Spring"),
+                (172, 263, "Summer"),
+                (264, 354, "Fall"),
+            ]
+
+            def _add_season_shading(fig: go.Figure):
+                for x0, x1, label in season_bands:
+                    fig.add_vrect(
+                        x0=x0, x1=x1,
+                        fillcolor="rgba(77,214,255,0.06)", line_width=0,
+                        layer="below",
+                    )
+                fig.update_xaxes(tickmode="array", tickvals=tick_vals, ticktext=tick_text, title="Day of Year")
+                return fig
+
+            def _plot_clim(epw_col: str, sensor_col: str, title: str, units: str, thresholds: Optional[list] = None, y_range=None):
+                present_cols = [c for c in [epw_col, sensor_col] if c in merged_clim.columns]
+                if not present_cols:
+                    st.info(f"Missing data for {title}. Ensure both EPW and sensor fields are present.")
+                    return
+                data_slice = merged_clim[present_cols]
+                if data_slice.dropna(how="all").empty:
+                    st.info(f"No overlapping data for {title} yet.")
+                    return
+
+                epw_series = merged_clim[epw_col].rolling(24, center=True, min_periods=1).mean() if epw_col in merged_clim else pd.Series(dtype=float)
+                fig = go.Figure()
+                if epw_col in merged_clim and epw_series.notna().any():
+                    fig.add_trace(go.Scatter(
+                        x=merged_clim["doy_hr"],
+                        y=epw_series,
+                        mode="lines",
+                        line=dict(color="#6c757d", width=2.5),
+                        name="EPW climatology (smoothed)",
+                        hovertemplate="DOY %{x:.1f}<br>EPW %{y:.2f} " + units + "<extra></extra>",
+                        fill="tozeroy",
+                        fillcolor="rgba(108,117,125,0.12)",
+                    ))
+
+                if sensor_col in merged_clim:
+                    sensor_vals = merged_clim[sensor_col]
+                else:
+                    sensor_vals = pd.Series(dtype=float)
+                if sensor_vals.notna().any():
+                    fig.add_trace(go.Scatter(
+                        x=merged_clim["doy_hr"],
+                        y=sensor_vals,
+                        mode="markers",
+                        marker=dict(color="#1f78b4", size=5, opacity=0.7),
+                        name="Sensor mean",
+                        hovertemplate="DOY %{x:.1f}<br>Sensor %{y:.2f} " + units + "<extra></extra>",
+                    ))
+
+                thresholds = thresholds or []
+                for thr, desc, color in thresholds:
+                    hline_kwargs = {"y": thr, "line_dash": "dot", "line_color": color}
+                    if desc:
+                        hline_kwargs.update({"annotation_text": desc, "annotation_position": "top left"})
+                    fig.add_hline(**hline_kwargs)
+
+                if y_range:
+                    fig.update_yaxes(range=y_range)
+
+                fig.update_layout(
+                    title=title,
+                    yaxis_title=f"{title} ({units})",
+                    height=450,
+                    margin=dict(l=12, r=12, t=50, b=40),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.01),
+                )
+                _add_season_shading(fig)
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.markdown("### 🌡️ Dry-Bulb Temperature")
+            _plot_clim(
+                "epw_temp",
+                "sensor_temp",
+                "Dry-bulb temperature",
+                "°C",
+                thresholds=[(30, ">30°C overheating", "#e45756"), (18, "18–26°C comfort band", "#1f78b4"), (26, None, "#1f78b4")],
+            )
+
+            st.markdown("### 💧 Relative Humidity")
+            _plot_clim("epw_rh", "sensor_rh", "Relative humidity", "%", y_range=[0, 100])
+
+            st.markdown("### ☀️ Global Solar Radiation")
+            _plot_clim("epw_ghi", "sensor_ghi", "Global solar radiation", "W/m²")
+
+            st.markdown("### 🫧 Absolute Humidity")
+            _plot_clim("epw_abs_hum", "sensor_abs_hum", "Absolute humidity", "g/m³")
+
+            st.markdown("### 💨 Wind Speed")
+            _plot_clim("epw_windspd", "sensor_windspd", "Wind speed", "m/s")
+
+            st.markdown("### 🧭 Wind Direction")
+            _plot_clim("epw_winddir", "sensor_winddir", "Wind direction", "deg", y_range=[0, 360])
+
+            st.markdown("#### Hour-of-day profiles (EPW vs Sensor)")
+            st.caption("Average by hour-of-day (0–23). Compare typical EPW patterns to on-site sensor means with optional comfort band shading for temperature.")
+
+            def _hourly_plot(epw_col: str, sensor_col: str, title: str, units: str, comfort_band: Optional[tuple] = None, y_range=None):
+                epw_hour = pd.Series(dtype=float)
+                sensor_hour = pd.Series(dtype=float)
+
+                if epw_col in epw_src.columns:
+                    epw_hour = epw_src[epw_col].groupby(epw_src.index.hour).mean().sort_index()
+                if sensor_col in sensor_for_clim.columns:
+                    sensor_hour = sensor_for_clim[sensor_col].groupby(sensor_for_clim["timestamp"].dt.hour).mean().sort_index()
+
+                if epw_hour.empty and sensor_hour.empty:
+                    st.info(f"No data to plot for {title}.")
+                    return
+
+                fig = go.Figure()
+                if not epw_hour.empty:
+                    fig.add_trace(go.Scatter(
+                        x=epw_hour.index,
+                        y=epw_hour.values,
+                        mode="lines",
+                        line=dict(color="#6c757d", width=2.6, shape="spline"),
+                        name="EPW mean",
+                        hovertemplate="Hour %{x}:00<br>EPW %{y:.2f} " + units + "<extra></extra>",
+                    ))
+                if not sensor_hour.empty:
+                    fig.add_trace(go.Scatter(
+                        x=sensor_hour.index,
+                        y=sensor_hour.values,
+                        mode="markers+lines",
+                        line=dict(color="#1f78b4", width=2.2),
+                        marker=dict(size=7, opacity=0.8),
+                        name="Sensor mean",
+                        hovertemplate="Hour %{x}:00<br>Sensor %{y:.2f} " + units + "<extra></extra>",
+                    ))
+
+                if comfort_band:
+                    low, high = comfort_band
+                    fig.add_hrect(y0=low, y1=high, fillcolor="rgba(31,120,180,0.08)", line_width=0, layer="below")
+
+                fig.update_layout(
+                    title=title,
+                    xaxis_title="Hour of Day (0–23)",
+                    yaxis_title=f"{title} ({units})",
+                    height=450,
+                    margin=dict(l=12, r=12, t=50, b=40),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
+                )
+                if y_range:
+                    fig.update_yaxes(range=y_range)
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.markdown("### 🌡️ Hourly Dry-Bulb")
+            _hourly_plot("drybulb", "temperature", "Dry-bulb temperature", "°C", comfort_band=(18, 26))
+
+            st.markdown("### 💧 Hourly Relative Humidity")
+            _hourly_plot("relhum", "relative_humidity", "Relative humidity", "%", y_range=[0, 100])
+
+            st.markdown("### ☀️ Hourly Global Solar Radiation")
+            _hourly_plot("glohorrad", "ghi", "Global solar radiation", "W/m²")
+
+            st.markdown("### 🫧 Hourly Absolute Humidity")
+            _hourly_plot("abs_hum", "abs_hum", "Absolute humidity", "g/m³")
+
+            st.markdown("### 💨 Hourly Wind Speed")
+            _hourly_plot("windspd", "wind_speed", "Wind speed", "m/s")
+
     # ---------- Comfort & UHI snapshot ----------
     st.markdown("#### Urban Heat Island & Thermal Comfort")
     if sensor_df.empty:
@@ -4948,6 +5254,245 @@ if page == "📡 Live Data vs EPW":
         "- Calibration pipeline: DOY x hour biases map back onto every EPW hour to emit a site-specific EPW download for EnergyPlus/Ladybug."
     )
     st.info("Capture screenshots of the Live Data tab, 7-day overlay, bias heatmap, and scatter plot for the Methods section.")
+
+if page == "Sensor Comparison":
+    st.markdown("### Sensor Comparison")
+    st.caption("This section compares multiple sensor locations to understand neighborhood-scale microclimate differences within the same city.")
+
+    focus_threshold = float(st.session_state.get("custom_overheat_threshold", 30))
+    sensors_store = st.session_state.get("sensors", {})
+    sensor_meta = st.session_state.get("sensor_meta", {})
+
+    if not sensors_store:
+        st.info("No stored sensor data found. Ingest multiple sensor locations in the Live Data vs EPW tab to enable comparison.")
+        st.stop()
+
+    if len(sensors_store) == 1:
+        st.info("Only one sensor dataset is available. Add another sensor location to compare.")
+        single_id = list(sensors_store.keys())[0]
+        st.caption(f"Currently loaded: {single_id} ({sensor_meta.get(single_id, {}).get('label', single_id)})")
+        st.stop()
+
+    # Build combined dataframe for plotting while preserving sensor_id
+    frames = []
+    for sid, df_val in sensors_store.items():
+        df_local = df_val.copy()
+        if "timestamp" not in df_local.columns:
+            continue
+        df_local["timestamp"] = pd.to_datetime(df_local["timestamp"], errors="coerce")
+        df_local["sensor_id"] = sid
+        # map column names to our expected fields
+        if "temperature" not in df_local.columns and "T_db" in df_local.columns:
+            df_local = df_local.rename(columns={"T_db": "temperature"})
+        frames.append(df_local)
+    all_sensors = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["timestamp","temperature","sensor_id"])
+    all_sensors = all_sensors.dropna(subset=["timestamp", "temperature", "sensor_id"])
+
+    available_ids = sorted(all_sensors["sensor_id"].dropna().unique().tolist())
+    default_selection = available_ids[:2] if len(available_ids) >= 2 else available_ids
+    options_with_labels = [f"{sid} — {sensor_meta.get(sid, {}).get('label', sid)}" for sid in available_ids]
+    label_to_sid = {f"{sid} — {sensor_meta.get(sid, {}).get('label', sid)}": sid for sid in available_ids}
+    selected_labels = st.multiselect(
+        "Select sensors to compare",
+        options=options_with_labels,
+        default=[f"{sid} — {sensor_meta.get(sid, {}).get('label', sid)}" for sid in default_selection],
+        help="Pick at least two sensors (e.g., downtown vs airport) to see side-by-side metrics and differences.",
+    )
+    selected_ids = [label_to_sid[lbl] for lbl in selected_labels]
+
+    meta_rows = []
+    for sid in available_ids:
+        meta = sensor_meta.get(sid, {})
+        meta_rows.append({
+            "sensor_id": sid,
+            "label": meta.get("label", sid),
+            "source": meta.get("source", ""),
+            "records": meta.get("records", len(sensors_store.get(sid, []))),
+            "date_min": meta.get("date_min"),
+            "date_max": meta.get("date_max"),
+        })
+    st.dataframe(pd.DataFrame(meta_rows), use_container_width=True, height=180)
+    st.caption("Sensor metadata: location names, sources, record counts, and date ranges for each loaded dataset.")
+
+    if len(selected_ids) < 2:
+        st.warning("Select at least two sensors to enable comparison.")
+        st.stop()
+
+    ref_sensor = st.selectbox("Reference sensor A", options=selected_ids, index=0)
+    cmp_sensor = st.selectbox("Comparison sensor B", options=selected_ids, index=1 if len(selected_ids) > 1 else 0)
+
+    def _compute_stats(df: pd.DataFrame) -> dict:
+        if df.empty:
+            return {"mean": np.nan, "day_mean": np.nan, "night_mean": np.nan, "diurnal": np.nan, "hot_hours": np.nan, "pct_comfort": np.nan, "hour_curve": pd.Series(dtype=float), "month_curve": pd.Series(dtype=float)}
+        hourly = df.set_index("timestamp").sort_index()
+        temp_hourly = hourly["temperature"].resample("1H").mean().dropna()
+        if temp_hourly.empty:
+            return {"mean": np.nan, "day_mean": np.nan, "night_mean": np.nan, "diurnal": np.nan, "hot_hours": np.nan, "pct_comfort": np.nan, "hour_curve": pd.Series(dtype=float), "month_curve": pd.Series(dtype=float)}
+        day_mask = temp_hourly.index.hour.between(8, 18, inclusive="left")
+        night_mask = ~day_mask
+        diurnal = temp_hourly.resample("1D").apply(lambda s: s.max() - s.min())
+        hour_curve = temp_hourly.groupby(temp_hourly.index.hour).mean()
+        month_curve = temp_hourly.groupby(temp_hourly.index.month).mean()
+        return {
+            "mean": temp_hourly.mean(),
+            "day_mean": temp_hourly[day_mask].mean(),
+            "night_mean": temp_hourly[night_mask].mean(),
+            "diurnal": diurnal.mean(),
+            "hot_hours": int((temp_hourly > 30).sum()),
+            "pct_comfort": float((temp_hourly.between(18, 26)).mean() * 100),
+            "hour_curve": hour_curve,
+            "month_curve": month_curve,
+        }
+
+    stats_map = {}
+    for sid in selected_ids:
+        stats_map[sid] = _compute_stats(all_sensors[all_sensors["sensor_id"] == sid])
+
+    # Side-by-side metrics
+    stats_rows = []
+    for sid in selected_ids:
+        s = stats_map.get(sid, {})
+        stats_rows.append({
+            "Sensor": sid,
+            "Mean (°C)": s.get("mean"),
+            "Daytime 08-18 (°C)": s.get("day_mean"),
+            "Night 18-08 (°C)": s.get("night_mean"),
+            "Diurnal range (°C)": s.get("diurnal"),
+            ">30°C hours": s.get("hot_hours"),
+            "Comfort 18–26°C (%)": s.get("pct_comfort"),
+        })
+    st.dataframe(pd.DataFrame(stats_rows).set_index("Sensor").round(2), use_container_width=True)
+    st.caption("Side-by-side sensor summaries. Nighttime means and diurnal ranges highlight microclimate and urban heat island signals.")
+
+    # Difference metrics (A − B)
+    ref_stats = stats_map.get(ref_sensor, {})
+    cmp_stats = stats_map.get(cmp_sensor, {})
+    diff_mean = ref_stats.get("mean") - cmp_stats.get("mean") if ref_stats and cmp_stats else np.nan
+    diff_night = ref_stats.get("night_mean") - cmp_stats.get("night_mean") if ref_stats and cmp_stats else np.nan
+    diff_hot = ref_stats.get("hot_hours") - cmp_stats.get("hot_hours") if ref_stats and cmp_stats else np.nan
+    diff_comfort = ref_stats.get("pct_comfort") - cmp_stats.get("pct_comfort") if ref_stats and cmp_stats else np.nan
+
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("Mean temp Δ (A − B)", f"{diff_mean:+.1f} °C")
+    d2.metric("Night temp Δ (A − B)", f"{diff_night:+.1f} °C")
+    d3.metric(">30°C hours Δ", f"{diff_hot:+d}" if pd.notna(diff_hot) else "—")
+    d4.metric("Comfort hours Δ", f"{diff_comfort:+.1f} pp")
+    st.caption("Differences show how much warmer/cooler the reference sensor (A) is relative to comparison sensor (B). Nighttime deltas are key urban heat island signals.")
+
+    st.divider()
+
+    # Hour-of-day mean temperature lines
+    fig_hour = go.Figure()
+    for idx, sid in enumerate(selected_ids):
+        hour_curve = stats_map[sid].get("hour_curve", pd.Series(dtype=float))
+        if hour_curve.empty:
+            continue
+        fig_hour.add_trace(go.Scatter(
+            x=hour_curve.index,
+            y=hour_curve.values,
+            mode="lines+markers",
+            name=sid,
+            line=dict(width=2.2),
+            hovertemplate="Hour %{x}:00<br>%{y:.2f}°C<extra></extra>",
+        ))
+    fig_hour.update_layout(
+        title="Hour-of-day mean temperature (all selected sensors)",
+        xaxis_title="Hour of Day",
+        yaxis_title="Temperature (°C)",
+        height=360,
+        margin=dict(l=10, r=10, t=46, b=28),
+    )
+    st.plotly_chart(fig_hour, use_container_width=True)
+    st.caption("Lines show average temperature by hour for each sensor. Nighttime gaps between sensors flag localized heat retention.")
+
+    # Monthly mean temperature comparison
+    months_order = list(range(1, 13))
+    fig_month = go.Figure()
+    for sid in selected_ids:
+        month_curve = stats_map[sid].get("month_curve", pd.Series(dtype=float))
+        if month_curve.empty:
+            continue
+        fig_month.add_trace(go.Bar(
+            name=sid,
+            x=[pd.Timestamp(2000, m, 1).strftime("%b") for m in month_curve.index],
+            y=month_curve.values,
+        ))
+    fig_month.update_layout(
+        title="Monthly mean temperature (shown where data exists)",
+        xaxis_title="Month",
+        yaxis_title="Temperature (°C)",
+        barmode="group",
+        height=360,
+        margin=dict(l=10, r=10, t=46, b=36),
+    )
+    st.plotly_chart(fig_month, use_container_width=True)
+    st.caption("Only months with sensor observations are shown; missing bars mean no data, not zero temperature.")
+
+    # Difference plot (A − B) by hour
+    ref_hour = stats_map.get(ref_sensor, {}).get("hour_curve", pd.Series(dtype=float))
+    cmp_hour = stats_map.get(cmp_sensor, {}).get("hour_curve", pd.Series(dtype=float))
+    hours = sorted(set(ref_hour.index).union(set(cmp_hour.index))) if not ref_hour.empty or not cmp_hour.empty else []
+    if hours:
+        ref_hour_full = ref_hour.reindex(hours)
+        cmp_hour_full = cmp_hour.reindex(hours)
+        hour_diff = ref_hour_full - cmp_hour_full
+        fig_diff = go.Figure([go.Bar(x=hours, y=hour_diff.values, marker_color="#e45756")])
+        fig_diff.update_layout(
+            title=f"Sensor Difference (A − B) by hour: {ref_sensor} minus {cmp_sensor}",
+            xaxis_title="Hour of Day",
+            yaxis_title="Temperature difference (°C)",
+            height=320,
+            margin=dict(l=10, r=10, t=46, b=28),
+        )
+        st.plotly_chart(fig_diff, use_container_width=True)
+        st.caption("Positive bars mean the reference sensor (A) is warmer than sensor (B) at that hour. Nighttime warmth highlights urban heat island effects.")
+
+    st.divider()
+
+    # Overheating and comfort comparison
+    hot_bars = []
+    comfort_bars = []
+    for sid in selected_ids:
+        s = stats_map[sid]
+        hot_bars.append(go.Bar(name=f"{sid} >30°C hours", x=[sid], y=[s.get("hot_hours")], marker_color="#e45756"))
+        comfort_bars.append(go.Bar(name=f"{sid} 18–26°C %", x=[sid], y=[s.get("pct_comfort")], marker_color="#1f78b4"))
+
+    fig_hot = go.Figure(data=hot_bars)
+    fig_hot.update_layout(
+        title=">30°C overheating hours (by sensor)",
+        xaxis_title="Sensor",
+        yaxis_title="Hours above 30°C",
+        barmode="group",
+        height=320,
+        margin=dict(l=10, r=10, t=46, b=28),
+        showlegend=False,
+    )
+    st.plotly_chart(fig_hot, use_container_width=True)
+
+    fig_comfort = go.Figure(data=comfort_bars)
+    fig_comfort.update_layout(
+        title="Comfort-band share (18–26°C) by sensor",
+        xaxis_title="Sensor",
+        yaxis_title="Percent of hours",
+        barmode="group",
+        height=320,
+        margin=dict(l=10, r=10, t=46, b=28),
+        showlegend=False,
+    )
+    st.plotly_chart(fig_comfort, use_container_width=True)
+    st.caption("Comfort percentages and overheating hours show which neighborhood is hotter or offers more comfortable conditions.")
+
+    st.divider()
+
+    show_epw_context = st.toggle("Show EPW context (optional)", value=False, help="EPW is not required here; enable only if you want to mention climate baseline alongside sensor differences.")
+    if show_epw_context:
+        st.info("EPW context can provide typical-year baselines, but this tab focuses on sensor-to-sensor microclimate differences.")
+
+    st.markdown("#### Interpretation")
+    st.info(
+        "Differences between sensors reflect neighborhood-scale factors like urban form, vegetation, and surface materials rather than regional climate. "
+        "Nighttime temperature gaps are strong urban heat island indicators; persistent positive A − B at night means the reference site retains more heat after sunset."
+    )
 
 if page == "📁 Raw Data":
     # ====================== RAW DATA ======================
