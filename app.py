@@ -5938,3 +5938,6 @@ footer_html = (
     "</div>"
 )
 st.markdown(footer_html, unsafe_allow_html=True)
+##EPW_hour[h] = mean(EPW values at hour h across the whole EPW year)
+
+##Sensor_hour[h] = mean(sensor values at hour h across the sensor’s available dates)
