@@ -1,6 +1,7 @@
 from __future__ import annotations
 # standard libs next
 import os
+import calendar
 from pathlib import Path
 import io, zipfile, csv, math, argparse, datetime
 import requests
@@ -1754,15 +1755,19 @@ def render_top_nav():
     )
 
     # Use radio for robust state handling; styled to look like tabs
-    chosen = st.radio(
-        label="",
-        options=TAB_ORDER,
-        index=TAB_ORDER.index(current) if current in TAB_ORDER else 0,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="top_nav_radio",
-        help=None,
-    )
+    radio_kwargs = {
+        "label": "",
+        "options": TAB_ORDER,
+        "horizontal": True,
+        "label_visibility": "collapsed",
+        "key": "top_nav_radio",
+        "help": None,
+    }
+    # Only set index (default selection) on first render; afterwards Streamlit preserves state
+    if "top_nav_radio" not in st.session_state:
+        radio_kwargs["index"] = TAB_ORDER.index(current) if current in TAB_ORDER else 0
+
+    chosen = st.radio(**radio_kwargs)
 
     return chosen
 
@@ -4138,12 +4143,10 @@ if page == "📈 Psychrometrics":
     st.subheader("Psychrometric Chart")
     st.caption("Clean grid with absolute humidity (g/kg), RH isolines, saturation curve, and hourly EPW scatter.")
 
-    # ------- Controls (you can tweak defaults) -------
-    cA, cB, cC, cD = st.columns([1.2, 1, 1, 1])
-    x_min = cA.number_input("X min (°C)", -60.0, 60.0, value=-10.0, step=1.0)
-    x_max = cB.number_input("X max (°C)", -60.0, 80.0, value=35.0, step=1.0)
-    y_max = cC.number_input("Y max (g/kg)", 1.0, 50.0, value=35.0, step=1.0)
-    show_enthalpy = cD.checkbox("Show enthalpy & v lines", value=True)
+    # ------- Controls -------
+    cA, cB = st.columns([1.2, 1])
+    auto_zoom = cA.checkbox("Auto zoom to EPW range", value=True, help="Fit axes to EPW hourly temperature and absolute humidity range.")
+    show_enthalpy = cB.checkbox("Show enthalpy & v lines", value=True)
 
     # ------- Thermo helpers (SI) -------
     def p_ws_kPa(TC: np.ndarray) -> np.ndarray:
@@ -4198,24 +4201,30 @@ if page == "📈 Psychrometrics":
         st.info("No points to plot.")
         st.stop()
 
-    # Clamp X/Y to selected windows for the scatter (don’t clip background curves)
-    mask_x = (dfp["drybulb"] >= x_min) & (dfp["drybulb"] <= x_max)
-    dfp = dfp.loc[mask_x].copy()
-
-    # Compute scatter Y (absolute humidity g/kg)
+    # Compute scatter values (absolute humidity g/kg)
     T_pts = dfp["drybulb"].to_numpy(float)
     RH_pts = dfp["relhum"].to_numpy(float)
     Pv_pts = (RH_pts/100.0) * p_ws_kPa(T_pts)
     w_pts  = w_from_Pv_kPa(Pv_pts, P_kPa)
     Y_pts_gpkg = abs_hum_gpkg_from_w(w_pts)
 
-    # Keep points in y-range for speed/clarity
-    mask_y = (Y_pts_gpkg >= 0) & (Y_pts_gpkg <= y_max)
-    T_pts = T_pts[mask_y]
-    RH_pts = RH_pts[mask_y]
-    Y_pts_gpkg = Y_pts_gpkg[mask_y]
-    Pv_pts = Pv_pts[mask_y]
-    w_pts  = w_pts[mask_y]
+    # Auto ranges from EPW data (fallback to defaults if needed)
+    def _safe_min(arr, default):
+        v = np.nanmin(arr) if arr.size else np.nan
+        return v if np.isfinite(v) else default
+
+    def _safe_max(arr, default):
+        v = np.nanmax(arr) if arr.size else np.nan
+        return v if np.isfinite(v) else default
+
+    if auto_zoom:
+        x_min = _safe_min(T_pts, -10.0) - 2
+        x_max = _safe_max(T_pts, 40.0) + 2
+        y_min = max(0.0, _safe_min(Y_pts_gpkg, 0.0) - 1)
+        y_max = _safe_max(Y_pts_gpkg, 30.0) + 1
+    else:
+        x_min, x_max = -10.0, 50.0
+        y_min, y_max = 0.0, 40.0
 
     # Extra metrics for hover
     dp_pts = dew_point_C(T_pts, RH_pts)
@@ -4223,8 +4232,8 @@ if page == "📈 Psychrometrics":
     h_pts  = enthalpy_kJkg(T_pts, w_pts)
     v_pts  = specific_volume_m3kg(T_pts, w_pts, P_kPa)
     # --- Psychro axis extents & styling constants ---
-    X_MIN, X_MAX = -10, 100   # <- your requested 0..100 (keeping -10 headroom)
-    Y_MIN, Y_MAX = 0, 40
+    X_MIN, X_MAX = x_min, x_max
+    Y_MIN, Y_MAX = y_min, y_max
 
     # ------- Background curves (built in SI then plotted as °C vs g/kg) -------
     # Temperature axis for curves
@@ -4262,7 +4271,7 @@ if page == "📈 Psychrometrics":
 
     # Gray grid (optional: keep minimal; Plotly axes grid off, we emulate major lines)
     x_grid = np.arange(np.ceil(X_MIN/5)*5, np.floor(X_MAX/5)*5 + 0.1, 5)
-    y_grid = np.arange(0, y_max + 0.1, 5)
+    y_grid = np.arange(np.floor(Y_MIN/5)*5, np.floor(Y_MAX/5)*5 + 0.1, 5)
 
     for xv in x_grid:
         fig_psy.add_shape(type="line", x0=xv, x1=xv, y0=0, y1=y_max,
@@ -4308,16 +4317,14 @@ if page == "📈 Psychrometrics":
 
     # RH % labels along the right margin (like PVSyst look)
     for rh in rh_list:
-        # Find y at x close to x_max (clip within axis)
-        x_lab = X_MAX  - 0.2
+        x_lab = X_MAX - 0.2
         y_curve = np.interp(x_lab, T_axis, rh_curves_gpkg[rh])
-        if 0 <= y_curve <= y_max:
-            fig_psy.add_annotation(x=X_MAX , y=y_curve, text=f"{rh}%",
+        if Y_MIN <= y_curve <= Y_MAX:
+            fig_psy.add_annotation(x=X_MAX, y=y_curve, text=f"{rh}%",
                                 xanchor="left", showarrow=False,
                                 font=dict(size=11, color="rgba(120,120,120,0.9)"))
 
     # Scatter points (hourly conditions)
-    # Use simple blue (PVSyst vibe) with rich hover
     custom = np.c_[RH_pts, Pv_pts, h_pts, v_pts, dp_pts, tw_pts]
     fig_psy.add_trace(go.Scatter(
         x=T_pts, y=Y_pts_gpkg, mode="markers",
@@ -4349,7 +4356,8 @@ if page == "📈 Psychrometrics":
         gridwidth=0.6,
         zeroline=False,
         showline=True,
-        linecolor="rgba(255,255,255,0.25)"
+        linecolor="rgba(255,255,255,0.25)",
+        title="Dry Bulb Temperature (°C)",
     )
     fig_psy.update_yaxes(
         range=[Y_MIN, Y_MAX],
@@ -4360,7 +4368,8 @@ if page == "📈 Psychrometrics":
         gridwidth=0.6,
         zeroline=False,
         showline=True,
-        linecolor="rgba(255,255,255,0.25)"
+        linecolor="rgba(255,255,255,0.25)",
+        title="Absolute Humidity (g/kg)",
     )
 
     for tr in fig_psy.data:
@@ -4393,11 +4402,11 @@ if page == "📈 Psychrometrics":
 
 
     fig_psy.update_layout(
-        margin=dict(l=90, r=280, t=50, b=80),  # extra right for the legend
+        margin=dict(l=90, r=280, t=70, b=80),  # extra right for the legend
         height=680,
         legend=dict(
             orientation="v",
-            x=1.18, y=1.0,              # clearly outside the plot area
+            x=1.18, y=1.0,
             xanchor="left", yanchor="top",
             bgcolor="rgba(0,0,0,0)",
             bordercolor="rgba(255,255,255,0.20)",
@@ -4408,6 +4417,12 @@ if page == "📈 Psychrometrics":
         hovermode="closest",
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
+        title=dict(text="Psychrometric Chart", x=0.01, xanchor="left", yanchor="top", pad=dict(t=10, b=10)),
+    )
+    fig_psy.add_annotation(
+        xref="paper", yref="paper", x=0.0, y=1.12,
+        text="Based on EPW hourly data range.", showarrow=False,
+        font=dict(size=11, color="rgba(120,120,120,0.9)")
     )
     st.plotly_chart(
         fig_psy,
@@ -4544,13 +4559,17 @@ if page == "📡 Live Data vs EPW":
         tz_hours = 0.0
     tzinfo = dt_timezone(dt_timedelta(hours=tz_hours))
 
-    def _append_history(label: str, source: str, count: int):
+    def _append_history(label: str, source: str, count: int, sensor_id: Optional[str] = None, date_min=None, date_max=None):
         hist = st.session_state.get("sensor_history", [])
+        ts_str = pd.Timestamp.now(tz=tzinfo or "US/Eastern").strftime("%Y-%m-%d %H:%M")
         hist.append({
-            "ingested_at": pd.Timestamp.now(tz=tzinfo or "US/Eastern").strftime("%Y-%m-%d %H:%M"),
+            "ingested_at": ts_str,
             "source": source,
             "records": int(count),
             "label": label,
+            "sensor_id": sensor_id,
+            "date_min": date_min,
+            "date_max": date_max,
         })
         st.session_state["sensor_history"] = hist
 
@@ -4571,27 +4590,36 @@ if page == "📡 Live Data vs EPW":
     # Upload path
     with left:
         st.write("**Upload CSV/XLSX**")
-        uploaded_file = st.file_uploader("Sensor file", type=["csv", "xlsx"], key="live_sensor_file")
+        uploaded_files = st.file_uploader(
+            "Sensor file(s)",
+            type=["csv", "xlsx"],
+            accept_multiple_files=True,
+            key="live_sensor_file",
+            help="Upload one or more sensor files (max 200MB each)",
+        )
         ingest_click = st.button("Ingest Uploaded Data", use_container_width=True)
         if ingest_click:
-            if uploaded_file is None:
-                st.warning("Attach a file before ingesting.")
+            if not uploaded_files:
+                st.warning("Attach at least one file before ingesting.")
             else:
-                try:
-                    with st.spinner("Reading file…"):
-                        if uploaded_file.name.lower().endswith(".xlsx"):
-                            try:
-                                raw = pd.read_excel(uploaded_file, engine="openpyxl")
-                            except ImportError:
-                                st.error("Excel ingest requires the 'openpyxl' package. Install it and try again.")
-                                raw = pd.DataFrame()
-                        else:
-                            raw = pd.read_csv(uploaded_file)
-                        norm = _normalize_sensor_columns(raw, tzinfo or "US/Eastern")
-                    if norm.empty:
-                        st.warning("No rows after parsing; check timestamp column.")
-                    else:
-                        # derive sensor id from filename; ensure uniqueness
+                ingested = []
+                active_set = False
+                for uploaded_file in uploaded_files:
+                    try:
+                        with st.spinner(f"Reading {uploaded_file.name}…"):
+                            if uploaded_file.name.lower().endswith(".xlsx"):
+                                try:
+                                    raw = pd.read_excel(uploaded_file, engine="openpyxl")
+                                except ImportError:
+                                    st.error("Excel ingest requires the 'openpyxl' package. Install it and try again.")
+                                    raw = pd.DataFrame()
+                            else:
+                                raw = pd.read_csv(uploaded_file)
+                            norm = _normalize_sensor_columns(raw, tzinfo or "US/Eastern")
+                        if norm.empty:
+                            st.warning(f"No rows after parsing: {uploaded_file.name}")
+                            continue
+                        norm = norm.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
                         base_id = Path(uploaded_file.name).stem or "sensor_upload"
                         sensor_id = base_id
                         suffix = 1
@@ -4599,20 +4627,28 @@ if page == "📡 Live Data vs EPW":
                             sensor_id = f"{base_id}_{suffix}"
                             suffix += 1
 
-                        st.session_state["sensor_df"] = norm
                         st.session_state["sensors"][sensor_id] = norm
-                        st.session_state["active_sensor_id"] = sensor_id
+                        if not active_set:
+                            st.session_state["sensor_df"] = norm
+                            st.session_state["active_sensor_id"] = sensor_id
+                            active_set = True
+                        ingested_at = pd.Timestamp.now(tz=tzinfo or "US/Eastern").strftime("%Y-%m-%d %H:%M")
                         st.session_state.setdefault("sensor_meta", {})[sensor_id] = {
                             "label": uploaded_file.name,
                             "source": "upload",
                             "records": len(norm),
                             "date_min": norm["timestamp"].min(),
                             "date_max": norm["timestamp"].max(),
+                            "ingested_at": ingested_at,
                         }
-                        _append_history(uploaded_file.name, "Upload", len(norm))
-                        st.success(f"Ingested {len(norm):,} rows into sensor '{sensor_id}'")
-                except Exception as exc:
-                    st.error(f"Failed to ingest file: {exc}")
+                        _append_history(uploaded_file.name, "Upload", len(norm), sensor_id=sensor_id, date_min=norm["timestamp"].min(), date_max=norm["timestamp"].max())
+                        ingested.append({"file": uploaded_file.name, "sensor_id": sensor_id, "records": len(norm)})
+                    except Exception as exc:
+                        st.error(f"Failed to ingest {uploaded_file.name}: {exc}")
+                if ingested:
+                    summary_df = pd.DataFrame(ingested)
+                    st.success(f"Ingested {len(ingested)} file(s).")
+                    st.dataframe(summary_df, use_container_width=True, height=200)
 
     # API path
     with right:
@@ -4643,6 +4679,7 @@ if page == "📡 Live Data vs EPW":
                             sensor_id = f"{base_id}_{suffix}"
                             suffix += 1
 
+                        ingested_at = pd.Timestamp.now(tz=tzinfo or "US/Eastern").strftime("%Y-%m-%d %H:%M")
                         st.session_state["sensor_df"] = norm
                         st.session_state["sensors"][sensor_id] = norm
                         st.session_state["active_sensor_id"] = sensor_id
@@ -4652,8 +4689,9 @@ if page == "📡 Live Data vs EPW":
                             "records": len(norm),
                             "date_min": norm["timestamp"].min(),
                             "date_max": norm["timestamp"].max(),
+                            "ingested_at": ingested_at,
                         }
-                        _append_history(api_url, "API", len(norm))
+                        _append_history(api_url, "API", len(norm), sensor_id=sensor_id, date_min=norm["timestamp"].min(), date_max=norm["timestamp"].max())
                         st.success(f"Fetched {len(norm):,} rows into sensor '{sensor_id}'")
 
     # respect active sensor selection if available
@@ -4662,32 +4700,39 @@ if page == "📡 Live Data vs EPW":
     sensor_df = sensors_store.get(active_sensor_id, st.session_state.get("sensor_df", pd.DataFrame()))
     epw_df = st.session_state.get("epw_df") or st.session_state.get("cdf")
 
-    # ---------- Ingest history ----------
-    st.markdown("#### Ingest history")
-    history = st.session_state.get("sensor_history", [])
-    if not history:
-        st.info("No ingests yet. Upload a file or fetch from an API to get started.")
-    else:
-        hist_df = pd.DataFrame(history)
-        cols = ["ingested_at", "source", "records", "label"]
-        st.dataframe(hist_df[cols].sort_values("ingested_at", ascending=False), use_container_width=True, height=220)
-
-    # Show available sensors and allow switching active sensor
+    # ---------- Ingested sensors (unified view) ----------
+    st.markdown("#### Ingested sensors")
     sensors_store = st.session_state.get("sensors", {})
     sensor_meta = st.session_state.get("sensor_meta", {})
+    history = st.session_state.get("sensor_history", [])
+
     if sensors_store:
-        meta_rows = []
+        rows = []
         for sid, df_val in sensors_store.items():
             meta = sensor_meta.get(sid, {})
-            meta_rows.append({
+            rows.append({
                 "sensor_id": sid,
                 "label": meta.get("label", sid),
                 "source": meta.get("source", ""),
-                "records": len(df_val),
+                "records": meta.get("records", len(df_val)),
+                "ingested_at": meta.get("ingested_at"),
                 "date_min": meta.get("date_min"),
                 "date_max": meta.get("date_max"),
             })
-        st.dataframe(pd.DataFrame(meta_rows), use_container_width=True, height=200)
+
+        table_df = pd.DataFrame(rows)
+        table_df = table_df.sort_values("ingested_at", ascending=False, na_position="last")
+
+        def _alt_rows(df):
+            styles = pd.DataFrame("", index=df.index, columns=df.columns)
+            styles.iloc[::2, :] = "background-color: #f7f9fc"
+            return styles
+
+        styled = table_df.style.apply(_alt_rows, axis=None).set_properties(**{"text-align": "left"})
+        st.dataframe(styled, use_container_width=True, height=240, column_config={
+            "sensor_id": st.column_config.Column("sensor_id", width="small"),
+            "records": st.column_config.Column("records", width="small"),
+        })
         with st.expander("Choose active sensor for Live vs EPW", expanded=False):
             chosen = st.selectbox(
                 "Active sensor",
@@ -4696,6 +4741,8 @@ if page == "📡 Live Data vs EPW":
             )
             st.session_state["active_sensor_id"] = chosen
             st.caption(f"Active sensor set to {chosen}. This drives the Live Data vs EPW analysis.")
+    else:
+        st.info("No ingests yet. Upload a file or fetch from an API to get started.")
 
     st.divider()
 
@@ -4899,31 +4946,87 @@ if page == "📡 Live Data vs EPW":
     elif sensor_df.empty:
         st.info("Upload or fetch sensor data to compare against the EPW climatology.")
     else:
-        # Prepare EPW climatology
+        # Prepare EPW climatology with timezone alignment
         epw_src = epw_df.copy()
         if not isinstance(epw_src.index, pd.DatetimeIndex):
             if "timestamp" in epw_src.columns:
                 epw_src = epw_src.set_index(pd.to_datetime(epw_src["timestamp"], errors="coerce"))
             else:
                 epw_src.index = pd.to_datetime(epw_src.index, errors="coerce")
+        if epw_src.index.tz is None:
+            epw_src.index = epw_src.index.tz_localize(tzinfo or "US/Eastern", nonexistent="shift_forward")
+        else:
+            epw_src.index = epw_src.index.tz_convert(tzinfo or "US/Eastern")
+
+        # Sensor smoothing (fixed: hourly resample + 1h centered rolling mean)
+        st.markdown("##### Sensor smoothing & focus")
+        show_raw_trace = st.checkbox("Show raw sensor trace (faint)", value=False)
+        focus_month_only = st.checkbox("Auto-zoom to months with sensor data (calendar axis)", value=True)
+        st.caption("Sensor shown as hourly resampled + 1-hour centered rolling mean to reduce high-frequency noise.")
+
+        def _smooth_sensor(df: pd.DataFrame) -> pd.DataFrame:
+            if df.empty or "timestamp" not in df.columns:
+                return df
+            work = df.copy()
+            work["timestamp"] = pd.to_datetime(work["timestamp"], errors="coerce")
+            work = work.dropna(subset=["timestamp"]).sort_values("timestamp")
+            work = work.set_index("timestamp")
+            numeric_cols = [c for c in ["T_db", "RH", "GHI", "abs_hum", "windspd", "winddir", "temperature", "relative_humidity", "ghi", "wind_speed", "wind_dir"] if c in work.columns]
+            resampled = work.resample("1H").mean()
+            if numeric_cols:
+                resampled[numeric_cols] = resampled[numeric_cols].interpolate(method="time", limit_direction="both")
+                resampled[numeric_cols] = resampled[numeric_cols].rolling(window=1, center=True, min_periods=1).mean()
+            return resampled.reset_index().dropna(subset=["timestamp"])
+
+        # Sensor timezone normalization + smoothing pipeline (plotting only; raw store unchanged)
+        sensor_ts = sensor_df.copy()
+        sensor_ts["timestamp"] = pd.to_datetime(sensor_ts.get("timestamp", sensor_ts.index), errors="coerce")
+        if sensor_ts["timestamp"].dt.tz is None:
+            sensor_ts["timestamp"] = sensor_ts["timestamp"].dt.tz_localize(tzinfo or "US/Eastern", nonexistent="shift_forward")
+        else:
+            sensor_ts["timestamp"] = sensor_ts["timestamp"].dt.tz_convert(tzinfo or "US/Eastern")
+        sensor_ts = sensor_ts.dropna(subset=["timestamp"]).sort_values("timestamp")
+
+        sensor_smoothed = _smooth_sensor(sensor_ts)
+
+        # Month detection and selection (auto-zoom to sensor months)
+        available_months = sorted(sensor_smoothed["timestamp"].dt.month.dropna().unique().tolist()) if not sensor_smoothed.empty else []
+        selected_month = None  # kept for compatibility with below helpers
+        sensor_start = sensor_ts["timestamp"].min() if not sensor_ts.empty else None
+        sensor_end = sensor_ts["timestamp"].max() if not sensor_ts.empty else None
+        if focus_month_only and not available_months:
+            st.info("No sensor months available yet to focus.")
+
+        # Prepare climatologies (smoothed for plotting, raw kept for optional overlay)
         epw_clim = ls.build_epw_climatology(epw_src)
 
-        # Prepare sensor climatology
-        sensor_for_clim = sensor_df.rename(columns={
+        sensor_for_clim_raw = sensor_ts.rename(columns={
             "T_db": "temperature",
             "RH": "relative_humidity",
             "GHI": "ghi",
             "windspd": "wind_speed",
             "winddir": "wind_dir",
         }).copy()
-        sensor_clim = ls.build_sensor_climatology(sensor_for_clim)
+        sensor_for_clim_smoothed = sensor_smoothed.rename(columns={
+            "T_db": "temperature",
+            "RH": "relative_humidity",
+            "GHI": "ghi",
+            "windspd": "wind_speed",
+            "winddir": "wind_dir",
+        }).copy()
 
-        merged_clim = ls.compare_epw_vs_sensor(epw_clim, sensor_clim)
+        sensor_clim_raw = ls.build_sensor_climatology(sensor_for_clim_raw)
+        sensor_clim_smoothed = ls.build_sensor_climatology(sensor_for_clim_smoothed)
+
+        merged_clim = ls.compare_epw_vs_sensor(epw_clim, sensor_clim_smoothed)
         if merged_clim.empty:
             st.info("Not enough overlap to build climatology curves yet.")
         else:
             merged_clim = merged_clim.sort_values(["doy", "hour"])
             merged_clim["doy_hr"] = merged_clim["doy"] + merged_clim["hour"] / 24.0
+            if not sensor_clim_raw.empty:
+                sensor_clim_raw = sensor_clim_raw.sort_values(["doy", "hour"])
+                sensor_clim_raw["doy_hr"] = sensor_clim_raw["doy"] + sensor_clim_raw["hour"] / 24.0
 
             month_ticks = pd.date_range("2001-01-01", periods=12, freq="MS")
             tick_vals = [d.dayofyear for d in month_ticks]
@@ -4944,7 +5047,123 @@ if page == "📡 Live Data vs EPW":
                 fig.update_xaxes(tickmode="array", tickvals=tick_vals, ticktext=tick_text, title="Day of Year")
                 return fig
 
+            def _align_epw_to_range(epw_df: pd.DataFrame, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
+                if epw_df.empty or start_ts is None or end_ts is None:
+                    return pd.DataFrame(columns=epw_df.columns)
+                base = epw_df.copy()
+                frames = []
+                years = sorted({start_ts.year, end_ts.year})
+                for yr in years:
+                    temp = base.copy()
+                    temp.index = temp.index.map(lambda ts: ts.replace(year=yr))
+                    frames.append(temp)
+                aligned = pd.concat(frames).sort_index()
+                return aligned[(aligned.index >= start_ts.floor("H")) & (aligned.index <= end_ts.ceil("H"))]
+
+            def _plot_calendar_overlay(epw_col: str, sensor_col: str, title: str, units: str, y_range=None, thresholds: Optional[list] = None):
+                if not focus_month_only or sensor_start is None or sensor_end is None:
+                    return False
+                epw_aligned = _align_epw_to_range(epw_src, sensor_start, sensor_end)
+                if epw_aligned.empty and sensor_smoothed.empty:
+                    st.info(f"No data to plot for {title} in the sensor window.")
+                    return True
+
+                epw_source_col = {
+                    "epw_temp": "drybulb",
+                    "epw_rh": "relhum",
+                    "epw_ghi": "glohorrad",
+                    "epw_abs_hum": "abs_hum",
+                    "epw_windspd": "windspd",
+                    "epw_winddir": "winddir",
+                }.get(epw_col, epw_col)
+
+                sensor_source_col = {
+                    "sensor_temp": "T_db",
+                    "sensor_rh": "RH",
+                    "sensor_ghi": "GHI",
+                    "sensor_abs_hum": "abs_hum",
+                    "sensor_windspd": "windspd",
+                    "sensor_winddir": "winddir",
+                }.get(sensor_col, sensor_col)
+
+                epw_plot = epw_aligned[[epw_source_col]].dropna() if epw_source_col in epw_aligned else pd.DataFrame()
+                sensor_plot = sensor_smoothed.set_index("timestamp")[[sensor_source_col]].dropna() if sensor_source_col in sensor_smoothed else pd.DataFrame()
+                raw_plot = sensor_ts.set_index("timestamp")[[sensor_source_col]].dropna() if show_raw_trace and sensor_source_col in sensor_ts else pd.DataFrame()
+
+                if epw_plot.empty and sensor_plot.empty and raw_plot.empty:
+                    st.info(f"No data to plot for {title} in the sensor window.")
+                    return True
+
+                fig = go.Figure()
+                if not epw_plot.empty:
+                    fig.add_trace(go.Scatter(
+                        x=epw_plot.index,
+                        y=epw_plot[epw_source_col],
+                        mode="lines",
+                        line=dict(color="rgba(108,117,125,0.9)", width=2.2, dash="dash"),
+                        name="EPW (typical year)",
+                        hovertemplate="%{x|%b %d, %H:%M}<br>EPW %{y:.2f} " + units + "<extra></extra>",
+                    ))
+
+                if not sensor_plot.empty:
+                    fig.add_trace(go.Scatter(
+                        x=sensor_plot.index,
+                        y=sensor_plot[sensor_source_col],
+                        mode="lines",
+                        line=dict(color="#1f78b4", width=3.4),
+                        name="Sensor (hourly avg)",
+                        hovertemplate="%{x|%b %d, %H:%M}<br>Sensor %{y:.2f} " + units + "<extra></extra>",
+                    ))
+
+                if not raw_plot.empty:
+                    fig.add_trace(go.Scatter(
+                        x=raw_plot.index,
+                        y=raw_plot[sensor_source_col],
+                        mode="markers",
+                        marker=dict(color="rgba(31,120,180,0.25)", size=4),
+                        name="Sensor raw",
+                        hovertemplate="%{x|%b %d, %H:%M}<br>Raw %{y:.2f} " + units + "<extra></extra>",
+                    ))
+
+                if y_range:
+                    fig.update_yaxes(range=y_range)
+
+                thresholds = thresholds or []
+                for thr, desc, color in thresholds:
+                    hline_kwargs = {"y": thr, "line_dash": "dot", "line_color": color}
+                    if desc:
+                        hline_kwargs.update({"annotation_text": desc, "annotation_position": "top left"})
+                    fig.add_hline(**hline_kwargs)
+
+                if sensor_col == "sensor_temp" or epw_col == "epw_temp":
+                    fig.add_hrect(y0=18, y1=26, fillcolor="rgba(31,120,180,0.08)", line_width=0, layer="below")
+
+                fig.update_xaxes(title="Date", tickformat="%b %d", showgrid=True)
+                fig.update_layout(
+                    title=dict(text=title, x=0.01, xanchor="left", yanchor="top", pad=dict(t=6, b=6)),
+                    yaxis_title=f"{title} ({units})",
+                    height=460,
+                    margin=dict(t=64, b=96, l=60, r=44),
+                    autosize=True,
+                    legend=dict(
+                        orientation="h",
+                        yanchor="top", y=-0.22,
+                        xanchor="left", x=0.0,
+                        bgcolor="rgba(255,255,255,0.0)",
+                        title=None,
+                    ),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption("🛈 Sensor shown as hourly resampled + 1h centered rolling mean. EPW is typical-year baseline.")
+                return True
+
             def _plot_clim(epw_col: str, sensor_col: str, title: str, units: str, thresholds: Optional[list] = None, y_range=None):
+                # Calendar-axis focus aligned to sensor months
+                if focus_month_only:
+                    plotted = _plot_calendar_overlay(epw_col, sensor_col, title, units, y_range, thresholds)
+                    if plotted:
+                        return
+
                 present_cols = [c for c in [epw_col, sensor_col] if c in merged_clim.columns]
                 if not present_cols:
                     st.info(f"Missing data for {title}. Ensure both EPW and sensor fields are present.")
@@ -4961,26 +5180,33 @@ if page == "📡 Live Data vs EPW":
                         x=merged_clim["doy_hr"],
                         y=epw_series,
                         mode="lines",
-                        line=dict(color="#6c757d", width=2.5),
-                        name="EPW climatology (smoothed)",
+                        line=dict(color="rgba(108,117,125,0.9)", width=2.2, dash="dash"),
+                        name="EPW (typical year)",
                         hovertemplate="DOY %{x:.1f}<br>EPW %{y:.2f} " + units + "<extra></extra>",
-                        fill="tozeroy",
-                        fillcolor="rgba(108,117,125,0.12)",
                     ))
 
-                if sensor_col in merged_clim:
-                    sensor_vals = merged_clim[sensor_col]
-                else:
-                    sensor_vals = pd.Series(dtype=float)
+                sensor_vals = merged_clim[sensor_col] if sensor_col in merged_clim else pd.Series(dtype=float)
                 if sensor_vals.notna().any():
                     fig.add_trace(go.Scatter(
                         x=merged_clim["doy_hr"],
                         y=sensor_vals,
-                        mode="markers",
-                        marker=dict(color="#1f78b4", size=5, opacity=0.7),
-                        name="Sensor mean",
+                        mode="lines",
+                        line=dict(color="#1f78b4", width=3.2),
+                        name="Sensor (hourly avg)",
                         hovertemplate="DOY %{x:.1f}<br>Sensor %{y:.2f} " + units + "<extra></extra>",
                     ))
+
+                if show_raw_trace and sensor_col in sensor_clim_raw.columns:
+                    raw_slice = sensor_clim_raw.dropna(subset=[sensor_col])
+                    if not raw_slice.empty:
+                        fig.add_trace(go.Scatter(
+                            x=raw_slice["doy_hr"],
+                            y=raw_slice[sensor_col],
+                            mode="lines",
+                            line=dict(color="rgba(31,120,180,0.35)", width=1.2, dash="dot"),
+                            name="Sensor raw (hourly)",
+                            hovertemplate="DOY %{x:.1f}<br>Raw %{y:.2f} " + units + "<extra></extra>",
+                        ))
 
                 thresholds = thresholds or []
                 for thr, desc, color in thresholds:
@@ -4989,18 +5215,30 @@ if page == "📡 Live Data vs EPW":
                         hline_kwargs.update({"annotation_text": desc, "annotation_position": "top left"})
                     fig.add_hline(**hline_kwargs)
 
+                # Comfort band shading for temperature plots
+                if sensor_col == "sensor_temp" or epw_col == "epw_temp":
+                    fig.add_hrect(y0=18, y1=26, fillcolor="rgba(31,120,180,0.08)", line_width=0, layer="below")
+
                 if y_range:
                     fig.update_yaxes(range=y_range)
 
                 fig.update_layout(
-                    title=title,
+                    title=dict(text=title, x=0.01, xanchor="left", yanchor="top", pad=dict(t=6, b=6)),
                     yaxis_title=f"{title} ({units})",
                     height=450,
-                    margin=dict(l=12, r=12, t=50, b=40),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.01),
+                    margin=dict(t=60, b=80, l=60, r=40),
+                    autosize=True,
+                    legend=dict(
+                        orientation="h",
+                        yanchor="top", y=-0.18,
+                        xanchor="left", x=0.0,
+                        bgcolor="rgba(255,255,255,0.0)",
+                        title=None,
+                    ),
                 )
                 _add_season_shading(fig)
                 st.plotly_chart(fig, use_container_width=True)
+                st.caption("🛈 Sensor shown as hourly resampled + 1h centered rolling mean. EPW is typical-year baseline.")
 
             st.markdown("### 🌡️ Dry-Bulb Temperature")
             _plot_clim(
@@ -5025,74 +5263,6 @@ if page == "📡 Live Data vs EPW":
 
             st.markdown("### 🧭 Wind Direction")
             _plot_clim("epw_winddir", "sensor_winddir", "Wind direction", "deg", y_range=[0, 360])
-
-            st.markdown("#### Hour-of-day profiles (EPW vs Sensor)")
-            st.caption("Average by hour-of-day (0–23). Compare typical EPW patterns to on-site sensor means with optional comfort band shading for temperature.")
-
-            def _hourly_plot(epw_col: str, sensor_col: str, title: str, units: str, comfort_band: Optional[tuple] = None, y_range=None):
-                epw_hour = pd.Series(dtype=float)
-                sensor_hour = pd.Series(dtype=float)
-
-                if epw_col in epw_src.columns:
-                    epw_hour = epw_src[epw_col].groupby(epw_src.index.hour).mean().sort_index()
-                if sensor_col in sensor_for_clim.columns:
-                    sensor_hour = sensor_for_clim[sensor_col].groupby(sensor_for_clim["timestamp"].dt.hour).mean().sort_index()
-
-                if epw_hour.empty and sensor_hour.empty:
-                    st.info(f"No data to plot for {title}.")
-                    return
-
-                fig = go.Figure()
-                if not epw_hour.empty:
-                    fig.add_trace(go.Scatter(
-                        x=epw_hour.index,
-                        y=epw_hour.values,
-                        mode="lines",
-                        line=dict(color="#6c757d", width=2.6, shape="spline"),
-                        name="EPW mean",
-                        hovertemplate="Hour %{x}:00<br>EPW %{y:.2f} " + units + "<extra></extra>",
-                    ))
-                if not sensor_hour.empty:
-                    fig.add_trace(go.Scatter(
-                        x=sensor_hour.index,
-                        y=sensor_hour.values,
-                        mode="markers+lines",
-                        line=dict(color="#1f78b4", width=2.2),
-                        marker=dict(size=7, opacity=0.8),
-                        name="Sensor mean",
-                        hovertemplate="Hour %{x}:00<br>Sensor %{y:.2f} " + units + "<extra></extra>",
-                    ))
-
-                if comfort_band:
-                    low, high = comfort_band
-                    fig.add_hrect(y0=low, y1=high, fillcolor="rgba(31,120,180,0.08)", line_width=0, layer="below")
-
-                fig.update_layout(
-                    title=title,
-                    xaxis_title="Hour of Day (0–23)",
-                    yaxis_title=f"{title} ({units})",
-                    height=450,
-                    margin=dict(l=12, r=12, t=50, b=40),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
-                )
-                if y_range:
-                    fig.update_yaxes(range=y_range)
-                st.plotly_chart(fig, use_container_width=True)
-
-            st.markdown("### 🌡️ Hourly Dry-Bulb")
-            _hourly_plot("drybulb", "temperature", "Dry-bulb temperature", "°C", comfort_band=(18, 26))
-
-            st.markdown("### 💧 Hourly Relative Humidity")
-            _hourly_plot("relhum", "relative_humidity", "Relative humidity", "%", y_range=[0, 100])
-
-            st.markdown("### ☀️ Hourly Global Solar Radiation")
-            _hourly_plot("glohorrad", "ghi", "Global solar radiation", "W/m²")
-
-            st.markdown("### 🫧 Hourly Absolute Humidity")
-            _hourly_plot("abs_hum", "abs_hum", "Absolute humidity", "g/m³")
-
-            st.markdown("### 💨 Hourly Wind Speed")
-            _hourly_plot("windspd", "wind_speed", "Wind speed", "m/s")
 
     # ---------- Comfort & UHI snapshot ----------
     st.markdown("#### Urban Heat Island & Thermal Comfort")
@@ -5580,8 +5750,12 @@ if page == "📁 Raw Data":
             min_value=tmin.date(),
             max_value=tmax.date()
         )
+        idx_tz = st.session_state.cdf.index.tz
         d1_ts = pd.Timestamp(d1)
         d2_ts = pd.Timestamp(d2) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+        if idx_tz is not None:
+            d1_ts = d1_ts.tz_localize(idx_tz, nonexistent="shift_forward")
+            d2_ts = d2_ts.tz_localize(idx_tz, nonexistent="shift_forward")
 
         # filter and slice
         view = df_for_view.loc[(st.session_state.cdf.index >= d1_ts) & (st.session_state.cdf.index <= d2_ts)]
