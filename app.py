@@ -5291,8 +5291,18 @@ if page == "Sensor Comparison":
         st.warning("Select at least two sensors to enable comparison.")
         st.stop()
 
-    ref_sensor = st.selectbox("Reference sensor A", options=selected_ids, index=0)
-    cmp_sensor = st.selectbox("Comparison sensor B", options=selected_ids, index=1 if len(selected_ids) > 1 else 0)
+    ref_sensor = st.selectbox(
+        "Reference sensor (used for EPW context and optional A − B view)",
+        options=selected_ids,
+        index=0,
+    )
+    cmp_sensor = selected_ids[1] if len(selected_ids) > 1 else selected_ids[0]
+    if len(selected_ids) == 2:
+        cmp_sensor = st.selectbox(
+            "Comparison sensor B (only used when exactly two sensors are selected)",
+            options=selected_ids,
+            index=1,
+        )
 
     def _compute_stats(df: pd.DataFrame) -> dict:
         if df.empty:
@@ -5301,7 +5311,8 @@ if page == "Sensor Comparison":
         temp_hourly = hourly["temperature"].resample("1H").mean().dropna()
         if temp_hourly.empty:
             return {"mean": np.nan, "day_mean": np.nan, "night_mean": np.nan, "diurnal": np.nan, "hot_hours": np.nan, "pct_comfort": np.nan, "hour_curve": pd.Series(dtype=float), "month_curve": pd.Series(dtype=float)}
-        day_mask = temp_hourly.index.hour.between(8, 18, inclusive="left")
+        hours_arr = temp_hourly.index.hour
+        day_mask = (hours_arr >= 8) & (hours_arr < 18)
         night_mask = ~day_mask
         diurnal = temp_hourly.resample("1D").apply(lambda s: s.max() - s.min())
         hour_curve = temp_hourly.groupby(temp_hourly.index.hour).mean()
@@ -5337,20 +5348,47 @@ if page == "Sensor Comparison":
     st.dataframe(pd.DataFrame(stats_rows).set_index("Sensor").round(2), use_container_width=True)
     st.caption("Side-by-side sensor summaries. Nighttime means and diurnal ranges highlight microclimate and urban heat island signals.")
 
-    # Difference metrics (A − B)
-    ref_stats = stats_map.get(ref_sensor, {})
-    cmp_stats = stats_map.get(cmp_sensor, {})
-    diff_mean = ref_stats.get("mean") - cmp_stats.get("mean") if ref_stats and cmp_stats else np.nan
-    diff_night = ref_stats.get("night_mean") - cmp_stats.get("night_mean") if ref_stats and cmp_stats else np.nan
-    diff_hot = ref_stats.get("hot_hours") - cmp_stats.get("hot_hours") if ref_stats and cmp_stats else np.nan
-    diff_comfort = ref_stats.get("pct_comfort") - cmp_stats.get("pct_comfort") if ref_stats and cmp_stats else np.nan
+    # Inter-sensor spread metrics
+    hour_curves = {}
+    hours_union = set()
+    for sid in selected_ids:
+        curve = stats_map[sid].get("hour_curve", pd.Series(dtype=float))
+        if not curve.empty:
+            hour_curves[sid] = curve
+            hours_union.update(curve.index.tolist())
+    hours_sorted = sorted(hours_union)
+    if hours_sorted:
+        hour_matrix = pd.DataFrame({sid: curve.reindex(hours_sorted) for sid, curve in hour_curves.items()})
+        spread_min = hour_matrix.min(axis=1, skipna=True)
+        spread_max = hour_matrix.max(axis=1, skipna=True)
+        spread_median = hour_matrix.median(axis=1, skipna=True)
+        spread_range = spread_max - spread_min
+        mean_range = float(spread_range.mean(skipna=True))
+        night_hours = [h for h in hours_sorted if (h >= 22 or h <= 6)]
+        night_range = float(spread_range.loc[night_hours].mean(skipna=True)) if night_hours else np.nan
+    else:
+        hour_matrix = pd.DataFrame()
+        spread_min = spread_max = spread_median = spread_range = pd.Series(dtype=float)
+        mean_range = night_range = np.nan
 
-    d1, d2, d3, d4 = st.columns(4)
-    d1.metric("Mean temp Δ (A − B)", f"{diff_mean:+.1f} °C")
-    d2.metric("Night temp Δ (A − B)", f"{diff_night:+.1f} °C")
-    d3.metric(">30°C hours Δ", f"{diff_hot:+d}" if pd.notna(diff_hot) else "—")
-    d4.metric("Comfort hours Δ", f"{diff_comfort:+.1f} pp")
-    st.caption("Differences show how much warmer/cooler the reference sensor (A) is relative to comparison sensor (B). Nighttime deltas are key urban heat island signals.")
+    r1, r2 = st.columns(2)
+    r1.metric("Mean inter-sensor range", f"{mean_range:.1f} °C" if pd.notna(mean_range) else "—")
+    r2.metric("Nighttime inter-sensor range (22–06)", f"{night_range:.1f} °C" if pd.notna(night_range) else "—")
+
+    if len(selected_ids) == 2:
+        ref_stats = stats_map.get(ref_sensor, {})
+        cmp_stats = stats_map.get(cmp_sensor, {})
+        diff_mean = ref_stats.get("mean") - cmp_stats.get("mean") if ref_stats and cmp_stats else np.nan
+        diff_night = ref_stats.get("night_mean") - cmp_stats.get("night_mean") if ref_stats and cmp_stats else np.nan
+        diff_hot = ref_stats.get("hot_hours") - cmp_stats.get("hot_hours") if ref_stats and cmp_stats else np.nan
+        diff_comfort = ref_stats.get("pct_comfort") - cmp_stats.get("pct_comfort") if ref_stats and cmp_stats else np.nan
+
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("Mean temp Δ (A − B)", f"{diff_mean:+.1f} °C")
+        d2.metric("Night temp Δ (A − B)", f"{diff_night:+.1f} °C")
+        d3.metric(">30°C hours Δ", f"{diff_hot:+d}" if pd.notna(diff_hot) else "—")
+        d4.metric("Comfort hours Δ", f"{diff_comfort:+.1f} pp")
+        st.caption("A − B deltas only apply when two sensors are selected.")
 
     st.divider()
 
@@ -5378,6 +5416,45 @@ if page == "Sensor Comparison":
     st.plotly_chart(fig_hour, use_container_width=True)
     st.caption("Lines show average temperature by hour for each sensor. Nighttime gaps between sensors flag localized heat retention.")
 
+    # Inter-sensor spread (hourly)
+    if hours_sorted and not hour_matrix.empty:
+        fig_spread = go.Figure()
+        fig_spread.add_trace(go.Scatter(
+            x=hours_sorted,
+            y=spread_min,
+            mode="lines+markers",
+            name="Min across sensors",
+            line=dict(color="#94a3b8", width=1.8),
+            hovertemplate="Hour %{x}:00<br>Min %{y:.2f}°C<extra></extra>",
+        ))
+        fig_spread.add_trace(go.Scatter(
+            x=hours_sorted,
+            y=spread_max,
+            mode="lines+markers",
+            name="Max across sensors",
+            line=dict(color="#ef4444", width=1.8),
+            fill="tonexty",
+            fillcolor="rgba(239,68,68,0.15)",
+            hovertemplate="Hour %{x}:00<br>Max %{y:.2f}°C<extra></extra>",
+        ))
+        fig_spread.add_trace(go.Scatter(
+            x=hours_sorted,
+            y=spread_median,
+            mode="lines+markers",
+            name="Median across sensors",
+            line=dict(color="#0ea5e9", width=2.4, dash="dot"),
+            hovertemplate="Hour %{x}:00<br>Median %{y:.2f}°C<extra></extra>",
+        ))
+        fig_spread.update_layout(
+            title="Inter-sensor temperature spread (hourly)",
+            xaxis_title="Hour of Day",
+            yaxis_title="Temperature (°C)",
+            height=360,
+            margin=dict(l=10, r=10, t=46, b=32),
+        )
+        st.plotly_chart(fig_spread, use_container_width=True)
+        st.caption("Envelope shows min–max across sensors; median hints at central tendency without assuming equal coverage.")
+
     # Monthly mean temperature comparison
     months_order = list(range(1, 13))
     fig_month = go.Figure()
@@ -5401,24 +5478,25 @@ if page == "Sensor Comparison":
     st.plotly_chart(fig_month, use_container_width=True)
     st.caption("Only months with sensor observations are shown; missing bars mean no data, not zero temperature.")
 
-    # Difference plot (A − B) by hour
-    ref_hour = stats_map.get(ref_sensor, {}).get("hour_curve", pd.Series(dtype=float))
-    cmp_hour = stats_map.get(cmp_sensor, {}).get("hour_curve", pd.Series(dtype=float))
-    hours = sorted(set(ref_hour.index).union(set(cmp_hour.index))) if not ref_hour.empty or not cmp_hour.empty else []
-    if hours:
-        ref_hour_full = ref_hour.reindex(hours)
-        cmp_hour_full = cmp_hour.reindex(hours)
-        hour_diff = ref_hour_full - cmp_hour_full
-        fig_diff = go.Figure([go.Bar(x=hours, y=hour_diff.values, marker_color="#e45756")])
-        fig_diff.update_layout(
-            title=f"Sensor Difference (A − B) by hour: {ref_sensor} minus {cmp_sensor}",
-            xaxis_title="Hour of Day",
-            yaxis_title="Temperature difference (°C)",
-            height=320,
-            margin=dict(l=10, r=10, t=46, b=28),
-        )
-        st.plotly_chart(fig_diff, use_container_width=True)
-        st.caption("Positive bars mean the reference sensor (A) is warmer than sensor (B) at that hour. Nighttime warmth highlights urban heat island effects.")
+    # Difference plot (A − B) by hour only when exactly two sensors are selected
+    if len(selected_ids) == 2:
+        ref_hour = stats_map.get(ref_sensor, {}).get("hour_curve", pd.Series(dtype=float))
+        cmp_hour = stats_map.get(cmp_sensor, {}).get("hour_curve", pd.Series(dtype=float))
+        hours = sorted(set(ref_hour.index).union(set(cmp_hour.index))) if not ref_hour.empty or not cmp_hour.empty else []
+        if hours:
+            ref_hour_full = ref_hour.reindex(hours)
+            cmp_hour_full = cmp_hour.reindex(hours)
+            hour_diff = ref_hour_full - cmp_hour_full
+            fig_diff = go.Figure([go.Bar(x=hours, y=hour_diff.values, marker_color="#e45756")])
+            fig_diff.update_layout(
+                title=f"Sensor Difference (A − B) by hour: {ref_sensor} minus {cmp_sensor}",
+                xaxis_title="Hour of Day",
+                yaxis_title="Temperature difference (°C)",
+                height=320,
+                margin=dict(l=10, r=10, t=46, b=28),
+            )
+            st.plotly_chart(fig_diff, use_container_width=True)
+            st.caption("Positive bars mean the reference sensor (A) is warmer than sensor (B) at that hour. Nighttime warmth highlights urban heat island effects.")
 
     st.divider()
 
@@ -5455,6 +5533,8 @@ if page == "Sensor Comparison":
     st.plotly_chart(fig_comfort, use_container_width=True)
     st.caption("Comfort percentages and overheating hours show which neighborhood is hotter or offers more comfortable conditions.")
 
+    st.caption("Hourly statistics summarize diurnal microclimate structure across sensor locations. Nighttime spread highlights localized heat retention and UHI effects.")
+
     st.divider()
 
     show_epw_context = st.toggle("Show EPW context (optional)", value=False, help="EPW is not required here; enable only if you want to mention climate baseline alongside sensor differences.")
@@ -5464,7 +5544,7 @@ if page == "Sensor Comparison":
     st.markdown("#### Interpretation")
     st.info(
         "Differences between sensors reflect neighborhood-scale factors like urban form, vegetation, and surface materials rather than regional climate. "
-        "Nighttime temperature gaps are strong urban heat island indicators; persistent positive A − B at night means the reference site retains more heat after sunset."
+        "Nighttime spread across all sensors highlights localized heat retention and potential UHI pockets."
     )
 
 if page == "📁 Raw Data":
