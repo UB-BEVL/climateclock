@@ -99,6 +99,27 @@ st.set_page_config(
 
 st.session_state.setdefault("temperature_unit", "C")
 
+# Navigation definitions
+NAV_ITEMS = [
+    ("Select weather file", "Select weather file"),
+    ("Dashboard", "📊 Dashboard"),
+    ("Raw Data", "📁 Raw Data"),
+    ("Temperature & Humidity", "🌡️ Temperature & Humidity"),
+    ("Solar Analysis", "☀️ Solar Analysis"),
+    ("Psychrometrics", "📈 Psychrometrics"),
+    ("Live Data vs EPW", "📡 Live Data vs EPW"),
+    ("Sensor Comparison", "Sensor Comparison"),
+    ("Short-Term Prediction (24–72h)", "📈 Short-Term Prediction (24–72h)"),
+    ("Future Climate (2050 / 2080 SSP)", "🌍 Future Climate (2050 / 2080 SSP)"),
+]
+
+LABEL_TO_PAGE = {label: page for label, page in NAV_ITEMS}
+PAGE_TO_LABEL = {page: label for label, page in NAV_ITEMS}
+ALLOWED_PAGES = list(PAGE_TO_LABEL.keys())
+DEFAULT_PAGE = "Select weather file"
+
+st.session_state.setdefault("active_page", DEFAULT_PAGE)
+
 THEME_BASE = "light"
 try:
     theme_option = st.get_option("theme.base")
@@ -945,49 +966,48 @@ with st.sidebar:
     st.markdown(SIDEBAR_HERO, unsafe_allow_html=True)
     st.divider()
 
-    # File upload section (sidebar only)
-    st.subheader("Upload EPW / ZIP")
-    up = st.file_uploader(
-        "Upload EPW or ZIP file",
-        type=["epw", "zip"],
-        help="Upload an EnergyPlus Weather file or a ZIP containing EPWs",
-        key="main_epw_upload_sidebar"
-    )
-    if up is not None:
-        uploaded_header = st.session_state.get("header", {}) if isinstance(st.session_state.get("header"), dict) else {}
-        st.caption("File staged; parsing will begin automatically.")
-    st.divider()
+    epw_loaded = bool(st.session_state.get("cdf") is not None and st.session_state.get("header"))
+    current_page = st.session_state.get("active_page", DEFAULT_PAGE)
+    if current_page not in ALLOWED_PAGES:
+        current_page = DEFAULT_PAGE
+    st.session_state["active_page"] = current_page
 
-    st.markdown("### Current Selection")
-    selected_station = st.session_state.get("selected_station")
-    source_label = st.session_state.get("source_label", "EPW")
-
-    friendly_label = None
-    period = None
-
-    if isinstance(selected_station, dict) and selected_station:
-        friendly_label = selected_station.get("display_label") or selected_station.get("name")
-        period = selected_station.get("period") or "—"
-    elif st.session_state.get("header") and isinstance(st.session_state["header"], dict):
-        loc = st.session_state["header"].get("location", {}) if isinstance(st.session_state["header"], dict) else {}
-        city = loc.get("city") or loc.get("state_province") or "Loaded EPW"
-        country = loc.get("country", "")
-        friendly_label = f"{city} {country}".strip()
-        period = loc.get("period") or st.session_state["header"].get("data_periods") or "—"
-
-    if friendly_label:
-        st.write(friendly_label)
-        if period:
-            st.caption(f"Period: {period}")
-        st.caption(f"Source: {source_label}")
+    nav_labels = [label for label, _ in NAV_ITEMS]
+    st.markdown("### Visualize weather file")
+    if epw_loaded:
+        current_label = PAGE_TO_LABEL.get(current_page, nav_labels[0])
+        nav_choice = st.radio(
+            "",
+            options=nav_labels,
+            index=nav_labels.index(current_label) if current_label in nav_labels else 0,
+            label_visibility="collapsed",
+            key="sidebar_nav",
+        )
     else:
-        st.caption("No EPW loaded yet.")
+        nav_choice = "Select weather file"
+        st.radio(
+            "",
+            options=[nav_choice],
+            index=0,
+            label_visibility="collapsed",
+            key="sidebar_nav_locked",
+        )
+        locked_labels = nav_labels[1:]
+        if locked_labels:
+            st.markdown(
+                "<div style='color:#5c6472; font-size:0.9rem;'>" +
+                "<br>".join([f"• {lbl}" for lbl in locked_labels]) +
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        st.info("Load a station from the map or upload an EPW/ZIP to unlock the dashboard views.")
 
-    st.divider()
+    chosen_page = LABEL_TO_PAGE.get(nav_choice, DEFAULT_PAGE)
+    st.session_state["active_page"] = chosen_page
 
-    st.markdown("### Customize Analysis")
-    with st.expander("Adjust assumptions", expanded=False):
-        st.caption("Refine the analysis sandbox without overwhelming casual viewers. These settings persist per session.")
+    st.markdown("### Filters and units")
+    with st.expander("Filters and units", expanded=False):
+        st.caption("Refine the analysis sandbox. Settings persist for this session.")
         temp_unit = st.radio(
             "Temperature units",
             options=["C", "F"],
@@ -1004,7 +1024,7 @@ with st.sidebar:
                 max_value=int(round(_c_to_f(36))),
                 value=int(round(_c_to_f(current_threshold_c))),
                 step=1,
-                help="Adds this threshold to the comfort analytics so you can track a single overheating alert level everywhere.",
+                help="Adds this threshold across comfort analytics.",
             )
             threshold_c = _f_to_c(threshold_slider)
         else:
@@ -1014,7 +1034,7 @@ with st.sidebar:
                 max_value=36,
                 value=int(round(current_threshold_c)),
                 step=1,
-                help="Adds this threshold to the comfort analytics so you can track a single overheating alert level everywhere.",
+                help="Adds this threshold across comfort analytics.",
             )
             threshold_c = float(threshold_slider)
         st.session_state["custom_overheat_threshold"] = float(threshold_c)
@@ -1058,6 +1078,17 @@ with st.sidebar:
             help="Experiment with different short-term models. Non-default entries currently fall back to SARIMAX but make the intent explicit."
         )
 
+        st.slider(
+            "Month range",
+            min_value=1,
+            max_value=12,
+            value=st.session_state.get("month_range", (1, 12)),
+            step=1,
+            disabled=not epw_loaded,
+            key="month_range",
+            help="Limit visualizations to a month window when data is loaded.",
+        )
+
     base_cdf = st.session_state.get("cdf_raw")
     if base_cdf is not None:
         cdf_adjusted = base_cdf.copy(deep=True)
@@ -1066,20 +1097,17 @@ with st.sidebar:
             cdf_adjusted["drybulb"] = cdf_adjusted["drybulb"] + delta
         st.session_state.cdf = cdf_adjusted
         st.session_state.comfort_pkg = build_comfort_package(cdf_adjusted)
-    
-    # Quick stats in sidebar
-    if 'cdf' in st.session_state:
+
+    if epw_loaded:
         st.markdown("### 📊 Quick Stats")
         with st.container():
             st.markdown('<div class="card">', unsafe_allow_html=True)
             if "drybulb" in st.session_state.cdf:
                 avg_temp = st.session_state.cdf['drybulb'].mean()
                 st.metric("🌡️ Avg Temp", format_temperature(avg_temp))
-            
             if "relhum" in st.session_state.cdf:
                 avg_rh = st.session_state.cdf['relhum'].mean()
                 st.metric("💧 Avg Humidity", f"{avg_rh:.0f} %")
-            
             if "windspd" in st.session_state.cdf:
                 avg_wind = st.session_state.cdf['windspd'].mean()
                 st.metric("💨 Avg Wind", f"{avg_wind:.1f} m/s")
@@ -1108,21 +1136,6 @@ ss = st.session_state
 raw_epw_bytes = ss.get("raw_epw_bytes")
 source_label = ss.get("source_label")
 
-TAB_ORDER = [
-    "📊 Dashboard",
-    "🌡️ Temperature & Humidity",
-    "☀️ Solar Analysis",
-    "📈 Psychrometrics",
-    "📡 Live Data vs EPW",
-    "Sensor Comparison",
-    "📁 Raw Data",
-    "📈 Short-Term Prediction (24–72h)",
-    "🌍 Future Climate (2050 / 2080 SSP)",
-]
-
-st.session_state.setdefault("active_page", TAB_ORDER[0])
-
-
 def _stage_station_and_load(station_info: dict):
     st.session_state["loading_station_name"] = station_info.get("name", "selected station")
     st.session_state["sel_station"] = station_info
@@ -1135,7 +1148,7 @@ def _stage_station_and_load(station_info: dict):
     st.session_state["source_label"] = f"Station: {display_label}"
     st.session_state.pop("pending_station", None)
     st.session_state.pop("raw_epw_bytes", None)
-    st.session_state["page_after_station"] = TAB_ORDER[0]
+    st.session_state["page_after_station"] = "📊 Dashboard"
     _rerun()
 
 
@@ -1324,7 +1337,7 @@ def render_station_picker():
     st.divider()
 
     st.markdown("### Interactive Map")
-    st.caption("Click a station dot to load it immediately.")
+    st.caption("Click a station dot, review the details card, then load the station.")
     st.markdown("<div class='section-gap-lg'></div>", unsafe_allow_html=True)
 
     MAP_HEIGHT = 700
@@ -1391,7 +1404,19 @@ def render_station_picker():
                     "cooling_db": row.get("cooling_db"),
                     "display_label": row.get("display_label"),
                 }
-                _stage_station_and_load(station_info)
+                st.session_state["pending_station"] = station_info
+
+    pending_station = st.session_state.get("pending_station")
+    if pending_station:
+        st.markdown("### Station selected")
+        st.markdown(
+            f"**{pending_station.get('display_label') or pending_station.get('name', 'Station')}**<br>"
+            f"Lat: {pending_station.get('lat')} · Lon: {pending_station.get('lon')}<br>"
+            f"Period: {pending_station.get('period', '—')} · Timezone: {pending_station.get('timezone', '—')}",
+            unsafe_allow_html=True,
+        )
+        if st.button("Load station", key="load_pending_station", type="primary"):
+            _stage_station_and_load(pending_station)
 
 
 def handle_epw_upload(uploaded_file, picker_key: str = "sidebar") -> Optional[bytes]:
@@ -1439,7 +1464,7 @@ def handle_epw_upload(uploaded_file, picker_key: str = "sidebar") -> Optional[by
 
     st.session_state["raw_epw_bytes"] = raw_epw_bytes
     st.session_state["source_label"] = f"Uploaded: {filename}"
-    st.session_state["page_after_station"] = TAB_ORDER[0]
+    st.session_state["page_after_station"] = "📊 Dashboard"
     st.session_state.pop("loading_station_name", None)
     return raw_epw_bytes
 
@@ -1506,9 +1531,27 @@ def try_multiple_sources(sources: List[str]) -> Tuple[Optional[bytes], Optional[
     return None, None
 
 
-if up is not None:
+active_page = st.session_state.get("active_page", DEFAULT_PAGE)
+if active_page not in ALLOWED_PAGES:
+    active_page = DEFAULT_PAGE
+    st.session_state["active_page"] = active_page
+
+main_upload = None
+if active_page == "Select weather file":
+    st.info("Load a station from the map or upload an EPW/ZIP to unlock the dashboard views.")
+    main_upload = st.file_uploader(
+        "Upload EPW or ZIP file",
+        type=["epw", "zip"],
+        help="Upload an EnergyPlus Weather file or a ZIP containing EPWs",
+        key="main_epw_upload_primary",
+    )
+    render_station_picker()
+else:
+    st.session_state.pop("pending_station", None)
+
+if main_upload is not None:
     # ---- Uploader path ----
-    raw_epw_bytes = handle_epw_upload(up, picker_key="sidebar")
+    raw_epw_bytes = handle_epw_upload(main_upload, picker_key="main")
 
 elif ss.get("sel_station_url"):
     url = ss["sel_station_url"]
@@ -1613,9 +1656,7 @@ elif ss.get("sel_station_url"):
 
 
 elif raw_epw_bytes is None:
-    # No EPW yet: do NOT auto-load a demo. Ask user to upload or pick a station.
-    st.info("Load a station from the map or upload an EPW/ZIP to unlock the dashboard views.")
-    # Continue so the Station Map tab can render even before an EPW is available
+    pass
 
 
 @CACHE(show_spinner=False)
@@ -1672,8 +1713,16 @@ if raw_epw_bytes is not None:
         meta_df = pd.DataFrame(meta_rows, columns=["Field", "Value"])
         st.table(meta_df)
 
+    target_page = st.session_state.pop("page_after_station", None)
+    if target_page:
+        st.session_state["active_page"] = target_page
+        _rerun()
+
 
 cdf = st.session_state.get("cdf")
+
+if cdf is None and st.session_state.get("active_page") != DEFAULT_PAGE:
+    st.session_state["active_page"] = DEFAULT_PAGE
 
 # Harmonize alternate column names that may come from different EPW parsers (e.g., pvlib)
 if cdf is not None:
@@ -1698,87 +1747,10 @@ if "page_after_station" in st.session_state:
     target_page = st.session_state.pop("page_after_station")
     st.session_state["active_page"] = target_page
 
-
-def render_top_nav():
-    current = st.session_state.get("active_page", TAB_ORDER[0])
-
-    st.markdown("## 🌎 Climate Analysis Pro")
-    st.markdown("Professional climate dashboard with EPW support and dynamic data visualization.")
-    st.write("")  # spacer between subtitle and tabs
-
-    st.markdown(
-        f"""
-        <style>
-        /* Slim, flat tab styling targeting the horizontal radio container */
-        div[data-testid="stHorizontalBlock"] > div {{
-            display: flex;
-            gap: 10px;
-            overflow-x: auto;
-            padding: 6px 4px;
-            background: #0d1117;
-            white-space: nowrap;
-        }}
-        div[data-testid="stHorizontalBlock"] label {{
-            position: relative;
-            border: 1px solid transparent;
-            border-radius: 6px;
-            padding: 6px 12px;
-            margin: 0;
-            color: #c2c8d1;
-            background: transparent;
-            display: inline-flex;
-            align-items: center;
-            height: 36px;
-            cursor: pointer;
-            white-space: nowrap;
-        }}
-        div[data-testid="stHorizontalBlock"] label:hover {{ color: #e5e7eb; }}
-        div[data-testid="stHorizontalBlock"] label[data-checked="true"] {{
-            color: #e5e7eb !important;
-            border-color: rgba(77, 214, 255, 0.45);
-            background: rgba(77, 214, 255, 0.08);
-            box-shadow: none;
-        }}
-        div[data-testid="stHorizontalBlock"] label[data-checked="true"]::after {{
-            content: "";
-            position: absolute;
-            left: 12px;
-            right: 12px;
-            bottom: -6px;
-            height: 2px;
-            background: #4dd6ff;
-        }}
-        div[data-testid="stHorizontalBlock"] input[type="radio"] {{ display: none; }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Use radio for robust state handling; styled to look like tabs
-    radio_kwargs = {
-        "label": "",
-        "options": TAB_ORDER,
-        "horizontal": True,
-        "label_visibility": "collapsed",
-        "key": "top_nav_radio",
-        "help": None,
-    }
-    # Only set index (default selection) on first render; afterwards Streamlit preserves state
-    if "top_nav_radio" not in st.session_state:
-        radio_kwargs["index"] = TAB_ORDER.index(current) if current in TAB_ORDER else 0
-
-    chosen = st.radio(**radio_kwargs)
-
-    return chosen
-
-page = render_top_nav()
+page = st.session_state.get("active_page", DEFAULT_PAGE)
+if page not in ALLOWED_PAGES:
+    page = DEFAULT_PAGE
 st.session_state["active_page"] = page
-
-if cdf is None:
-    st.info("Load a weather file from the sidebar or pick a station below to unlock the dashboards.")
-    render_station_picker()
-    st.stop()
-
 effective_page = page
 
 # ========== MAIN TABS WITH IMPROVED ORGANIZATION ==========
