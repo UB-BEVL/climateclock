@@ -8,3 +8,4 @@ matplotlib
 pvlib
 requests
 openpyxl
+kaleido
