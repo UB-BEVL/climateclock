@@ -5420,7 +5420,7 @@ if page == "📡 Live Data vs EPW":
 
 if page == "Sensor Comparison":
     # ========== PROOF MARKER ==========
-    st.success("✅ Seattle-style Sensor Comparison UI loaded")
+    st.success("Sensor Comparison UI loaded")
     
     # ========== HELPER FUNCTIONS ==========
     @st.cache_data
@@ -5645,22 +5645,90 @@ if page == "Sensor Comparison":
     
     # Defensive: drop index-like columns
     df = df.drop(columns=["#"], errors="ignore")
-    
+
     # Detect columns
     ts_col = detect_timestamp_col(df)
     sensor_col = detect_sensor_id_col(df) or "sensor_id"
-    
-    # Timestamp handling
+
+    # Timestamp handling and normalized plotting timestamp (_ts)
     if ts_col:
-        df[ts_col] = pd.to_datetime(df[ts_col], errors="coerce", utc=True)
-        df = df.dropna(subset=[ts_col])
-        df = df.sort_values(by=ts_col, ascending=True)
+        # Robust timestamp parsing: try several strategies and pick the one
+        # that yields the most non-null datetimes. Keep timezone-aware UTC
+        # values so downstream tz-conversion logic remains unchanged.
+        raw_ts = df[ts_col]
+        parse_candidates = {}
+
+        # 1) Default (fast) parse
+        try:
+            parse_candidates["default"] = pd.to_datetime(raw_ts, errors="coerce", utc=True)
+        except Exception:
+            parse_candidates["default"] = pd.Series(pd.NaT, index=raw_ts.index)
+
+        # 2) Day-first parse (handles DD/MM ambiguity)
+        try:
+            parse_candidates["dayfirst"] = pd.to_datetime(raw_ts, errors="coerce", dayfirst=True, utc=True)
+        except Exception:
+            parse_candidates["dayfirst"] = pd.Series(pd.NaT, index=raw_ts.index)
+
+        # 3) A few explicit common formats
+        explicit_formats = [
+            "%m/%d/%Y %H:%M:%S",
+            "%d/%m/%Y %H:%M:%S",
+            "%m/%d/%Y %H:%M",
+            "%d/%m/%Y %H:%M",
+        ]
+        for fmt in explicit_formats:
+            try:
+                parsed = pd.to_datetime(raw_ts.astype(str), format=fmt, errors="coerce")
+                # ensure timezone-aware in UTC so later tz_convert works predictably
+                parsed = parsed.dt.tz_localize("UTC")
+                parse_candidates[fmt] = parsed
+            except Exception:
+                parse_candidates[fmt] = pd.Series(pd.NaT, index=raw_ts.index)
+
+        # Choose the candidate with the most non-null parses
+        best_key = max(parse_candidates.keys(), key=lambda k: parse_candidates[k].notna().sum())
+        df[ts_col] = parse_candidates[best_key]
+        df = df.dropna(subset=[ts_col]).copy()
+
+        # Normalize to a single timezone for display and produce naive datetimes in _ts
+        try:
+            df["_ts"] = df[ts_col].dt.tz_convert("America/New_York").dt.tz_localize(None)
+        except Exception:
+            try:
+                # If timestamps are tz-naive, localize to UTC first then convert
+                df[ts_col] = df[ts_col].dt.tz_localize("UTC")
+                df["_ts"] = df[ts_col].dt.tz_convert("America/New_York").dt.tz_localize(None)
+            except Exception:
+                # Fallback: drop tz info
+                df["_ts"] = df[ts_col].dt.tz_localize(None)
+
+        # Sort by plotting ts for charts (ascending)
+        df = df.sort_values(by="_ts", ascending=True)
+    else:
+        # Ensure _ts exists even if no timestamp column detected
+        df["_ts"] = pd.NaT
     
-    # Get metric columns
+    # Get metric columns (initial candidates)
     metric_cols = get_numeric_metric_columns(df, ts_col, sensor_col)
-    
+
+    # Prune metric options that have effectively no numeric data (avoid confusing dropdowns)
+    pruned_metrics = []
+    min_absolute = 10
+    min_fraction = 0.005
+    min_fraction_count = max(min_absolute, int(min_fraction * len(df))) if len(df) > 0 else min_absolute
+    for col in metric_cols:
+        try:
+            non_na = pd.to_numeric(df[col], errors="coerce").notna().sum()
+        except Exception:
+            non_na = 0
+        if non_na >= min_fraction_count:
+            pruned_metrics.append(col)
+
+    metric_cols = pruned_metrics
+
     if not metric_cols:
-        st.warning("No numeric metric columns found in the data.")
+        st.warning("No numeric metric columns with sufficient data were found in the data.")
         st.stop()
     
     # Sensor selection with persistence
@@ -5669,22 +5737,24 @@ if page == "Sensor Comparison":
     if "selected_sensors" not in st.session_state:
         st.session_state["selected_sensors"] = available_sensors[:2] if len(available_sensors) >= 2 else available_sensors[:1]
 
-    # Keep only sensors still available
+    # keep only sensors still present
     st.session_state["selected_sensors"] = [s for s in st.session_state["selected_sensors"] if s in available_sensors]
     if not st.session_state["selected_sensors"]:
         st.session_state["selected_sensors"] = available_sensors[:2] if len(available_sensors) >= 2 else available_sensors[:1]
 
-    selected_sensors = st.multiselect(
-        "Compare Different Sensors",
-        options=available_sensors,
-        default=st.session_state["selected_sensors"],
-        key="sensor_selector",
-        help="Select at least one sensor to compare."
-    )
+    # Top Card: Compare Different Sensors
+    with st.container(border=True):
+        st.markdown("#### Compare Different Sensors")
+        st.caption("Select sensors to compare")
+        st.multiselect(
+            "Select sensors to compare",
+            options=available_sensors,
+            default=st.session_state["selected_sensors"],
+            key="selected_sensors",
+            help="Select at least one sensor to compare."
+        )
 
-    # Persist selection
-    st.session_state["selected_sensors"] = selected_sensors
-    
+    selected_sensors = st.session_state.get("selected_sensors", [])
     if not selected_sensors:
         st.warning("Select at least one sensor to compare.")
         st.stop()
@@ -5736,74 +5806,94 @@ if page == "Sensor Comparison":
         unit_str = f" ({unit})" if unit else ""
 
         # Use cached filtered df for plotting (no UI for time bucket)
-        plot_df = filtered_df_by_window(df_filtered, ts_col, days=None)
+        plot_df = filtered_df_by_window(df_filtered, "_ts", days=None)
 
-        # Ensure primary metric is numeric for plotting
-        if primary_metric in plot_df.columns:
-            plot_df[primary_metric] = pd.to_numeric(plot_df[primary_metric], errors="coerce")
+            # Coerce metric to numeric into a safe plotting column _metric
+        metric_series = pd.to_numeric(plot_df.get(primary_metric, pd.Series(dtype=float)), errors="coerce")
+        plot_df = plot_df.assign(_metric=metric_series)
 
-        # Downsample for plotting only when very large
-        if ts_col and len(plot_df) > 20000 and ts_col in plot_df.columns:
-            plot_df = plot_df.set_index(ts_col)
-            numeric_cols = [c for c in plot_df.columns if c != sensor_col]
-            if numeric_cols:
-                plot_df[numeric_cols] = plot_df[numeric_cols].apply(lambda s: pd.to_numeric(s, errors="coerce"))
-            if sensor_col in plot_df.columns:
-                cols_to_agg = [c for c in [primary_metric] if c in plot_df.columns]
-                plot_df_resampled = plot_df.groupby(sensor_col)[cols_to_agg].resample('5min').mean()
-                plot_df_resampled = plot_df_resampled.reset_index()
-            else:
-                plot_df_resampled = plot_df[[primary_metric]].resample('5min').mean().reset_index()
-            plot_df = plot_df_resampled
+        # debug expander removed
 
-        fig_primary = go.Figure()
-        for sensor in selected_sensors:
-            sensor_data = plot_df[plot_df[sensor_col] == sensor]
-            if ts_col and not sensor_data.empty and primary_metric in sensor_data.columns:
-                fig_primary.add_trace(go.Scatter(
-                    x=sensor_data[ts_col],
-                    y=sensor_data[primary_metric],
-                    mode="lines",
-                    name=sensor,
-                    hovertemplate=f"{sensor}<br>%{{x}}<br>%{{y:.2f}}{unit_str}<extra></extra>"
-                ))
+        non_na = int(plot_df["_metric"].notna().sum())
+        if non_na == 0:
+            st.error(f"Selected primary metric '{primary_metric}' cannot be coerced to numeric — skipping plot.")
+        else:
+            # Downsample for plotting only when very large using _ts index
+            if "_ts" in plot_df.columns and len(plot_df) > 20000:
+                plot_df = plot_df.set_index("_ts")
+                numeric_cols = [c for c in plot_df.columns if c != sensor_col and c != "_metric"]
+                if numeric_cols:
+                    plot_df[numeric_cols] = plot_df[numeric_cols].apply(lambda s: pd.to_numeric(s, errors="coerce"))
+                if sensor_col in plot_df.columns:
+                    cols_to_agg = ["_metric"]
+                    plot_df_resampled = plot_df.groupby(sensor_col)[cols_to_agg].resample('5min').mean(numeric_only=True)
+                    plot_df_resampled = plot_df_resampled.reset_index()
+                else:
+                    plot_df_resampled = plot_df[["_metric"]].resample('5min').mean(numeric_only=True).reset_index()
+                plot_df = plot_df_resampled
 
-        fig_primary.update_layout(
-            title=f"{primary_metric.replace('_', ' ').title()}{unit_str}",
-            xaxis_title="Time",
-            yaxis_title=f"{primary_metric.replace('_', ' ').title()}{unit_str}",
-            height=420,
-            hovermode="x unified"
-        )
-        st.plotly_chart(fig_primary, use_container_width=True)
+            fig_primary = go.Figure()
+            for sensor in selected_sensors:
+                sensor_data = plot_df[plot_df[sensor_col] == sensor]
+                if not sensor_data.empty and "_metric" in sensor_data.columns and "_ts" in sensor_data.columns:
+                    fig_primary.add_trace(go.Scatter(
+                        x=sensor_data["_ts"],
+                        y=sensor_data["_metric"],
+                        mode="lines",
+                        name=sensor,
+                        hovertemplate=f"{sensor}<br>%{{x}}<br>%{{y:.2f}}{unit_str}<extra></extra>"
+                    ))
 
-    # Distribution (full width) — donut for low-cardinality / categorical, else histogram
+            fig_primary.update_layout(
+                title=f"{primary_metric.replace('_', ' ').title()}{unit_str}",
+                xaxis_title="Time",
+                yaxis_title=f"{primary_metric.replace('_', ' ').title()}{unit_str}",
+                height=420,
+                hovermode="x unified",
+                legend=dict(y=0.5, x=1.02, xanchor='left')
+            )
+
+            # Ensure x-axis is date type and zoom to real data range safely
+            fig_primary.update_xaxes(type="date")
+            try:
+                # Zoom only to timestamps where the metric has values
+                metric_ts = plot_df.loc[plot_df["_metric"].notna(), "_ts"]
+                x_min = metric_ts.min() if not metric_ts.empty else None
+                x_max = metric_ts.max() if not metric_ts.empty else None
+                if pd.notna(x_min) and pd.notna(x_max) and x_min < x_max:
+                    pad = (x_max - x_min) * 0.02
+                    fig_primary.update_xaxes(range=[x_min - pad, x_max + pad], autorange=False)
+                else:
+                    fig_primary.update_xaxes(autorange=True)
+            except Exception:
+                fig_primary.update_xaxes(autorange=True)
+
+            st.plotly_chart(fig_primary, use_container_width=True)
+
+    # Distribution (full width) — histogram for numeric metrics
     with st.container(border=True):
         st.markdown("#### Distribution")
 
         fig_dist = go.Figure()
         if primary_metric in df_filtered.columns:
-            orig_series = df_filtered[primary_metric]
-            coerced = pd.to_numeric(orig_series, errors="coerce")
-            numeric_fraction = coerced.notna().sum() / max(1, len(orig_series))
-            unique_vals = orig_series.dropna().nunique()
+            plot_df_dist = df_filtered.copy()
+            metric_series = pd.to_numeric(plot_df_dist.get(primary_metric, pd.Series(dtype=float)), errors="coerce")
+            plot_df_dist = plot_df_dist.assign(_metric=metric_series)
 
-            # treat as categorical if low unique count or mostly non-numeric
-            is_categorical = (numeric_fraction < 0.6) or (unique_vals <= 10)
+            numeric_count = int(plot_df_dist["_metric"].notna().sum())
+            unique_numeric = int(plot_df_dist["_metric"].nunique(dropna=True))
 
-            if is_categorical:
-                # donut / pie per sensor combined counts
-                combined = orig_series.astype(str)
-                vc = combined.value_counts().nlargest(20)
-                fig_dist.add_trace(go.Pie(labels=vc.index.astype(str), values=vc.values, hole=0.45))
-                fig_dist.update_layout(title=f"{primary_metric.replace('_', ' ').title()} Distribution (categorical)", height=380)
+            if numeric_count == 0:
+                st.info("Metric is non-numeric; distribution histogram unavailable.")
             else:
-                # histogram per sensor overlay
-                for sensor in selected_sensors:
-                    sensor_data = df_filtered[df_filtered[sensor_col] == sensor][primary_metric].dropna()
-                    if not sensor_data.empty:
-                        fig_dist.add_trace(go.Histogram(x=sensor_data, name=sensor, opacity=0.7, nbinsx=40))
-                fig_dist.update_layout(title=f"{primary_metric.replace('_', ' ').title()} Distribution", xaxis_title=f"{primary_metric.replace('_', ' ').title()}{unit_str}", yaxis_title="Frequency", barmode="overlay", height=380)
+                if unique_numeric > 20 or pd.api.types.is_numeric_dtype(plot_df_dist["_metric"]):
+                    for sensor in selected_sensors:
+                        sensor_data = plot_df_dist[plot_df_dist[sensor_col] == sensor]["_metric"].dropna()
+                        if not sensor_data.empty:
+                            fig_dist.add_trace(go.Histogram(x=sensor_data, name=sensor, opacity=0.7, nbinsx=40))
+                    fig_dist.update_layout(title=f"{primary_metric.replace('_', ' ').title()} Distribution", xaxis_title=f"{primary_metric.replace('_', ' ').title()}{unit_str}", yaxis_title="Frequency", barmode="overlay", height=380)
+                else:
+                    st.info("Metric appears categorical/low-cardinality; distribution histogram unavailable.")
 
         st.plotly_chart(fig_dist, use_container_width=True)
 
@@ -5826,43 +5916,63 @@ if page == "Sensor Comparison":
             unit = get_unit(secondary_metric)
             unit_str = f" ({unit})" if unit else ""
 
-            plot_df = filtered_df_by_window(df_filtered, ts_col, days=None)
-            if secondary_metric in plot_df.columns:
-                plot_df[secondary_metric] = pd.to_numeric(plot_df[secondary_metric], errors="coerce")
+            plot_df = filtered_df_by_window(df_filtered, "_ts", days=None)
+            metric_series = pd.to_numeric(plot_df.get(secondary_metric, pd.Series(dtype=float)), errors="coerce")
+            plot_df = plot_df.assign(_metric=metric_series)
 
-            if ts_col and len(plot_df) > 20000 and ts_col in plot_df.columns:
-                plot_df = plot_df.set_index(ts_col)
-                numeric_cols = [c for c in plot_df.columns if c != sensor_col]
-                if numeric_cols:
-                    plot_df[numeric_cols] = plot_df[numeric_cols].apply(lambda s: pd.to_numeric(s, errors="coerce"))
-                if sensor_col in plot_df.columns:
-                    cols_to_agg = [c for c in [secondary_metric] if c in plot_df.columns]
-                    plot_df_resampled = plot_df.groupby(sensor_col)[cols_to_agg].resample('5min').mean()
-                    plot_df_resampled = plot_df_resampled.reset_index()
-                else:
-                    plot_df_resampled = plot_df[[secondary_metric]].resample('5min').mean().reset_index()
-                plot_df = plot_df_resampled
+            non_na = int(plot_df["_metric"].notna().sum())
+            if non_na == 0:
+                st.error(f"Selected secondary metric '{secondary_metric}' cannot be coerced to numeric — skipping plot.")
+            else:
+                if "_ts" in plot_df.columns and len(plot_df) > 20000:
+                    plot_df = plot_df.set_index("_ts")
+                    numeric_cols = [c for c in plot_df.columns if c != sensor_col and c != "_metric"]
+                    if numeric_cols:
+                        plot_df[numeric_cols] = plot_df[numeric_cols].apply(lambda s: pd.to_numeric(s, errors="coerce"))
+                    if sensor_col in plot_df.columns:
+                        cols_to_agg = ["_metric"]
+                        plot_df_resampled = plot_df.groupby(sensor_col)[cols_to_agg].resample('5min').mean(numeric_only=True)
+                        plot_df_resampled = plot_df_resampled.reset_index()
+                    else:
+                        plot_df_resampled = plot_df[["_metric"]].resample('5min').mean(numeric_only=True).reset_index()
+                    plot_df = plot_df_resampled
 
-            fig_secondary = go.Figure()
-            for sensor in selected_sensors:
-                sensor_data = plot_df[plot_df[sensor_col] == sensor]
-                if ts_col and not sensor_data.empty and secondary_metric in sensor_data.columns:
-                    fig_secondary.add_trace(go.Scatter(
-                        x=sensor_data[ts_col],
-                        y=sensor_data[secondary_metric],
-                        mode="lines",
-                        name=sensor,
-                        hovertemplate=f"{sensor}<br>%{{x}}<br>%{{y:.2f}}{unit_str}<extra></extra>"
-                    ))
+                fig_secondary = go.Figure()
+                for sensor in selected_sensors:
+                    sensor_data = plot_df[plot_df[sensor_col] == sensor]
+                    if not sensor_data.empty and "_metric" in sensor_data.columns and "_ts" in sensor_data.columns:
+                        fig_secondary.add_trace(go.Scatter(
+                            x=sensor_data["_ts"],
+                            y=sensor_data["_metric"],
+                            mode="lines",
+                            name=sensor,
+                            hovertemplate=f"{sensor}<br>%{{x}}<br>%{{y:.2f}}{unit_str}<extra></extra>"
+                        ))
 
-            fig_secondary.update_layout(
-                title=f"{secondary_metric.replace('_', ' ').title()}{unit_str}",
-                xaxis_title="Time",
-                yaxis_title=f"{secondary_metric.replace('_', ' ').title()}{unit_str}",
-                height=420,
-                hovermode="x unified"
-            )
-            st.plotly_chart(fig_secondary, use_container_width=True)
+                fig_secondary.update_layout(
+                    title=f"{secondary_metric.replace('_', ' ').title()}{unit_str}",
+                    xaxis_title="Time",
+                    yaxis_title=f"{secondary_metric.replace('_', ' ').title()}{unit_str}",
+                    height=420,
+                    hovermode="x unified",
+                    legend=dict(y=0.5, x=1.02, xanchor='left')
+                )
+
+                fig_secondary.update_xaxes(type="date")
+                try:
+                    # Zoom only to timestamps where the metric has values
+                    metric_ts = plot_df.loc[plot_df["_metric"].notna(), "_ts"]
+                    x_min = metric_ts.min() if not metric_ts.empty else None
+                    x_max = metric_ts.max() if not metric_ts.empty else None
+                    if pd.notna(x_min) and pd.notna(x_max) and x_min < x_max:
+                        pad = (x_max - x_min) * 0.02
+                        fig_secondary.update_xaxes(range=[x_min - pad, x_max + pad], autorange=False)
+                    else:
+                        fig_secondary.update_xaxes(autorange=True)
+                except Exception:
+                    fig_secondary.update_xaxes(autorange=True)
+
+                st.plotly_chart(fig_secondary, use_container_width=True)
     
     # Row 3: Raw Data Table (Full Width)
     
@@ -5894,9 +6004,9 @@ if page == "Sensor Comparison":
         if display_cols:
             display_df = df_filtered[display_cols].copy()
             
-            # Sort by timestamp desc if available
-            if ts_col and ts_col in display_df.columns:
-                display_df = display_df.sort_values(by=ts_col, ascending=False)
+            # Sort by plotting timestamp desc if available
+            if "_ts" in display_df.columns:
+                display_df = display_df.sort_values(by="_ts", ascending=False)
             
             st.dataframe(display_df, use_container_width=True, height=400)
             
