@@ -2064,10 +2064,11 @@ if cdf is not None:
         )
 
         loc = header["location"]
-        overview_tab, comfort_tab, diagnostics_tab = st.tabs([
+        overview_tab, comfort_tab, diagnostics_tab, heatmaps_tab = st.tabs([
             "Overview & Stats",
             "Comfort & Loads",
             "Data Quality",
+            "Heatmaps",
         ])
 
         with overview_tab:
@@ -2545,95 +2546,134 @@ if cdf is not None:
                 st.success("All shown columns are complete (100% coverage).")
             st.dataframe(cov_df, use_container_width=True)
 
-            # ========== ANNUAL DIURNAL RESOURCE HEATMAPS ==========
+            # Diagnostics tab: keep Data Quality content only (heatmaps moved to the Heatmaps tab)
+            st.caption("Data quality diagnostics shown above. Use the Heatmaps tab to explore annual diurnal resource heatmaps.")
+
+        # ========== HEATMAPS TAB CONTENT ==========
+        with heatmaps_tab:
             st.divider()
             st.subheader("Annual Diurnal Resource Heatmaps")
-            st.caption("X = months across the year · Y = time of day · Values aggregated by day-of-year and hour.")
-            
-            # Build heatmap data dictionary
-            heatmap_dict = {}
-            
-            # Temperature
-            temp_col = get_metric_column(cdf, ["dry_bulb", "temp_air", "temperature", "tdb"])
-            if temp_col:
-                pivot_binned, info = compute_heatmap_matrix(cdf, temp_col, "Dry Bulb Temperature (°C)")
-                if "error" not in info:
-                    heatmap_dict["Temperature"] = (pivot_binned, info)
-            
-            # Solar radiation (prefer GHI)
-            solar_col = get_metric_column(cdf, ["ghi", "global_horiz", "global_horizontal", "solar", "radiation"])
-            if solar_col:
-                pivot_binned, info = compute_heatmap_matrix(cdf, solar_col, "Global Horizontal Irradiance (W/m²)")
-                if "error" not in info:
-                    heatmap_dict["Solar Radiation"] = (pivot_binned, info)
-            
-            # Relative humidity
-            rh_col = get_metric_column(cdf, ["relative_humidity", "relhum", "rh"])
-            if rh_col:
-                pivot_binned, info = compute_heatmap_matrix(cdf, rh_col, "Relative Humidity (%)")
-                if "error" not in info:
-                    heatmap_dict["Humidity"] = (pivot_binned, info)
-            
-            # Wind speed
-            wind_col = get_metric_column(cdf, ["wind_speed", "windspd", "wspd", "wind"])
-            if wind_col:
-                pivot_binned, info = compute_heatmap_matrix(cdf, wind_col, "Wind Speed (m/s)")
-                if "error" not in info:
-                    heatmap_dict["Wind Speed"] = (pivot_binned, info)
-            
-            if not heatmap_dict:
-                st.info("No metric data available for heatmap generation.")
+            st.caption("Visualize typical diurnal patterns across the year. Use controls to crop months or hours for focused views.")
+
+            # Controls: month range (1..12) and hour range (0..23)
+            months = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"]
+            c1, c2 = st.columns([2, 1])
+            month_start, month_end = c1.slider("Month range", 1, 12, (1, 12))
+            hour_start, hour_end = c2.slider("Hour range", 0, 23, (0, 23))
+
+            # Validate slider ordering
+            if month_start > month_end:
+                st.warning("Please ensure start month is before or equal to end month.")
             else:
-                # Build and display figure
-                fig = build_diurnal_heatmap_figure(heatmap_dict, cdf, header)
-                if fig:
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Download buttons
-                    col1, col2 = st.columns(2)
-                    
-                    # PNG download with HTML fallback if kaleido missing
-                    with col1:
-                        try:
-                            png_bytes = fig.to_image(format="png", scale=2)
-                            st.download_button(
-                                label="📥 Download heatmaps as PNG",
-                                data=png_bytes,
-                                file_name="diurnal_heatmaps.png",
-                                mime="image/png"
-                            )
-                        except Exception as e:
-                            # Fallback: provide HTML export and instruct how to enable PNG export
-                            html_bytes = fig.to_html(include_plotlyjs='cdn').encode('utf-8')
-                            st.download_button(
-                                label="📥 Download heatmaps (HTML fallback)",
-                                data=html_bytes,
-                                file_name="diurnal_heatmaps.html",
-                                mime="text/html"
-                            )
-                            st.caption("PNG export requires the `kaleido` package (pip install -U kaleido). HTML fallback provided.")
-                    
-                    # CSV/ZIP download
-                    with col2:
-                        try:
-                            # Create in-memory zip
-                            zip_buffer = io.BytesIO()
-                            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                                for strip_name, (pivot_binned, info) in heatmap_dict.items():
-                                    if not pivot_binned.empty:
-                                        csv_data = pivot_binned.to_csv()
-                                        zf.writestr(f"heatmap_{strip_name.lower().replace(' ', '_')}.csv", csv_data)
-                            zip_buffer.seek(0)
-                            st.download_button(
-                                label="📥 Download heatmap data (ZIP)",
-                                data=zip_buffer.getvalue(),
-                                file_name="diurnal_heatmaps_data.zip",
-                                mime="application/zip"
-                            )
-                        except Exception as e:
-                            st.caption(f"ZIP export failed: {str(e)[:50]}")
+                # Convert month range to DOY range using helper
+                boundaries = month_boundaries_doy(leap_year=False)
+                start_doy = int(boundaries[month_start - 1])
+                if month_end == 12:
+                    end_doy = int(boundaries[12])
                 else:
-                    st.warning("Could not generate heatmap figure from available data.")
+                    end_doy = int(boundaries[month_end]) - 1
+
+                # Build heatmap dict from full EPW data (do not filter the source data)
+                heatmap_dict = {}
+                solar_col = get_metric_column(cdf, ["ghi", "global_horiz", "global_horizontal", "solar", "radiation"]) 
+                if solar_col:
+                    pivot_binned, info = compute_heatmap_matrix(cdf, solar_col, "Global Horizontal Irradiance (W/m²)")
+                    if not pivot_binned.empty:
+                        heatmap_dict["Solar Radiation"] = (pivot_binned, info)
+
+                rh_col = get_metric_column(cdf, ["relative_humidity", "relhum", "rh"]) 
+                if rh_col:
+                    pivot_binned, info = compute_heatmap_matrix(cdf, rh_col, "Relative Humidity (%)")
+                    if not pivot_binned.empty:
+                        heatmap_dict["Humidity"] = (pivot_binned, info)
+
+                wind_col = get_metric_column(cdf, ["wind_speed", "windspd", "wspd", "wind"]) 
+                if wind_col:
+                    pivot_binned, info = compute_heatmap_matrix(cdf, wind_col, "Wind Speed (m/s)")
+                    if not pivot_binned.empty:
+                        heatmap_dict["Wind Speed"] = (pivot_binned, info)
+
+                if not heatmap_dict:
+                    st.info("No metric data available for heatmap generation.")
+                else:
+                    # Crop pivot matrices to the chosen DOY/hour ranges (display-only)
+                    cropped = {}
+                    for name, (pivot_binned, info) in heatmap_dict.items():
+                        # Select columns between start_doy..end_doy and rows between hour_start..hour_end
+                        cols = [c for c in pivot_binned.columns if (c >= start_doy and c <= end_doy)]
+                        rows = [r for r in pivot_binned.index if (r >= hour_start and r <= hour_end)]
+                        if not cols or not rows:
+                            # produce empty pivot for this strip
+                            cropped[name] = (pd.DataFrame(), info)
+                        else:
+                            cropped_pivot = pivot_binned.loc[rows, cols]
+                            cropped[name] = (cropped_pivot, info)
+
+                    fig = build_diurnal_heatmap_figure(cropped, cdf, header)
+                    if fig:
+                        # Update x-axis tick labels to visible months
+                        month_doy, month_letters = month_labels_at_midpoints(leap_year=False)
+                        tickvals = [d for d, m in zip(month_doy, month_letters) if d >= start_doy and d <= end_doy]
+                        ticktext = [m for d, m in zip(month_doy, month_letters) if d >= start_doy and d <= end_doy]
+                        if tickvals:
+                            fig.update_xaxes(tickmode="array", tickvals=tickvals, ticktext=ticktext)
+                        # Remove heavy x-axis title and add single y-axis label
+                        fig.update_xaxes(title_text=None)
+                        try:
+                            # Update all y-axis titles to None (remove repetition)
+                            fig.update_yaxes(title_text=None)
+                        except Exception:
+                            pass
+                        fig.add_annotation(x=-0.06, y=0.5, xref='paper', yref='paper', text='Time of Day', showarrow=False, textangle=-90, font=dict(size=11))
+
+                        st.plotly_chart(fig, use_container_width=True)
+
+                        # Downloads: PNG and CSV reflecting the current display crop
+                        c1d, c2d = st.columns(2)
+                        with c1d:
+                            try:
+                                png_bytes = fig.to_image(format="png", scale=2)
+                                st.download_button(label="📥 Download heatmaps as PNG", data=png_bytes, file_name="diurnal_heatmaps.png", mime="image/png")
+                            except Exception:
+                                html_bytes = fig.to_html(include_plotlyjs='cdn').encode('utf-8')
+                                st.download_button(label="📥 Download heatmaps (HTML)", data=html_bytes, file_name="diurnal_heatmaps.html", mime="text/html")
+
+                        # CSV long-format export limited to selected months/hours
+                        with c2d:
+                            try:
+                                mask = (cdf.index.month >= month_start) & (cdf.index.month <= month_end) & (cdf.index.hour >= hour_start) & (cdf.index.hour <= hour_end)
+                                export_df = cdf.loc[mask]
+                                long_records = []
+                                for strip_name, (pivot_binned, info) in heatmap_dict.items():
+                                    col = info.get('col')
+                                    if not col or col not in export_df.columns:
+                                        continue
+                                    s = coerce_to_numeric(export_df[col]).dropna()
+                                    if s.empty:
+                                        continue
+                                    bin_codes = bin_metric(s, info.get('metric'))
+                                    colors, labels = get_color_scale_for_metric(info.get('metric'))
+                                    bin_labels = [labels[int(c)] if (pd.notna(c) and int(c) >= 0 and int(c) < len(labels)) else None for c in bin_codes]
+                                    for ts, val, bl in zip(s.index, s.values, bin_labels):
+                                        long_records.append({
+                                            'datetime': ts.isoformat(),
+                                            'variable': strip_name,
+                                            'value': float(val),
+                                            'bin_label': bl,
+                                            'month': int(ts.month),
+                                            'hour': int(ts.hour),
+                                        })
+
+                                if not long_records:
+                                    st.caption("No long-format data available for CSV export for the selected crop.")
+                                else:
+                                    long_df = pd.DataFrame(long_records)
+                                    csv_bytes = long_df.to_csv(index=False).encode('utf-8')
+                                    st.download_button(label="📥 Download heatmap data (CSV)", data=csv_bytes, file_name="diurnal_heatmaps_data.csv", mime="text/csv")
+                            except Exception as e:
+                                st.caption(f"CSV export failed: {str(e)[:80]}")
+                    else:
+                        st.warning("Could not generate heatmap figure from available data.")
 
 # ====================== TEMPERATURE & HUMIDITY (CLEAN) ======================
 if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
