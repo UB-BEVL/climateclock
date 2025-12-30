@@ -1137,6 +1137,7 @@ raw_epw_bytes = ss.get("raw_epw_bytes")
 source_label = ss.get("source_label")
 
 def _stage_station_and_load(station_info: dict):
+    """Load station data and trigger rerun. Called after station selection."""
     st.session_state["loading_station_name"] = station_info.get("name", "selected station")
     st.session_state["sel_station"] = station_info
     st.session_state["selected_station"] = station_info
@@ -1149,6 +1150,8 @@ def _stage_station_and_load(station_info: dict):
     st.session_state.pop("pending_station", None)
     st.session_state.pop("raw_epw_bytes", None)
     st.session_state["page_after_station"] = "📊 Dashboard"
+    # Clear the just_loaded flag before rerun so next run doesn't trigger duplicate load
+    st.session_state["just_loaded_station"] = False
     _rerun()
 
 
@@ -1274,8 +1277,117 @@ def render_station_picker():
 
     stations["display_label"] = stations.apply(make_label, axis=1)
 
+    # ========== INTERACTIVE MAP (full-width card) ==========
+    # Map renders immediately on page load - appears FIRST
+    with st.container(border=True):
+        st.markdown("### 🗺️ Interactive Map")
+        st.caption("Click a station dot to load it instantly.")
+        
+        st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
+
+    MAP_HEIGHT = 700
+    fig_map = go.Figure(
+        data=[
+            go.Scattermapbox(
+                lat=stations["lat"].tolist(),
+                lon=stations["lon"].tolist(),
+                mode="markers",
+                marker=dict(size=11, color="#5fd4ff", opacity=0.9),
+                text=stations["name"].tolist(),
+                customdata=stations[["name", "country", "lat", "lon", "elevation_m", "timezone", "zip_url", "period", "heating_db", "cooling_db"]].values.tolist(),
+                hoverinfo="text",
+                hovertemplate="%{text}",
+            )
+        ]
+    )
+
+    fig_map.update_layout(
+        mapbox=dict(
+            style="open-street-map",
+            bearing=0,
+            pitch=0,
+            center=dict(lat=float(stations["lat"].median()), lon=float(stations["lon"].median())),
+            zoom=2.2,
+        ),
+        dragmode="pan",
+        margin=dict(l=0, r=0, t=12, b=0),
+        height=MAP_HEIGHT,
+        paper_bgcolor="#0b0f1a",
+        plot_bgcolor="#0b0f1a",
+        hovermode="closest",
+        clickmode="event+select",
+        showlegend=False,
+        uirevision="north_up",
+    )
+
+    # plotly_events() renders the map internally - no need for separate st.plotly_chart()
+    selected_points = plotly_events(
+        fig_map,
+        click_event=True,
+        hover_event=False,
+        select_event=False,
+        override_height=MAP_HEIGHT,
+        override_width=None,
+        key="map_click_v4"
+    )
+
+    # Process map click events - only load on NEW selections
+    if selected_points and len(selected_points) > 0:
+        point = selected_points[0]
+        if "pointIndex" in point:
+            idx = point["pointIndex"]
+            if 0 <= idx < len(stations):
+                row = stations.iloc[idx]
+                station_info = {
+                    "name": row.get("name", "Unknown"),
+                    "country": row.get("country", "—"),
+                    "lat": row.get("lat", 0),
+                    "lon": row.get("lon", 0),
+                    "elevation_m": row.get("elevation_m", "—"),
+                    "timezone": row.get("timezone", "—"),
+                    "zip_url": row.get("zip_url", ""),
+                    "period": row.get("period", "—"),
+                    "heating_db": row.get("heating_db"),
+                    "cooling_db": row.get("cooling_db"),
+                    "display_label": row.get("display_label"),
+                }
+                # Get station ID to track if already loaded
+                station_id = row.get("station_id") or row.get("raw_id") or str(idx)
+                last_loaded_id = st.session_state.get("last_loaded_station_id")
+                just_loaded = st.session_state.get("just_loaded_station", False)
+                
+                # Only load if this is a NEW station selection AND we haven't just loaded
+                # This prevents duplicate loads on reruns
+                if station_id != last_loaded_id and not just_loaded:
+                    # Mark that we're about to load to prevent rerun loops
+                    st.session_state["last_loaded_station_id"] = station_id
+                    st.session_state["just_loaded_station"] = True
+                    st.session_state["selected_station"] = station_info
+                    st.session_state["pending_station"] = station_info
+                    
+                    # Auto-load station immediately with spinner
+                    station_name_display = station_info.get("display_label") or station_info.get("name", "Unknown")
+                    with st.spinner(f"Loading station {station_name_display}..."):
+                        try:
+                            _stage_station_and_load(station_info)
+                            display_name = station_info.get("display_label") or station_info.get("name", "Unknown")
+                            station_id_display = station_info.get("station_id") or station_id
+                            st.success(f"✅ Loaded **{display_name}** ({station_id_display})")
+                        except Exception as e:
+                            st.error(f"❌ Failed to load station: {str(e)}")
+                            # On error, allow retry by clearing the loaded ID
+                            st.session_state.pop("last_loaded_station_id", None)
+                            st.session_state["just_loaded_station"] = False
+                elif station_id == last_loaded_id:
+                    # Station already loaded - clear the just_loaded flag if it was set
+                    st.session_state["just_loaded_station"] = False
+
+    # Removed sticky confirmation bar - stations load automatically on map click
+
     st.divider()
-    st.markdown("### Station search")
+    
+    # ========== STATION SEARCH ==========
+    st.markdown("### 🔍 Station Search")
     st.caption(f"{len(stations):,} verified download links. Search, then load once.")
     st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
 
@@ -1333,90 +1445,6 @@ def render_station_picker():
                     "display_label": chosen_row.get("display_label"),
                 }
                 _stage_station_and_load(station_info)
-
-    st.divider()
-
-    st.markdown("### Interactive Map")
-    st.caption("Click a station dot, review the details card, then load the station.")
-    st.markdown("<div class='section-gap-lg'></div>", unsafe_allow_html=True)
-
-    MAP_HEIGHT = 700
-    fig_map = go.Figure(
-        data=[
-            go.Scattermapbox(
-                lat=stations["lat"].tolist(),
-                lon=stations["lon"].tolist(),
-                mode="markers",
-                marker=dict(size=11, color="#5fd4ff", opacity=0.9),
-                text=stations["name"].tolist(),
-                customdata=stations[["name", "country", "lat", "lon", "elevation_m", "timezone", "zip_url", "period", "heating_db", "cooling_db"]].values.tolist(),
-                hoverinfo="text",
-                hovertemplate="%{text}",
-            )
-        ]
-    )
-
-    fig_map.update_layout(
-        mapbox=dict(
-            style="open-street-map",
-            bearing=0,
-            pitch=0,
-            center=dict(lat=float(stations["lat"].median()), lon=float(stations["lon"].median())),
-            zoom=2.2,
-        ),
-        dragmode="pan",
-        margin=dict(l=0, r=0, t=12, b=0),
-        height=MAP_HEIGHT,
-        paper_bgcolor="#0b0f1a",
-        plot_bgcolor="#0b0f1a",
-        hovermode="closest",
-        clickmode="event+select",
-        showlegend=False,
-        uirevision="north_up",
-    )
-
-    selected_points = plotly_events(
-        fig_map,
-        click_event=True,
-        hover_event=False,
-        select_event=False,
-        override_height=MAP_HEIGHT,
-        override_width=None,
-        key="map_click_v4"
-    )
-
-    if selected_points and len(selected_points) > 0:
-        point = selected_points[0]
-        if "pointIndex" in point:
-            idx = point["pointIndex"]
-            if 0 <= idx < len(stations):
-                row = stations.iloc[idx]
-                station_info = {
-                    "name": row.get("name", "Unknown"),
-                    "country": row.get("country", "—"),
-                    "lat": row.get("lat", 0),
-                    "lon": row.get("lon", 0),
-                    "elevation_m": row.get("elevation_m", "—"),
-                    "timezone": row.get("timezone", "—"),
-                    "zip_url": row.get("zip_url", ""),
-                    "period": row.get("period", "—"),
-                    "heating_db": row.get("heating_db"),
-                    "cooling_db": row.get("cooling_db"),
-                    "display_label": row.get("display_label"),
-                }
-                st.session_state["pending_station"] = station_info
-
-    pending_station = st.session_state.get("pending_station")
-    if pending_station:
-        st.markdown("### Station selected")
-        st.markdown(
-            f"**{pending_station.get('display_label') or pending_station.get('name', 'Station')}**<br>"
-            f"Lat: {pending_station.get('lat')} · Lon: {pending_station.get('lon')}<br>"
-            f"Period: {pending_station.get('period', '—')} · Timezone: {pending_station.get('timezone', '—')}",
-            unsafe_allow_html=True,
-        )
-        if st.button("Load station", key="load_pending_station", type="primary"):
-            _stage_station_and_load(pending_station)
 
 
 def handle_epw_upload(uploaded_file, picker_key: str = "sidebar") -> Optional[bytes]:
@@ -1539,15 +1567,20 @@ if active_page not in ALLOWED_PAGES:
 main_upload = None
 if active_page == "Select weather file":
     st.info("Load a station from the map or upload an EPW/ZIP to unlock the dashboard views.")
+    # Clear just_loaded flag at start of page render to allow new selections after rerun
+    if st.session_state.get("just_loaded_station") is True:
+        # Reset flag after page renders once after load
+        st.session_state["just_loaded_station"] = False
+    render_station_picker()
     main_upload = st.file_uploader(
         "Upload EPW or ZIP file",
         type=["epw", "zip"],
         help="Upload an EnergyPlus Weather file or a ZIP containing EPWs",
         key="main_epw_upload_primary",
     )
-    render_station_picker()
 else:
     st.session_state.pop("pending_station", None)
+    st.session_state.pop("just_loaded_station", None)
 
 if main_upload is not None:
     # ---- Uploader path ----
@@ -3207,7 +3240,7 @@ if effective_page == "☀️ Solar Analysis":
             xs, ys, _, _, idx = sunpath_for_day(day)
             if xs.size == 0:
                 return
-            fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", line=dict(color=color, width=width, dash=dash), name=name, opacity=opacity, hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", line=dict(color=color, width=width, dash=dash), name=name, opacity=opacity, showlegend=True, hoverinfo="skip"))
 
         year = date.year
         add_day_trace(pd.Timestamp(year=year, month=6, day=21, tz=site.tz), color="#facc15", width=2, name="Jun 21 (Summer)")
@@ -3217,7 +3250,7 @@ if effective_page == "☀️ Solar Analysis":
         # Selected date (red dotted)
         xs_sel, ys_sel, az_sel, el_sel, idx_sel = sunpath_for_day(date)
         if xs_sel.size > 0:
-            fig.add_trace(go.Scatter(x=xs_sel, y=ys_sel, mode="lines", line=dict(color="#22d3ee", width=2.4, dash="dot"), name=f"{date:%b %d} Path", hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=xs_sel, y=ys_sel, mode="lines", line=dict(color="#22d3ee", width=2.4, dash="dot"), name=f"{date:%b %d} Path", showlegend=True, hoverinfo="skip"))
 
         # Current sun marker: pick nearest to 'now' in site tz (if within same day samples)
         now_local = pd.Timestamp.now(tz=site.tz)
@@ -3260,7 +3293,7 @@ if effective_page == "☀️ Solar Analysis":
                 azimuth = float(az_sel[now_pos])
                 altitude = float(el_sel[now_pos])
                 solar_time = idx_sel[now_pos].strftime("%H:%M")
-                fig.add_trace(go.Scatter(x=[sun_marker_x], y=[sun_marker_y], mode="markers", marker=dict(size=16, color="#ff4d4d", line=dict(width=3, color="rgba(255,255,255,0.7)")), name="Current Sun",
+                fig.add_trace(go.Scatter(x=[sun_marker_x], y=[sun_marker_y], mode="markers", marker=dict(size=16, color="#ff4d4d", line=dict(width=3, color="rgba(255,255,255,0.7)")), name="Current Sun", showlegend=True,
                                          hovertemplate=f"Time: {solar_time}<br>Az: {azimuth:.1f}°<br>Alt: {altitude:.1f}°<extra></extra>"))
                 # radial line
                 fig.add_shape(type="line", x0=0, y0=0, x1=sun_marker_x, y1=sun_marker_y, line=dict(color="#ff4d4d", width=2))
@@ -4972,20 +5005,20 @@ if page == "📡 Live Data vs EPW":
         # Prepare climatologies (smoothed for plotting, raw kept for optional overlay)
         epw_clim = ls.build_epw_climatology(epw_src)
 
-        sensor_for_clim_raw = sensor_ts.rename(columns={
+        # Rename columns defensively - only rename columns that exist
+        rename_map = {
             "T_db": "temperature",
             "RH": "relative_humidity",
             "GHI": "ghi",
             "windspd": "wind_speed",
             "winddir": "wind_dir",
-        }).copy()
-        sensor_for_clim_smoothed = sensor_smoothed.rename(columns={
-            "T_db": "temperature",
-            "RH": "relative_humidity",
-            "GHI": "ghi",
-            "windspd": "wind_speed",
-            "winddir": "wind_dir",
-        }).copy()
+        }
+        # Filter to only columns that exist
+        rename_map_raw = {k: v for k, v in rename_map.items() if k in sensor_ts.columns}
+        rename_map_smoothed = {k: v for k, v in rename_map.items() if k in sensor_smoothed.columns}
+    
+        sensor_for_clim_raw = sensor_ts.rename(columns=rename_map_raw).copy()
+        sensor_for_clim_smoothed = sensor_smoothed.rename(columns=rename_map_smoothed).copy()
 
         sensor_clim_raw = ls.build_sensor_climatology(sensor_for_clim_raw)
         sensor_clim_smoothed = ls.build_sensor_climatology(sensor_for_clim_smoothed)
@@ -5019,6 +5052,20 @@ if page == "📡 Live Data vs EPW":
                 fig.update_xaxes(tickmode="array", tickvals=tick_vals, ticktext=tick_text, title="Day of Year")
                 return fig
 
+            def safe_replace_year(ts: pd.Timestamp, year: int) -> pd.Timestamp:
+                """Safely replace year in timestamp, handling Feb 29 in non-leap years.
+                
+                If ts is Feb 29 and target year is not a leap year, shift to Feb 28.
+                Preserves timezone awareness.
+                """
+                try:
+                    return ts.replace(year=year)
+                except ValueError:
+                    # Feb 29 in non-leap year - shift to Feb 28
+                    if ts.month == 2 and ts.day == 29:
+                        return ts.replace(year=year, month=2, day=28)
+                    raise
+            
             def _align_epw_to_range(epw_df: pd.DataFrame, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
                 if epw_df.empty or start_ts is None or end_ts is None:
                     return pd.DataFrame(columns=epw_df.columns)
@@ -5027,7 +5074,8 @@ if page == "📡 Live Data vs EPW":
                 years = sorted({start_ts.year, end_ts.year})
                 for yr in years:
                     temp = base.copy()
-                    temp.index = temp.index.map(lambda ts: ts.replace(year=yr))
+                    # Use safe_replace_year to handle Feb 29 in non-leap years
+                    temp.index = temp.index.map(lambda ts: safe_replace_year(ts, yr))
                     frames.append(temp)
                 aligned = pd.concat(frames).sort_index()
                 return aligned[(aligned.index >= start_ts.floor("H")) & (aligned.index <= end_ts.ceil("H"))]
@@ -5371,24 +5419,215 @@ if page == "📡 Live Data vs EPW":
     st.info("Capture screenshots of the Live Data tab, 7-day overlay, bias heatmap, and scatter plot for the Methods section.")
 
 if page == "Sensor Comparison":
-    st.markdown("### Sensor Comparison")
-    st.caption("This section compares multiple sensor locations to understand neighborhood-scale microclimate differences within the same city.")
+    # ========== PROOF MARKER ==========
+    st.success("✅ Seattle-style Sensor Comparison UI loaded")
+    
+    # ========== HELPER FUNCTIONS ==========
+    @st.cache_data
+    def detect_timestamp_col(df: pd.DataFrame) -> Optional[str]:
+        """Detect timestamp column name."""
+        candidates = ["timestamp", "time", "datetime", "date", "Date", "Timestamp", "Time"]
+        for col in candidates:
+            if col in df.columns:
+                return col
+        # fallback: pick the first datetime-like column
+        for col in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                return col
+        return None
+    
+    @st.cache_data
+    def detect_sensor_id_col(df: pd.DataFrame) -> Optional[str]:
+        """Detect sensor identifier column name."""
+        candidates = ["sensor_id", "device_id", "location", "sensor", "device"]
+        for col in candidates:
+            if col in df.columns:
+                return col
+        # fallback: first object/string column that's not timestamp
+        for col in df.columns:
+            if df[col].dtype == object:
+                return col
+        return None
+    
+    def get_numeric_metric_columns(df: pd.DataFrame, ts_col: Optional[str], sensor_col: Optional[str]) -> list[str]:
+        """Get numeric columns that are NOT index-like and have sufficient variance.
 
-    focus_threshold = float(st.session_state.get("custom_overheat_threshold", 30))
+        Excludes:
+        - Column name exactly "#"
+        - Names in {"index","idx","row","row_id"}
+        - Names starting with "Unnamed"
+        - Timestamp or sensor id columns
+        - Numeric columns that look like sequential indices (mostly unique + monotonic + step ~1)
+
+        Requires:
+        - >= 20 non-null values
+        - >= 5 unique values
+        """
+        exclude_names = {"#", "index", "idx", "row", "row_id"}
+        exclude_cols = {ts_col, sensor_col}
+
+        metric_cols: List[str] = []
+        for col in df.columns:
+            if col is None:
+                continue
+            if col in exclude_cols or col in exclude_names or str(col).startswith("Unnamed"):
+                continue
+
+            series = df[col]
+
+            # Attempt to coerce to numeric where sensible
+            if not pd.api.types.is_numeric_dtype(series):
+                coerced = pd.to_numeric(series, errors="coerce")
+                num_values = coerced.notna().sum()
+                unique_count = coerced.nunique()
+                numeric_fraction = num_values / max(1, len(series))
+                if numeric_fraction < 0.6:
+                    continue
+                non_null = num_values
+                uniq = unique_count
+            else:
+                non_null = series.notna().sum()
+                uniq = series.nunique()
+
+            if non_null < 20 or uniq < 5:
+                continue
+
+            # Detect index-like numeric series: mostly unique, monotonic and step close to 1
+            try:
+                numeric_series = pd.to_numeric(series.dropna(), errors="coerce").astype(float)
+                if len(numeric_series) > 50:
+                    # proportion of unique values
+                    prop_unique = numeric_series.nunique() / len(numeric_series)
+                    diffs = np.diff(np.sort(numeric_series.values))
+                    if len(diffs) > 0:
+                        median_step = float(np.median(diffs))
+                        # fraction of diffs approximately equal to 1 (within 5%)
+                        near_one = np.isclose(diffs, 1.0, rtol=0.05, atol=1e-6).sum() / len(diffs)
+                    else:
+                        near_one = 0.0
+                        median_step = 0.0
+
+                    # If it's mostly unique and stepping by ~1, treat as index-like
+                    if prop_unique > 0.9 and (near_one > 0.8 or np.isclose(median_step, 1.0, rtol=0.1)):
+                        continue
+            except Exception:
+                # If anything goes wrong, fall back to including the column
+                pass
+
+            metric_cols.append(col)
+
+        return metric_cols
+    
+    def choose_default_metrics(metric_cols: list[str]) -> list[str]:
+        """Choose up to 4 default metrics based on priority."""
+        priority = ["co2", "humidity", "temperature", "pm25", "voc", "noise"]
+        chosen = []
+        
+        for p in priority:
+            if p in metric_cols and len(chosen) < 4:
+                chosen.append(p)
+        
+        # Fill remaining slots with other metrics
+        for col in metric_cols:
+            if col not in chosen and len(chosen) < 4:
+                chosen.append(col)
+        
+        return chosen[:4]
+    
+    def get_unit(col_name: str) -> str:
+        """Get unit string for a metric column."""
+        units_map = {
+            "co2": "ppm",
+            "humidity": "%",
+            "rh": "%",
+            "dew_point": "°C",
+            "temperature": "°C",
+            "temp": "°C",
+            "pm25": "µg/m³",
+        }
+        col_lower = col_name.lower()
+        for key, unit in units_map.items():
+            if key in col_lower:
+                return unit
+        return ""
+
+    def pretty_label(col_name: str) -> str:
+        """Return display label for a column (used with selectbox format_func)."""
+        unit = get_unit(col_name)
+        base = str(col_name).replace("_", " ")
+        if unit:
+            return f"{base} ({unit})"
+        return base
+    
+    @st.cache_data
+    def computed_prev_window_df(df: pd.DataFrame, col: str, sensor_ids: list[str], sensor_col_name: str, frac: float = 0.2) -> dict:
+        """Return latest and previous segments for a given column and sensors.
+
+        Cached to avoid recomputing window splits repeatedly.
+        Returns a dict with keys: 'latest' and 'prev' mapping to pd.Series (concatenated across sensors).
+        """
+        if df.empty or col not in df.columns:
+            return {"latest": pd.Series(dtype=float), "prev": pd.Series(dtype=float)}
+
+        filtered = df[df[sensor_col_name].isin(sensor_ids)][col].dropna()
+        if filtered.empty:
+            return {"latest": filtered, "prev": pd.Series(dtype=float)}
+
+        # Cap to avoid slowness
+        max_rows = min(len(filtered), 5000 * max(1, len(sensor_ids)))
+        filtered = filtered.tail(max_rows)
+
+        n = len(filtered)
+        latest_n = max(1, int(n * frac))
+        prev_n = max(1, int(n * frac))
+
+        latest_segment = filtered.tail(latest_n)
+        prev_segment = filtered.iloc[-(latest_n + prev_n):-latest_n] if latest_n + prev_n <= n else filtered.head(prev_n)
+
+        return {"latest": latest_segment, "prev": prev_segment}
+
+    def compute_window_metrics(df: pd.DataFrame, col: str, sensor_ids: list[str], sensor_col_name: str) -> dict:
+        """Compute max and delta vs previous segment (latest 20% vs previous 20%). Uses cached splitter."""
+        segs = computed_prev_window_df(df, col, sensor_ids, sensor_col_name, frac=0.2)
+        latest_segment = segs.get("latest")
+        prev_segment = segs.get("prev")
+
+        if latest_segment is None or latest_segment.empty:
+            return {"max": np.nan, "delta": None}
+
+        latest_max = latest_segment.max()
+        prev_max = prev_segment.max() if prev_segment is not None and not prev_segment.empty else np.nan
+
+        delta = latest_max - prev_max if not pd.isna(latest_max) and not pd.isna(prev_max) else None
+        return {"max": latest_max, "delta": delta}
+
+    @st.cache_data
+    def filtered_df_by_window(df: pd.DataFrame, ts_col: Optional[str], days: Optional[int] = None) -> pd.DataFrame:
+        """Return a copy of df optionally filtered to the last `days` days (by ts_col).
+
+        Cached to speed repeated plotting operations.
+        """
+        if ts_col is None or days is None:
+            return df.copy()
+        try:
+            end = df[ts_col].max()
+            start = end - pd.Timedelta(days=days)
+            return df[df[ts_col] >= start].copy()
+        except Exception:
+            return df.copy()
+    
+    # ========== DATA LOADING ==========
+    st.markdown("### Live Sensor Data Comparison")
+    st.caption("Compare live environmental sensor readings across locations and time windows.")
+    
     sensors_store = st.session_state.get("sensors", {})
     sensor_meta = st.session_state.get("sensor_meta", {})
-
+    
     if not sensors_store:
         st.info("No stored sensor data found. Ingest multiple sensor locations in the Live Data vs EPW tab to enable comparison.")
         st.stop()
-
-    if len(sensors_store) == 1:
-        st.info("Only one sensor dataset is available. Add another sensor location to compare.")
-        single_id = list(sensors_store.keys())[0]
-        st.caption(f"Currently loaded: {single_id} ({sensor_meta.get(single_id, {}).get('label', single_id)})")
-        st.stop()
-
-    # Build combined dataframe for plotting while preserving sensor_id
+    
+    # Build combined dataframe
     frames = []
     for sid, df_val in sensors_store.items():
         df_local = df_val.copy()
@@ -5396,299 +5635,283 @@ if page == "Sensor Comparison":
             continue
         df_local["timestamp"] = pd.to_datetime(df_local["timestamp"], errors="coerce")
         df_local["sensor_id"] = sid
-        # map column names to our expected fields
-        if "temperature" not in df_local.columns and "T_db" in df_local.columns:
-            df_local = df_local.rename(columns={"T_db": "temperature"})
         frames.append(df_local)
-    all_sensors = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["timestamp","temperature","sensor_id"])
-    all_sensors = all_sensors.dropna(subset=["timestamp", "temperature", "sensor_id"])
-
-    available_ids = sorted(all_sensors["sensor_id"].dropna().unique().tolist())
-    default_selection = available_ids[:2] if len(available_ids) >= 2 else available_ids
-    options_with_labels = [f"{sid} — {sensor_meta.get(sid, {}).get('label', sid)}" for sid in available_ids]
-    label_to_sid = {f"{sid} — {sensor_meta.get(sid, {}).get('label', sid)}": sid for sid in available_ids}
-    selected_labels = st.multiselect(
-        "Select sensors to compare",
-        options=options_with_labels,
-        default=[f"{sid} — {sensor_meta.get(sid, {}).get('label', sid)}" for sid in default_selection],
-        help="Pick at least two sensors (e.g., downtown vs airport) to see side-by-side metrics and differences.",
-    )
-    selected_ids = [label_to_sid[lbl] for lbl in selected_labels]
-
-    meta_rows = []
-    for sid in available_ids:
-        meta = sensor_meta.get(sid, {})
-        meta_rows.append({
-            "sensor_id": sid,
-            "label": meta.get("label", sid),
-            "source": meta.get("source", ""),
-            "records": meta.get("records", len(sensors_store.get(sid, []))),
-            "date_min": meta.get("date_min"),
-            "date_max": meta.get("date_max"),
-        })
-    st.dataframe(pd.DataFrame(meta_rows), use_container_width=True, height=180)
-    st.caption("Sensor metadata: location names, sources, record counts, and date ranges for each loaded dataset.")
-
-    if len(selected_ids) < 2:
-        st.warning("Select at least two sensors to enable comparison.")
+    
+    if not frames:
+        st.info("No sensor data with timestamps found.")
         st.stop()
+    
+    df = pd.concat(frames, ignore_index=True)
+    
+    # Defensive: drop index-like columns
+    df = df.drop(columns=["#"], errors="ignore")
+    
+    # Detect columns
+    ts_col = detect_timestamp_col(df)
+    sensor_col = detect_sensor_id_col(df) or "sensor_id"
+    
+    # Timestamp handling
+    if ts_col:
+        df[ts_col] = pd.to_datetime(df[ts_col], errors="coerce", utc=True)
+        df = df.dropna(subset=[ts_col])
+        df = df.sort_values(by=ts_col, ascending=True)
+    
+    # Get metric columns
+    metric_cols = get_numeric_metric_columns(df, ts_col, sensor_col)
+    
+    if not metric_cols:
+        st.warning("No numeric metric columns found in the data.")
+        st.stop()
+    
+    # Sensor selection with persistence
+    available_sensors = sorted(df[sensor_col].dropna().unique().tolist())
 
-    ref_sensor = st.selectbox(
-        "Reference sensor (used for EPW context and optional A − B view)",
-        options=selected_ids,
-        index=0,
+    if "selected_sensors" not in st.session_state:
+        st.session_state["selected_sensors"] = available_sensors[:2] if len(available_sensors) >= 2 else available_sensors[:1]
+
+    # Keep only sensors still available
+    st.session_state["selected_sensors"] = [s for s in st.session_state["selected_sensors"] if s in available_sensors]
+    if not st.session_state["selected_sensors"]:
+        st.session_state["selected_sensors"] = available_sensors[:2] if len(available_sensors) >= 2 else available_sensors[:1]
+
+    selected_sensors = st.multiselect(
+        "Compare Different Sensors",
+        options=available_sensors,
+        default=st.session_state["selected_sensors"],
+        key="sensor_selector",
+        help="Select at least one sensor to compare."
     )
-    cmp_sensor = selected_ids[1] if len(selected_ids) > 1 else selected_ids[0]
-    if len(selected_ids) == 2:
-        cmp_sensor = st.selectbox(
-            "Comparison sensor B (only used when exactly two sensors are selected)",
-            options=selected_ids,
-            index=1,
-        )
 
-    def _compute_stats(df: pd.DataFrame) -> dict:
-        if df.empty:
-            return {"mean": np.nan, "day_mean": np.nan, "night_mean": np.nan, "diurnal": np.nan, "hot_hours": np.nan, "pct_comfort": np.nan, "hour_curve": pd.Series(dtype=float), "month_curve": pd.Series(dtype=float)}
-        hourly = df.set_index("timestamp").sort_index()
-        temp_hourly = hourly["temperature"].resample("1H").mean().dropna()
-        if temp_hourly.empty:
-            return {"mean": np.nan, "day_mean": np.nan, "night_mean": np.nan, "diurnal": np.nan, "hot_hours": np.nan, "pct_comfort": np.nan, "hour_curve": pd.Series(dtype=float), "month_curve": pd.Series(dtype=float)}
-        hours_arr = temp_hourly.index.hour
-        day_mask = (hours_arr >= 8) & (hours_arr < 18)
-        night_mask = ~day_mask
-        diurnal = temp_hourly.resample("1D").apply(lambda s: s.max() - s.min())
-        hour_curve = temp_hourly.groupby(temp_hourly.index.hour).mean()
-        month_curve = temp_hourly.groupby(temp_hourly.index.month).mean()
-        return {
-            "mean": temp_hourly.mean(),
-            "day_mean": temp_hourly[day_mask].mean(),
-            "night_mean": temp_hourly[night_mask].mean(),
-            "diurnal": diurnal.mean(),
-            "hot_hours": int((temp_hourly > 30).sum()),
-            "pct_comfort": float((temp_hourly.between(18, 26)).mean() * 100),
-            "hour_curve": hour_curve,
-            "month_curve": month_curve,
-        }
-
-    stats_map = {}
-    for sid in selected_ids:
-        stats_map[sid] = _compute_stats(all_sensors[all_sensors["sensor_id"] == sid])
-
-    # Side-by-side metrics
-    stats_rows = []
-    for sid in selected_ids:
-        s = stats_map.get(sid, {})
-        stats_rows.append({
-            "Sensor": sid,
-            "Mean (°C)": s.get("mean"),
-            "Daytime 08-18 (°C)": s.get("day_mean"),
-            "Night 18-08 (°C)": s.get("night_mean"),
-            "Diurnal range (°C)": s.get("diurnal"),
-            ">30°C hours": s.get("hot_hours"),
-            "Comfort 18–26°C (%)": s.get("pct_comfort"),
-        })
-    st.dataframe(pd.DataFrame(stats_rows).set_index("Sensor").round(2), use_container_width=True)
-    st.caption("Side-by-side sensor summaries. Nighttime means and diurnal ranges highlight microclimate and urban heat island signals.")
-
-    # Inter-sensor spread metrics
-    hour_curves = {}
-    hours_union = set()
-    for sid in selected_ids:
-        curve = stats_map[sid].get("hour_curve", pd.Series(dtype=float))
-        if not curve.empty:
-            hour_curves[sid] = curve
-            hours_union.update(curve.index.tolist())
-    hours_sorted = sorted(hours_union)
-    if hours_sorted:
-        hour_matrix = pd.DataFrame({sid: curve.reindex(hours_sorted) for sid, curve in hour_curves.items()})
-        spread_min = hour_matrix.min(axis=1, skipna=True)
-        spread_max = hour_matrix.max(axis=1, skipna=True)
-        spread_median = hour_matrix.median(axis=1, skipna=True)
-        spread_range = spread_max - spread_min
-        mean_range = float(spread_range.mean(skipna=True))
-        night_hours = [h for h in hours_sorted if (h >= 22 or h <= 6)]
-        night_range = float(spread_range.loc[night_hours].mean(skipna=True)) if night_hours else np.nan
-    else:
-        hour_matrix = pd.DataFrame()
-        spread_min = spread_max = spread_median = spread_range = pd.Series(dtype=float)
-        mean_range = night_range = np.nan
-
-    r1, r2 = st.columns(2)
-    r1.metric("Mean inter-sensor range", f"{mean_range:.1f} °C" if pd.notna(mean_range) else "—")
-    r2.metric("Nighttime inter-sensor range (22–06)", f"{night_range:.1f} °C" if pd.notna(night_range) else "—")
-
-    if len(selected_ids) == 2:
-        ref_stats = stats_map.get(ref_sensor, {})
-        cmp_stats = stats_map.get(cmp_sensor, {})
-        diff_mean = ref_stats.get("mean") - cmp_stats.get("mean") if ref_stats and cmp_stats else np.nan
-        diff_night = ref_stats.get("night_mean") - cmp_stats.get("night_mean") if ref_stats and cmp_stats else np.nan
-        diff_hot = ref_stats.get("hot_hours") - cmp_stats.get("hot_hours") if ref_stats and cmp_stats else np.nan
-        diff_comfort = ref_stats.get("pct_comfort") - cmp_stats.get("pct_comfort") if ref_stats and cmp_stats else np.nan
-
-        d1, d2, d3, d4 = st.columns(4)
-        d1.metric("Mean temp Δ (A − B)", f"{diff_mean:+.1f} °C")
-        d2.metric("Night temp Δ (A − B)", f"{diff_night:+.1f} °C")
-        d3.metric(">30°C hours Δ", f"{diff_hot:+d}" if pd.notna(diff_hot) else "—")
-        d4.metric("Comfort hours Δ", f"{diff_comfort:+.1f} pp")
-        st.caption("A − B deltas only apply when two sensors are selected.")
-
-    st.divider()
-
-    # Hour-of-day mean temperature lines
-    fig_hour = go.Figure()
-    for idx, sid in enumerate(selected_ids):
-        hour_curve = stats_map[sid].get("hour_curve", pd.Series(dtype=float))
-        if hour_curve.empty:
-            continue
-        fig_hour.add_trace(go.Scatter(
-            x=hour_curve.index,
-            y=hour_curve.values,
-            mode="lines+markers",
-            name=sid,
-            line=dict(width=2.2),
-            hovertemplate="Hour %{x}:00<br>%{y:.2f}°C<extra></extra>",
-        ))
-    fig_hour.update_layout(
-        title="Hour-of-day mean temperature (all selected sensors)",
-        xaxis_title="Hour of Day",
-        yaxis_title="Temperature (°C)",
-        height=360,
-        margin=dict(l=10, r=10, t=46, b=28),
-    )
-    st.plotly_chart(fig_hour, use_container_width=True)
-    st.caption("Lines show average temperature by hour for each sensor. Nighttime gaps between sensors flag localized heat retention.")
-
-    # Inter-sensor spread (hourly)
-    if hours_sorted and not hour_matrix.empty:
-        fig_spread = go.Figure()
-        fig_spread.add_trace(go.Scatter(
-            x=hours_sorted,
-            y=spread_min,
-            mode="lines+markers",
-            name="Min across sensors",
-            line=dict(color="#94a3b8", width=1.8),
-            hovertemplate="Hour %{x}:00<br>Min %{y:.2f}°C<extra></extra>",
-        ))
-        fig_spread.add_trace(go.Scatter(
-            x=hours_sorted,
-            y=spread_max,
-            mode="lines+markers",
-            name="Max across sensors",
-            line=dict(color="#ef4444", width=1.8),
-            fill="tonexty",
-            fillcolor="rgba(239,68,68,0.15)",
-            hovertemplate="Hour %{x}:00<br>Max %{y:.2f}°C<extra></extra>",
-        ))
-        fig_spread.add_trace(go.Scatter(
-            x=hours_sorted,
-            y=spread_median,
-            mode="lines+markers",
-            name="Median across sensors",
-            line=dict(color="#0ea5e9", width=2.4, dash="dot"),
-            hovertemplate="Hour %{x}:00<br>Median %{y:.2f}°C<extra></extra>",
-        ))
-        fig_spread.update_layout(
-            title="Inter-sensor temperature spread (hourly)",
-            xaxis_title="Hour of Day",
-            yaxis_title="Temperature (°C)",
-            height=360,
-            margin=dict(l=10, r=10, t=46, b=32),
-        )
-        st.plotly_chart(fig_spread, use_container_width=True)
-        st.caption("Envelope shows min–max across sensors; median hints at central tendency without assuming equal coverage.")
-
-    # Monthly mean temperature comparison
-    months_order = list(range(1, 13))
-    fig_month = go.Figure()
-    for sid in selected_ids:
-        month_curve = stats_map[sid].get("month_curve", pd.Series(dtype=float))
-        if month_curve.empty:
-            continue
-        fig_month.add_trace(go.Bar(
-            name=sid,
-            x=[pd.Timestamp(2000, m, 1).strftime("%b") for m in month_curve.index],
-            y=month_curve.values,
-        ))
-    fig_month.update_layout(
-        title="Monthly mean temperature (shown where data exists)",
-        xaxis_title="Month",
-        yaxis_title="Temperature (°C)",
-        barmode="group",
-        height=360,
-        margin=dict(l=10, r=10, t=46, b=36),
-    )
-    st.plotly_chart(fig_month, use_container_width=True)
-    st.caption("Only months with sensor observations are shown; missing bars mean no data, not zero temperature.")
-
-    # Difference plot (A − B) by hour only when exactly two sensors are selected
-    if len(selected_ids) == 2:
-        ref_hour = stats_map.get(ref_sensor, {}).get("hour_curve", pd.Series(dtype=float))
-        cmp_hour = stats_map.get(cmp_sensor, {}).get("hour_curve", pd.Series(dtype=float))
-        hours = sorted(set(ref_hour.index).union(set(cmp_hour.index))) if not ref_hour.empty or not cmp_hour.empty else []
-        if hours:
-            ref_hour_full = ref_hour.reindex(hours)
-            cmp_hour_full = cmp_hour.reindex(hours)
-            hour_diff = ref_hour_full - cmp_hour_full
-            fig_diff = go.Figure([go.Bar(x=hours, y=hour_diff.values, marker_color="#e45756")])
-            fig_diff.update_layout(
-                title=f"Sensor Difference (A − B) by hour: {ref_sensor} minus {cmp_sensor}",
-                xaxis_title="Hour of Day",
-                yaxis_title="Temperature difference (°C)",
-                height=320,
-                margin=dict(l=10, r=10, t=46, b=28),
+    # Persist selection
+    st.session_state["selected_sensors"] = selected_sensors
+    
+    if not selected_sensors:
+        st.warning("Select at least one sensor to compare.")
+        st.stop()
+    
+    # Filter dataframe
+    df_filtered = df[df[sensor_col].isin(selected_sensors)].copy()
+    
+    # Choose default metrics
+    default_metrics = choose_default_metrics(metric_cols)
+    
+    # ========== SUMMARY METRIC CARDS ==========
+    st.markdown("#### Current Snapshot Summary")
+    
+    selected_metrics = default_metrics[:4]
+    
+    cols = st.columns(4)
+    for idx, metric in enumerate(selected_metrics):
+        with cols[idx]:
+            metrics_data = compute_window_metrics(df_filtered, metric, selected_sensors, sensor_col)
+            unit = get_unit(metric)
+            unit_str = f" {unit}" if unit else ""
+            
+            delta_value = metrics_data["delta"]
+            delta_label = None
+            if delta_value is not None and not pd.isna(delta_value):
+                delta_label = f"{delta_value:+.2f}{unit_str}"
+            
+            st.metric(
+                label=metric.replace("_", " ").title(),
+                value=f"{metrics_data['max']:.2f}{unit_str}" if not pd.isna(metrics_data['max']) else "—",
+                delta=delta_label
             )
-            st.plotly_chart(fig_diff, use_container_width=True)
-            st.caption("Positive bars mean the reference sensor (A) is warmer than sensor (B) at that hour. Nighttime warmth highlights urban heat island effects.")
+    
+    # ========== STACKED FULL-WIDTH LAYOUT ==========
 
-    st.divider()
+    # Primary Metric Trend (full width)
+    with st.container(border=True):
+        st.markdown("#### Primary Metric Trend")
 
-    # Overheating and comfort comparison
-    hot_bars = []
-    comfort_bars = []
-    for sid in selected_ids:
-        s = stats_map[sid]
-        hot_bars.append(go.Bar(name=f"{sid} >30°C hours", x=[sid], y=[s.get("hot_hours")], marker_color="#e45756"))
-        comfort_bars.append(go.Bar(name=f"{sid} 18–26°C %", x=[sid], y=[s.get("pct_comfort")], marker_color="#1f78b4"))
+        primary_metric = st.selectbox(
+            "Primary metric",
+            options=[m for m in metric_cols if m not in ["#"]],
+            index=0 if default_metrics and default_metrics[0] in metric_cols else 0,
+            key="primary_metric",
+            format_func=lambda c: pretty_label(c)
+        )
 
-    fig_hot = go.Figure(data=hot_bars)
-    fig_hot.update_layout(
-        title=">30°C overheating hours (by sensor)",
-        xaxis_title="Sensor",
-        yaxis_title="Hours above 30°C",
-        barmode="group",
-        height=320,
-        margin=dict(l=10, r=10, t=46, b=28),
-        showlegend=False,
-    )
-    st.plotly_chart(fig_hot, use_container_width=True)
+        unit = get_unit(primary_metric)
+        unit_str = f" ({unit})" if unit else ""
 
-    fig_comfort = go.Figure(data=comfort_bars)
-    fig_comfort.update_layout(
-        title="Comfort-band share (18–26°C) by sensor",
-        xaxis_title="Sensor",
-        yaxis_title="Percent of hours",
-        barmode="group",
-        height=320,
-        margin=dict(l=10, r=10, t=46, b=28),
-        showlegend=False,
-    )
-    st.plotly_chart(fig_comfort, use_container_width=True)
-    st.caption("Comfort percentages and overheating hours show which neighborhood is hotter or offers more comfortable conditions.")
+        # Use cached filtered df for plotting (no UI for time bucket)
+        plot_df = filtered_df_by_window(df_filtered, ts_col, days=None)
 
-    st.caption("Hourly statistics summarize diurnal microclimate structure across sensor locations. Nighttime spread highlights localized heat retention and UHI effects.")
+        # Ensure primary metric is numeric for plotting
+        if primary_metric in plot_df.columns:
+            plot_df[primary_metric] = pd.to_numeric(plot_df[primary_metric], errors="coerce")
 
-    st.divider()
+        # Downsample for plotting only when very large
+        if ts_col and len(plot_df) > 20000 and ts_col in plot_df.columns:
+            plot_df = plot_df.set_index(ts_col)
+            numeric_cols = [c for c in plot_df.columns if c != sensor_col]
+            if numeric_cols:
+                plot_df[numeric_cols] = plot_df[numeric_cols].apply(lambda s: pd.to_numeric(s, errors="coerce"))
+            if sensor_col in plot_df.columns:
+                cols_to_agg = [c for c in [primary_metric] if c in plot_df.columns]
+                plot_df_resampled = plot_df.groupby(sensor_col)[cols_to_agg].resample('5min').mean()
+                plot_df_resampled = plot_df_resampled.reset_index()
+            else:
+                plot_df_resampled = plot_df[[primary_metric]].resample('5min').mean().reset_index()
+            plot_df = plot_df_resampled
 
-    show_epw_context = st.toggle("Show EPW context (optional)", value=False, help="EPW is not required here; enable only if you want to mention climate baseline alongside sensor differences.")
-    if show_epw_context:
-        st.info("EPW context can provide typical-year baselines, but this tab focuses on sensor-to-sensor microclimate differences.")
+        fig_primary = go.Figure()
+        for sensor in selected_sensors:
+            sensor_data = plot_df[plot_df[sensor_col] == sensor]
+            if ts_col and not sensor_data.empty and primary_metric in sensor_data.columns:
+                fig_primary.add_trace(go.Scatter(
+                    x=sensor_data[ts_col],
+                    y=sensor_data[primary_metric],
+                    mode="lines",
+                    name=sensor,
+                    hovertemplate=f"{sensor}<br>%{{x}}<br>%{{y:.2f}}{unit_str}<extra></extra>"
+                ))
 
-    st.markdown("#### Interpretation")
-    st.info(
-        "Differences between sensors reflect neighborhood-scale factors like urban form, vegetation, and surface materials rather than regional climate. "
-        "Nighttime spread across all sensors highlights localized heat retention and potential UHI pockets."
-    )
+        fig_primary.update_layout(
+            title=f"{primary_metric.replace('_', ' ').title()}{unit_str}",
+            xaxis_title="Time",
+            yaxis_title=f"{primary_metric.replace('_', ' ').title()}{unit_str}",
+            height=420,
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig_primary, use_container_width=True)
 
+    # Distribution (full width) — donut for low-cardinality / categorical, else histogram
+    with st.container(border=True):
+        st.markdown("#### Distribution")
+
+        fig_dist = go.Figure()
+        if primary_metric in df_filtered.columns:
+            orig_series = df_filtered[primary_metric]
+            coerced = pd.to_numeric(orig_series, errors="coerce")
+            numeric_fraction = coerced.notna().sum() / max(1, len(orig_series))
+            unique_vals = orig_series.dropna().nunique()
+
+            # treat as categorical if low unique count or mostly non-numeric
+            is_categorical = (numeric_fraction < 0.6) or (unique_vals <= 10)
+
+            if is_categorical:
+                # donut / pie per sensor combined counts
+                combined = orig_series.astype(str)
+                vc = combined.value_counts().nlargest(20)
+                fig_dist.add_trace(go.Pie(labels=vc.index.astype(str), values=vc.values, hole=0.45))
+                fig_dist.update_layout(title=f"{primary_metric.replace('_', ' ').title()} Distribution (categorical)", height=380)
+            else:
+                # histogram per sensor overlay
+                for sensor in selected_sensors:
+                    sensor_data = df_filtered[df_filtered[sensor_col] == sensor][primary_metric].dropna()
+                    if not sensor_data.empty:
+                        fig_dist.add_trace(go.Histogram(x=sensor_data, name=sensor, opacity=0.7, nbinsx=40))
+                fig_dist.update_layout(title=f"{primary_metric.replace('_', ' ').title()} Distribution", xaxis_title=f"{primary_metric.replace('_', ' ').title()}{unit_str}", yaxis_title="Frequency", barmode="overlay", height=380)
+
+        st.plotly_chart(fig_dist, use_container_width=True)
+
+    # Secondary Metric Trend (full width)
+    with st.container(border=True):
+        st.markdown("#### Secondary Metric Trend")
+
+        secondary_options = [m for m in metric_cols if m != primary_metric and m not in ["#"]]
+        if not secondary_options:
+            st.info("No secondary metric available.")
+        else:
+            secondary_metric = st.selectbox(
+                "Secondary metric",
+                options=secondary_options,
+                index=0,
+                key="secondary_metric",
+                format_func=lambda c: pretty_label(c)
+            )
+
+            unit = get_unit(secondary_metric)
+            unit_str = f" ({unit})" if unit else ""
+
+            plot_df = filtered_df_by_window(df_filtered, ts_col, days=None)
+            if secondary_metric in plot_df.columns:
+                plot_df[secondary_metric] = pd.to_numeric(plot_df[secondary_metric], errors="coerce")
+
+            if ts_col and len(plot_df) > 20000 and ts_col in plot_df.columns:
+                plot_df = plot_df.set_index(ts_col)
+                numeric_cols = [c for c in plot_df.columns if c != sensor_col]
+                if numeric_cols:
+                    plot_df[numeric_cols] = plot_df[numeric_cols].apply(lambda s: pd.to_numeric(s, errors="coerce"))
+                if sensor_col in plot_df.columns:
+                    cols_to_agg = [c for c in [secondary_metric] if c in plot_df.columns]
+                    plot_df_resampled = plot_df.groupby(sensor_col)[cols_to_agg].resample('5min').mean()
+                    plot_df_resampled = plot_df_resampled.reset_index()
+                else:
+                    plot_df_resampled = plot_df[[secondary_metric]].resample('5min').mean().reset_index()
+                plot_df = plot_df_resampled
+
+            fig_secondary = go.Figure()
+            for sensor in selected_sensors:
+                sensor_data = plot_df[plot_df[sensor_col] == sensor]
+                if ts_col and not sensor_data.empty and secondary_metric in sensor_data.columns:
+                    fig_secondary.add_trace(go.Scatter(
+                        x=sensor_data[ts_col],
+                        y=sensor_data[secondary_metric],
+                        mode="lines",
+                        name=sensor,
+                        hovertemplate=f"{sensor}<br>%{{x}}<br>%{{y:.2f}}{unit_str}<extra></extra>"
+                    ))
+
+            fig_secondary.update_layout(
+                title=f"{secondary_metric.replace('_', ' ').title()}{unit_str}",
+                xaxis_title="Time",
+                yaxis_title=f"{secondary_metric.replace('_', ' ').title()}{unit_str}",
+                height=420,
+                hovermode="x unified"
+            )
+            st.plotly_chart(fig_secondary, use_container_width=True)
+    
+    # Row 3: Raw Data Table (Full Width)
+    
+    
+    # ========== RAW DATA TABLE ==========
+    with st.container(border=True):
+        st.markdown("#### Raw Data")
+        
+        # Column selection
+        default_display_cols = []
+        if ts_col:
+            default_display_cols.append(ts_col)
+        default_display_cols.append(sensor_col)
+        # prefer primary/secondary if present
+        if 'primary_metric' in st.session_state:
+            default_display_cols.append(st.session_state['primary_metric'])
+        if 'secondary_metric' in st.session_state:
+            default_display_cols.append(st.session_state['secondary_metric'])
+
+        available_display_cols = [c for c in df_filtered.columns if c not in ["#"]]
+
+        display_cols = st.multiselect(
+            "Columns to display",
+            options=available_display_cols,
+            default=[c for c in default_display_cols if c in available_display_cols],
+            key="display_cols"
+        )
+        
+        if display_cols:
+            display_df = df_filtered[display_cols].copy()
+            
+            # Sort by timestamp desc if available
+            if ts_col and ts_col in display_df.columns:
+                display_df = display_df.sort_values(by=ts_col, ascending=False)
+            
+            st.dataframe(display_df, use_container_width=True, height=400)
+            
+            # Download button
+            csv = display_df.to_csv(index=False)
+            st.download_button(
+                label="Download filtered CSV",
+                data=csv,
+                file_name="sensor_data_filtered.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("Select at least one column to display.")
+
+# ====================== RAW DATA ======================
 if page == "📁 Raw Data":
     # ====================== RAW DATA ======================
     st.markdown("### 📁 Raw Data & Export")

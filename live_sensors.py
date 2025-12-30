@@ -191,30 +191,40 @@ def build_sensor_climatology(df: pd.DataFrame) -> pd.DataFrame:
         mean_angle = np.arctan2(np.sin(rad).mean(), np.cos(rad).mean())
         return (np.degrees(mean_angle) + 360.0) % 360.0
 
-    grouped = (
-        annotated.groupby(["doy", "hour"], as_index=False)
-        .agg({
-            "temperature": "mean",
-            "relative_humidity": "mean",
-            "ghi": "mean",
-            "abs_hum": "mean",
-            "wind_speed": "mean",
-            "wind_dir": _circular_mean,
-        })
-        .rename(
-            columns={
-                "temperature": "sensor_temp",
-                "relative_humidity": "sensor_rh",
-                "ghi": "sensor_ghi",
-                "abs_hum": "sensor_abs_hum",
-                "wind_speed": "sensor_windspd",
-                "wind_dir": "sensor_winddir",
-            }
-        )
-    )
+    # Build agg dict dynamically based on available columns
+    agg_dict = {}
+    if "temperature" in annotated.columns:
+        agg_dict["temperature"] = "mean"
+    if "relative_humidity" in annotated.columns:
+        agg_dict["relative_humidity"] = "mean"
+    if "ghi" in annotated.columns:
+        agg_dict["ghi"] = "mean"
+    if "abs_hum" in annotated.columns:
+        agg_dict["abs_hum"] = "mean"
+    if "wind_speed" in annotated.columns:
+        agg_dict["wind_speed"] = "mean"
+    if "wind_dir" in annotated.columns:
+        agg_dict["wind_dir"] = _circular_mean
+
+    grouped = annotated.groupby(["doy", "hour"], as_index=False).agg(agg_dict)
+    
+    # Dynamically build rename dict based on which columns were aggregated
+    rename_dict = {}
+    if "temperature" in grouped.columns:
+        rename_dict["temperature"] = "sensor_temp"
+    if "relative_humidity" in grouped.columns:
+        rename_dict["relative_humidity"] = "sensor_rh"
+    if "ghi" in grouped.columns:
+        rename_dict["ghi"] = "sensor_ghi"
+    if "abs_hum" in grouped.columns:
+        rename_dict["abs_hum"] = "sensor_abs_hum"
+    if "wind_speed" in grouped.columns:
+        rename_dict["wind_speed"] = "sensor_windspd"
+    if "wind_dir" in grouped.columns:
+        rename_dict["wind_dir"] = "sensor_winddir"
+    
+    grouped = grouped.rename(columns=rename_dict)
     return grouped
-
-
 def build_epw_climatology(cdf: pd.DataFrame) -> pd.DataFrame:
     """Aggregate EPW climate dataframe into typical doy/hour values."""
     if cdf.empty:
