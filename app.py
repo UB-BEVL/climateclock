@@ -2937,7 +2937,8 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
 
 
     # -------------------- Figure --------------------
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.34)
+    # Tighten the vertical spacing while keeping a unified time axis
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.06)
     # ===== Top: Temperature =====
     # (a) faint range as ribbon (min->max)
     # ===== Top: Temperature =====
@@ -3123,7 +3124,7 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
         matches="x",
         range=x_range,
         autorange=False,
-        showticklabels=True,
+        showticklabels=False,         # hide duplicate top ticks for a single shared axis
         rangeslider=dict(visible=False),
         tickformat=tickformat_main,   # <-- add
         dtick=dtick_main,             # <-- add
@@ -3148,6 +3149,7 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
         ),
         tickformat=tickformat_main,   # <-- add
         dtick=dtick_main,             # <-- add
+        title_text="Month",
         row=2, col=1
     )
 
@@ -3179,6 +3181,11 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
         showline=True, linecolor="rgba(255,255,255,0.35)", linewidth=1,
         range=[0, 100], dtick=10,
         row=2, col=1
+    )
+
+    # Reduce excess padding so the two panels read as a single, compact stack
+    fig.update_layout(
+        margin=dict(l=70, r=30, t=45, b=40),
     )
 
     # Keep a single axis in the slider preview to ensure both traces render together
