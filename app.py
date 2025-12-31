@@ -2863,19 +2863,19 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
             return idx.strftime("Month: %b").to_numpy()
 
     
-    def add_range_bars(fig, x, s_min, s_max, name, color, row, col, opacity=0.28, color_arr=None, xlabels=None):
+    def add_range_bars(fig, x, s_min, s_max, name, color, row, col, opacity=0.28, color_arr=None, xlabels=None, unit_label=""):
         _color = color_arr.tolist() if color_arr is not None else color
         if xlabels is None:
             customdata = np.column_stack([s_min.values, ((s_min + s_max) / 2).values, s_max.values])
-            hovertemplate = ("Max: %{customdata[2]:.2f}<br>"
-                            "Min: %{customdata[0]:.2f}<br>"
-                            "Ave: %{customdata[1]:.2f}<extra></extra>")
+            hovertemplate = ("Avg: %{customdata[1]:.2f} " + unit_label + "<br>"
+                            "Max: %{customdata[2]:.2f} " + unit_label + "<br>"
+                            "Min: %{customdata[0]:.2f} " + unit_label + "<extra></extra>")
         else:
             customdata = np.column_stack([s_min.values, ((s_min + s_max) / 2).values, s_max.values, xlabels])
             hovertemplate = ("<b>%{customdata[3]}</b><br>"
-                            "Max: %{customdata[2]:.2f}<br>"
-                            "Min: %{customdata[0]:.2f}<br>"
-                            "Ave: %{customdata[1]:.2f}<extra></extra>")
+                            "Avg: %{customdata[1]:.2f} " + unit_label + "<br>"
+                            "Max: %{customdata[2]:.2f} " + unit_label + "<br>"
+                            "Min: %{customdata[0]:.2f} " + unit_label + "<extra></extra>")
 
         fig.add_trace(go.Bar(
             x=x,
@@ -2977,7 +2977,7 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
         # 80% top (legend on this one)
         fig.add_trace(go.Scatter(
             x=T_mean.index, y=T80_hi, mode="lines",
-            line=dict(width=0), hoverinfo="skip",
+            line=dict(width=1.2, color="rgba(46, 204, 113, 0.9)"), hoverinfo="skip",
             name="ASHRAE adaptive comfort (80%)",
             showlegend=True, fill=None
         ), row=1, col=1)
@@ -2985,44 +2985,44 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
         fig.add_trace(go.Scatter(
             x=T_mean.index, y=T80_lo, mode="lines",
             line=dict(width=0), hoverinfo="skip",
-            fill="tonexty", fillcolor="rgba(46, 204, 113, 0.15)",
+            fill="tonexty", fillcolor="rgba(46, 204, 113, 0.22)",
             showlegend=False
         ), row=1, col=1)
     # --- Temperature ribbons: ABOVE (red), WITHIN (green), BELOW (blue) ---
     # ABOVE comfort: from T80_hi up to T_max (light red)
     fig.add_trace(go.Scatter(
         x=T_mean.index, y=T_max, mode="lines",
-        line=dict(width=0), hoverinfo="skip",
+        line=dict(width=1.2, color="rgba(231, 76, 60, 0.85)"), hoverinfo="skip",
         name="Above comfort (T)", showlegend=True
     ), row=1, col=1)
     fig.add_trace(go.Scatter(
         x=T_mean.index, y=T80_hi, mode="lines",
         line=dict(width=0), hoverinfo="skip",
-        fill="tonexty", fillcolor="rgba(231, 76, 60, 0.12)",
+        fill="tonexty", fillcolor="rgba(231, 76, 60, 0.20)",
         showlegend=False
     ), row=1, col=1)
     # WITHIN comfort: from T80_lo to T80_hi (soft green)
     fig.add_trace(go.Scatter(
         x=T_mean.index, y=T80_hi, mode="lines",
-        line=dict(width=0), hoverinfo="skip",
+        line=dict(width=1.2, color="rgba(46, 204, 113, 0.82)"), hoverinfo="skip",
         name="Within comfort (T)", showlegend=True
     ), row=1, col=1)
     fig.add_trace(go.Scatter(
         x=T_mean.index, y=T80_lo, mode="lines",
         line=dict(width=0), hoverinfo="skip",
-        fill="tonexty", fillcolor="rgba(46, 204, 113, 0.15)",
+        fill="tonexty", fillcolor="rgba(46, 204, 113, 0.22)",
         showlegend=False
     ), row=1, col=1)
     # BELOW comfort: from T_min up to T80_lo (light blue)
     fig.add_trace(go.Scatter(
         x=T_mean.index, y=T80_lo, mode="lines",
-        line=dict(width=0), hoverinfo="skip",
+        line=dict(width=1.1, color="rgba(52, 152, 219, 0.78)"), hoverinfo="skip",
         name="Below comfort (T)", showlegend=True
     ), row=1, col=1)
     fig.add_trace(go.Scatter(
         x=T_mean.index, y=T_min, mode="lines",
         line=dict(width=0), hoverinfo="skip",
-        fill="tonexty", fillcolor="rgba(52, 152, 219, 0.12)",
+        fill="tonexty", fillcolor="rgba(52, 152, 219, 0.18)",
         showlegend=False
     ), row=1, col=1)
     
@@ -3031,13 +3031,14 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
         add_range_bars(
             fig, T_mean.index, T_min, T_max,
             name="Dry bulb temperature range", color="#E74C3C",
-            row=1, col=1, opacity=0.35, color_arr=t_cat_colors, xlabels=xlab_T
+            row=1, col=1, opacity=0.35, color_arr=t_cat_colors, xlabels=xlab_T, unit_label="°C"
         )
     fig.add_trace(go.Scatter(
         x=T_mean.index, y=T_mean, mode="lines",
         name="Average Dry bulb temperature",
-        line=dict(width=2.2, color="#E74C3C"),
-        hovertemplate="Ave: %{y:.2f} °C<extra></extra>"
+        line=dict(width=2.8, color="#ff5c52"),
+        customdata=cd_T,
+        hovertemplate="<b>%{customdata[3]}</b><br>Avg: %{customdata[1]:.2f} °C<br>Max: %{customdata[2]:.2f} °C<br>Min: %{customdata[0]:.2f} °C<extra></extra>"
     ), row=1, col=1)
 
     
@@ -3047,37 +3048,37 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
     # ABOVE comfort: from RH_hi up to RH_max
     fig.add_trace(go.Scatter(
         x=RH_mean.index, y=RH_max, mode="lines",
-        line=dict(width=0), hoverinfo="skip",
+        line=dict(width=1.1, color="rgba(27, 79, 114, 0.82)"), hoverinfo="skip",
         name="Above comfort (RH)", showlegend=True
     ), row=2, col=1)
     fig.add_trace(go.Scatter(
         x=RH_mean.index, y=RH_hi, mode="lines",
         line=dict(width=0), hoverinfo="skip",
-        fill="tonexty", fillcolor="rgba(27, 79, 114, 0.12)",  # colRH_above @ ~12%
+        fill="tonexty", fillcolor="rgba(27, 79, 114, 0.20)",  # colRH_above @ ~20%
         showlegend=False
     ), row=2, col=1)
     # WITHIN comfort: from RH_lo to RH_hi
     fig.add_trace(go.Scatter(
         x=RH_mean.index, y=RH_hi, mode="lines",
-        line=dict(width=0), hoverinfo="skip",
+        line=dict(width=1.1, color="rgba(93, 173, 226, 0.82)"), hoverinfo="skip",
         name="Within comfort (RH)", showlegend=True
     ), row=2, col=1)
     fig.add_trace(go.Scatter(
         x=RH_mean.index, y=RH_lo, mode="lines",
         line=dict(width=0), hoverinfo="skip",
-        fill="tonexty", fillcolor="rgba(93, 173, 226, 0.15)",  # colRH_within soft
+        fill="tonexty", fillcolor="rgba(93, 173, 226, 0.22)",  # colRH_within slightly stronger
         showlegend=False
     ), row=2, col=1)
     # BELOW comfort: from RH_min up to RH_lo
     fig.add_trace(go.Scatter(
         x=RH_mean.index, y=RH_lo, mode="lines",
-        line=dict(width=0), hoverinfo="skip",
+        line=dict(width=1.0, color="rgba(174, 214, 241, 0.74)"), hoverinfo="skip",
         name="Below comfort (RH)", showlegend=True
     ), row=2, col=1)
     fig.add_trace(go.Scatter(
         x=RH_mean.index, y=RH_min, mode="lines",
         line=dict(width=0), hoverinfo="skip",
-        fill="tonexty", fillcolor="rgba(174, 214, 241, 0.12)",  # colRH_below light
+        fill="tonexty", fillcolor="rgba(174, 214, 241, 0.18)",  # colRH_below light
         showlegend=False
     ), row=2, col=1)
 
@@ -3088,14 +3089,14 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
         add_range_bars(
             fig, RH_mean.index, RH_min, RH_max,
             name="Relative humidity range", color="#1B4F72",
-            row=2, col=1, opacity=0.35, color_arr=rh_cat_colors, xlabels=xlab_RH
+            row=2, col=1, opacity=0.5, color_arr=rh_cat_colors, xlabels=xlab_RH, unit_label="%"
         )
     fig.add_trace(go.Scatter(
         x=RH_mean.index, y=RH_mean, mode="lines",
         name="Average Relative humidity",
-        line=dict(width=2.2, color="#5DADE2"),
+        line=dict(width=2.8, color="#7cc7ff"),
         customdata=cd_RH,
-        hovertemplate="<b>%{customdata[3]}</b><br>Ave: %{y:.2f} %<extra></extra>"
+        hovertemplate="<b>%{customdata[3]}</b><br>Avg: %{customdata[1]:.2f} %<br>Max: %{customdata[2]:.2f} %<br>Min: %{customdata[0]:.2f} %<extra></extra>"
     ), row=2, col=1)
 
     # Range-slider preview: include both humidity and temperature with distinct styling
@@ -3130,8 +3131,8 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
             type="date",
             ticklabelmode="period",
             ticklabelstandoff=6, ticks="outside", ticklen=6,
-            showgrid=False,
-            showline=True, linewidth=1, linecolor="rgba(255,255,255,0.25)",
+            showgrid=True, gridcolor="rgba(255,255,255,0.08)",
+            showline=True, linewidth=1.1, linecolor="rgba(255,255,255,0.35)",
             tickfont=dict(size=12), tickangle=0
         )
 
@@ -3189,10 +3190,10 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
         title_standoff=24,            # a little more space from ticks
         automargin=True,              # let Plotly grow the left margin if needed
         showticklabels=True,          # make sure labels are drawn
-        tickfont=dict(size=12, color="rgba(240,240,240,0.95)"),  # visible on dark bg
+        tickfont=dict(size=12, color="rgba(240,240,240,0.96)"),  # visible on dark bg
         ticks="outside", ticklen=6, ticklabelstandoff=8,
-        showgrid=False,
-        showline=True, linecolor="rgba(255,255,255,0.35)", linewidth=1,
+        showgrid=True, gridcolor="rgba(255,255,255,0.08)",
+        showline=True, linecolor="rgba(255,255,255,0.38)", linewidth=1.1,
         dtick=5,
         row=1, col=1
     )
@@ -3204,10 +3205,10 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
         title_standoff=24,
         automargin=True,
         showticklabels=True,         # <- force tick labels
-        tickfont=dict(size=12, color="rgba(240,240,240,0.95)"),
+        tickfont=dict(size=12, color="rgba(240,240,240,0.96)"),
         ticks="outside", ticklen=6, ticklabelstandoff=8,
-        showgrid=False,
-        showline=True, linecolor="rgba(255,255,255,0.35)", linewidth=1,
+        showgrid=True, gridcolor="rgba(255,255,255,0.08)",
+        showline=True, linecolor="rgba(255,255,255,0.38)", linewidth=1.1,
         range=[0, 100], dtick=10,
         row=2, col=1
     )
@@ -3215,12 +3216,16 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
     # Reduce excess padding so the two panels read as a single, compact stack
     fig.update_layout(
         margin=dict(l=70, r=30, t=45, b=40),
+        plot_bgcolor="rgba(12, 17, 26, 1)",
+        paper_bgcolor="rgba(12, 17, 26, 1)",
+        legend=dict(font=dict(color="#e5e7eb", size=12)),
+        hoverlabel=dict(bgcolor="#0f172a", font=dict(color="#e5e7eb"))
     )
 
     # Keep a single axis in the slider preview to ensure both traces render together
 
 
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True)
 
     # ==================== HUMIDITY BAR CHART ====================
     if effective_page in ("RH Bars", "Temp & Humidity", "🌡️ Temperature & Humidity"):
