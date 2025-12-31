@@ -3223,6 +3223,39 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
     )
 
     # Keep a single axis in the slider preview to ensure both traces render together
+    # -------------------- Legend ordering (exact order requested) --------------------
+
+    # ---------- FORCE LEGEND ORDER (must be RIGHT BEFORE plotly_chart) ----------
+    # -------------------- FORCE LEGEND ORDER (bulletproof) --------------------
+    desired_order = [
+        ("Average Dry bulb temperature", dict(mode="lines", line=dict(width=2.8, color="#ff5c52"))),
+        ("Dry bulb temperature range",   dict(mode="markers", marker=dict(size=10, color="#E74C3C"))),
+        ("Below comfort (T)",            dict(mode="lines", line=dict(width=2, color="rgba(52, 152, 219, 0.78)"))),
+        ("Within comfort (T)",           dict(mode="lines", line=dict(width=2, color="rgba(46, 204, 113, 0.82)"))),
+        ("Above comfort (T)",            dict(mode="lines", line=dict(width=2, color="rgba(231, 76, 60, 0.85)"))),
+        ("ASHRAE adaptive comfort (80%)",dict(mode="lines", line=dict(width=2, color="rgba(46, 204, 113, 0.9)"))),
+        ("Average Relative humidity",    dict(mode="lines", line=dict(width=2.8, color="#7cc7ff"))),
+        ("Below comfort (RH)",           dict(mode="lines", line=dict(width=2, color="rgba(174, 214, 241, 0.74)"))),
+        ("Within comfort (RH)",          dict(mode="lines", line=dict(width=2, color="rgba(93, 173, 226, 0.82)"))),
+        ("Above comfort (RH)",           dict(mode="lines", line=dict(width=2, color="rgba(27, 79, 114, 0.82)"))),
+    ]
+
+    # 1) Hide legend for ALL real traces (keeps visuals unchanged)
+    for tr in fig.data:
+        tr.showlegend = False
+
+    # 2) Add legend-only dummy traces in the exact order you want
+    for name, style in desired_order:
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            name=name,
+            hoverinfo="skip",
+            showlegend=True,
+            **style
+        ))
+
+    fig.update_layout(legend=dict(traceorder="normal"))
+# -------------------------------------------------------------------------
 
 
     st.plotly_chart(fig, use_container_width=True)
@@ -3262,7 +3295,7 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
 
     col = "drybulb"  # base variable for downstream charts
 
-    if effective_page == "Daily Scatter":
+    if effective_page in ("Temp & Humidity", "🌡️ Temperature & Humidity", "Daily Scatter"):
         # ==================== DAILY SCATTER (FACETS) ====================
         label_y    = "Dry-bulb temperature (°C)" if col == "drybulb" else "Relative Humidity (%)"
         line_color = "crimson" if col == "drybulb" else "dodgerblue"
@@ -3356,7 +3389,7 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
         )
         st.plotly_chart(fig_sc, use_container_width=True)
 
-    if effective_page == "Annual Heatmap":
+    if effective_page in ("Temp & Humidity", "🌡️ Temperature & Humidity", "Annual Heatmap"):
         # ==================== HEATMAP ====================
         st.markdown("---")
         st.markdown("#### Annual heatmap (Day × Hour)")
