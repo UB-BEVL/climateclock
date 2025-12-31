@@ -107,6 +107,15 @@ NAV_ITEMS = [
     ("Future Climate (2050 / 2080 SSP)", "🌍 Future Climate (2050 / 2080 SSP)"),
 ]
 
+FROZEN_NAV_LABELS = {
+    "Short-Term Prediction (24–72h)",
+    "Future Climate (2050 / 2080 SSP)",
+}
+FROZEN_PAGES = {
+    "📈 Short-Term Prediction (24–72h)",
+    "🌍 Future Climate (2050 / 2080 SSP)",
+}
+
 LABEL_TO_PAGE = {label: page for label, page in NAV_ITEMS}
 PAGE_TO_LABEL = {page: label for label, page in NAV_ITEMS}
 ALLOWED_PAGES = list(PAGE_TO_LABEL.keys())
@@ -962,6 +971,8 @@ with st.sidebar:
 
     epw_loaded = bool(st.session_state.get("cdf") is not None and st.session_state.get("header"))
     current_page = st.session_state.get("active_page", DEFAULT_PAGE)
+    if current_page in FROZEN_PAGES:
+        current_page = DEFAULT_PAGE
     if current_page not in ALLOWED_PAGES:
         current_page = DEFAULT_PAGE
     st.session_state["active_page"] = current_page
@@ -977,6 +988,21 @@ with st.sidebar:
             label_visibility="collapsed",
             key="sidebar_nav",
         )
+        st.markdown(
+            """
+            <style>
+            /* Freeze roadmap items visually and functionally */
+            [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:nth-child(9),
+            [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:nth-child(10) {
+                opacity: 0.45 !important;
+                pointer-events: none !important;
+                cursor: not-allowed !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.caption("🚧 Short-term prediction & future climate are coming soon")
     else:
         nav_choice = "Select weather file"
         st.radio(
@@ -995,8 +1021,9 @@ with st.sidebar:
                 unsafe_allow_html=True,
             )
         st.info("Load a station from the map or upload an EPW/ZIP to unlock the dashboard views.")
-
-    chosen_page = LABEL_TO_PAGE.get(nav_choice, DEFAULT_PAGE)
+    frozen_hit = nav_choice in FROZEN_NAV_LABELS
+    nav_choice_effective = nav_choice if not frozen_hit else current_label
+    chosen_page = LABEL_TO_PAGE.get(nav_choice_effective, DEFAULT_PAGE)
     st.session_state["active_page"] = chosen_page
 
     st.markdown("### Filters and units")
@@ -1775,6 +1802,8 @@ if "page_after_station" in st.session_state:
     st.session_state["active_page"] = target_page
 
 page = st.session_state.get("active_page", DEFAULT_PAGE)
+if page in FROZEN_PAGES:
+    page = DEFAULT_PAGE
 if page not in ALLOWED_PAGES:
     page = DEFAULT_PAGE
 st.session_state["active_page"] = page
