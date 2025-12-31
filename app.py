@@ -1973,7 +1973,10 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
         if pivot_binned.empty:
             continue
         
-        colors, labels = get_color_scale_for_metric(info["metric"])
+        # Prefer labels/colors supplied in info (for editable thresholds); fallback to defaults
+        colors_default, labels_default = get_color_scale_for_metric(info["metric"])
+        labels = info.get("labels", labels_default)
+        colors = info.get("colors", colors_default[: len(labels)])
         
         # Create heatmap trace
         trace = go.Heatmap(
@@ -2018,6 +2021,10 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
     # For each strip, draw legend boxes at appropriate paper y positions
     for idx, (strip_name, (pivot_binned, info)) in enumerate(valid_strips.items(), start=1):
         colors, labels = get_color_scale_for_metric(info["metric"])
+        if info.get("labels"):
+            labels = info["labels"]
+        if info.get("colors"):
+            colors = info["colors"]
         # Determine y-domain for this subplot
         axis_key = "yaxis" if idx == 1 else f"yaxis{idx}"
         try:
@@ -2553,74 +2560,133 @@ if cdf is not None:
         with heatmaps_tab:
             st.divider()
             st.subheader("Annual Diurnal Resource Heatmaps")
-            st.caption("Visualize typical diurnal patterns across the year. Use controls to crop months or hours for focused views.")
+            st.caption("Adjust legend thresholds to explore how different performance ranges appear across the year.")
 
-            # Controls: month range (1..12) and hour range (0..23)
-            months = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"]
-            c1, c2 = st.columns([2, 1])
-            month_start, month_end = c1.slider("Month range", 1, 12, (1, 12))
-            hour_start, hour_end = c2.slider("Hour range", 0, 23, (0, 23))
+            import json
 
-            # Validate slider ordering
-            if month_start > month_end:
-                st.warning("Please ensure start month is before or equal to end month.")
-            else:
-                # Convert month range to DOY range using helper
-                boundaries = month_boundaries_doy(leap_year=False)
-                start_doy = int(boundaries[month_start - 1])
-                if month_end == 12:
-                    end_doy = int(boundaries[12])
+            # Default thresholds
+            default_thresholds = {
+                "solar": [100.0, 300.0, 500.0, 700.0],
+                "humidity": [40.0, 60.0, 80.0],
+                "wind": [1.5, 4.5],
+            }
+
+            # Initialize/persist thresholds in session_state
+            if "heatmap_thresholds" not in st.session_state:
+                st.session_state["heatmap_thresholds"] = default_thresholds.copy()
+
+            thresholds_state = st.session_state["heatmap_thresholds"]
+
+            def _labels_from_thresholds(ths: list[float], suffix: str) -> list[str]:
+                labels = []
+                if not ths:
+                    return labels
+                labels.append(f"<{ths[0]:g}{suffix}")
+                for a, b in zip(ths, ths[1:]):
+                    labels.append(f"{a:g}–{b:g}{suffix}")
+                labels.append(f">{ths[-1]:g}{suffix}")
+                return labels
+
+            invalid_thresholds = False
+
+            with st.expander("Legend & Thresholds", expanded=False):
+                c_reset = st.columns([3,1])[1]
+                if c_reset.button("Reset thresholds to defaults"):
+                    st.session_state["heatmap_thresholds"] = default_thresholds.copy()
+                    st.experimental_rerun()
+
+                c_s1, c_s2, c_s3, c_s4 = st.columns(4)
+                solar_t1 = c_s1.number_input("Solar t1 (W/m²)", value=float(thresholds_state["solar"][0]), step=50.0, key="solar_t1")
+                solar_t2 = c_s2.number_input("Solar t2", value=float(thresholds_state["solar"][1]), step=50.0, key="solar_t2")
+                solar_t3 = c_s3.number_input("Solar t3", value=float(thresholds_state["solar"][2]), step=50.0, key="solar_t3")
+                solar_t4 = c_s4.number_input("Solar t4", value=float(thresholds_state["solar"][3]), step=50.0, key="solar_t4")
+                solar_thresholds = [solar_t1, solar_t2, solar_t3, solar_t4]
+
+                c_h1, c_h2, c_h3 = st.columns(3)
+                hum_t1 = c_h1.number_input("Humidity t1 (%)", value=float(thresholds_state["humidity"][0]), step=5.0, key="hum_t1")
+                hum_t2 = c_h2.number_input("Humidity t2", value=float(thresholds_state["humidity"][1]), step=5.0, key="hum_t2")
+                hum_t3 = c_h3.number_input("Humidity t3", value=float(thresholds_state["humidity"][2]), step=5.0, key="hum_t3")
+                humidity_thresholds = [hum_t1, hum_t2, hum_t3]
+
+                c_w1, c_w2 = st.columns(2)
+                wind_t1 = c_w1.number_input("Wind t1 (m/s)", value=float(thresholds_state["wind"][0]), step=0.5, key="wind_t1")
+                wind_t2 = c_w2.number_input("Wind t2", value=float(thresholds_state["wind"][1]), step=0.5, key="wind_t2")
+                wind_thresholds = [wind_t1, wind_t2]
+
+                def _is_strictly_increasing(vals):
+                    return all(vals[i] < vals[i+1] for i in range(len(vals)-1))
+
+                if not (_is_strictly_increasing(solar_thresholds) and _is_strictly_increasing(humidity_thresholds) and _is_strictly_increasing(wind_thresholds)):
+                    invalid_thresholds = True
+                    st.error("Thresholds must be strictly increasing for each metric.")
                 else:
-                    end_doy = int(boundaries[month_end]) - 1
+                    thresholds_state["solar"] = solar_thresholds
+                    thresholds_state["humidity"] = humidity_thresholds
+                    thresholds_state["wind"] = wind_thresholds
 
-                # Build heatmap dict from full EPW data (do not filter the source data)
+            if invalid_thresholds:
+                st.info("Adjust thresholds to continue.")
+            else:
+                # Build heatmap dict from full EPW data using editable thresholds
+                def _build_pivot_with_thresholds(df: pd.DataFrame, col: str, metric_label: str, thresholds: list[float], units_suffix: str, palette_metric: str):
+                    series = pd.to_numeric(df[col], errors="coerce")
+                    series = series.dropna()
+                    if series.empty:
+                        return pd.DataFrame(), {"error": f"No valid data for {metric_label}"}
+                    work = pd.DataFrame({"val": series})
+                    work["hod"] = work.index.hour
+                    work["doy"] = work.index.dayofyear
+                    pivot_raw = work.pivot_table(index="hod", columns="doy", values="val", aggfunc="mean")
+                    pivot_raw = pivot_raw.reindex(index=range(24), columns=range(1, 367))
+
+                    bins = [-np.inf] + thresholds + [np.inf]
+                    labels = _labels_from_thresholds(thresholds, units_suffix)
+                    # pd.cut returns Categorical; codes are -1 for NaN
+                    cat = pd.cut(pivot_raw.values.flatten(), bins=bins, labels=labels, right=False)
+                    codes = pd.Series(cat.codes).values.reshape(pivot_raw.shape)
+                    pivot_binned = pd.DataFrame(codes, index=pivot_raw.index, columns=pivot_raw.columns)
+
+                    colors_default, _ = get_color_scale_for_metric(palette_metric)
+                    colors = colors_default[: len(labels)]
+
+                    info = {
+                        "metric": metric_label,
+                        "col": col,
+                        "labels": labels,
+                        "colors": colors,
+                        "thresholds": thresholds,
+                    }
+                    return pivot_binned, info
+
                 heatmap_dict = {}
-                solar_col = get_metric_column(cdf, ["ghi", "global_horiz", "global_horizontal", "solar", "radiation"]) 
+                solar_col = get_metric_column(cdf, ["ghi", "global_horiz", "global_horizontal", "solar", "radiation"])
                 if solar_col:
-                    pivot_binned, info = compute_heatmap_matrix(cdf, solar_col, "Global Horizontal Irradiance (W/m²)")
+                    pivot_binned, info = _build_pivot_with_thresholds(cdf, solar_col, "Solar Radiation", thresholds_state["solar"], "", "solar")
                     if not pivot_binned.empty:
                         heatmap_dict["Solar Radiation"] = (pivot_binned, info)
 
-                rh_col = get_metric_column(cdf, ["relative_humidity", "relhum", "rh"]) 
+                rh_col = get_metric_column(cdf, ["relative_humidity", "relhum", "rh"])
                 if rh_col:
-                    pivot_binned, info = compute_heatmap_matrix(cdf, rh_col, "Relative Humidity (%)")
+                    pivot_binned, info = _build_pivot_with_thresholds(cdf, rh_col, "Humidity", thresholds_state["humidity"], "%", "humidity")
                     if not pivot_binned.empty:
                         heatmap_dict["Humidity"] = (pivot_binned, info)
 
-                wind_col = get_metric_column(cdf, ["wind_speed", "windspd", "wspd", "wind"]) 
+                wind_col = get_metric_column(cdf, ["wind_speed", "windspd", "wspd", "wind"])
                 if wind_col:
-                    pivot_binned, info = compute_heatmap_matrix(cdf, wind_col, "Wind Speed (m/s)")
+                    pivot_binned, info = _build_pivot_with_thresholds(cdf, wind_col, "Wind Speed", thresholds_state["wind"], " m/s", "wind")
                     if not pivot_binned.empty:
                         heatmap_dict["Wind Speed"] = (pivot_binned, info)
 
                 if not heatmap_dict:
                     st.info("No metric data available for heatmap generation.")
                 else:
-                    # Crop pivot matrices to the chosen DOY/hour ranges (display-only)
-                    cropped = {}
-                    for name, (pivot_binned, info) in heatmap_dict.items():
-                        # Select columns between start_doy..end_doy and rows between hour_start..hour_end
-                        cols = [c for c in pivot_binned.columns if (c >= start_doy and c <= end_doy)]
-                        rows = [r for r in pivot_binned.index if (r >= hour_start and r <= hour_end)]
-                        if not cols or not rows:
-                            # produce empty pivot for this strip
-                            cropped[name] = (pd.DataFrame(), info)
-                        else:
-                            cropped_pivot = pivot_binned.loc[rows, cols]
-                            cropped[name] = (cropped_pivot, info)
-
-                    fig = build_diurnal_heatmap_figure(cropped, cdf, header)
+                    fig = build_diurnal_heatmap_figure(heatmap_dict, cdf, header)
                     if fig:
-                        # Update x-axis tick labels to visible months
+                        # Full-year ticks
                         month_doy, month_letters = month_labels_at_midpoints(leap_year=False)
-                        tickvals = [d for d, m in zip(month_doy, month_letters) if d >= start_doy and d <= end_doy]
-                        ticktext = [m for d, m in zip(month_doy, month_letters) if d >= start_doy and d <= end_doy]
-                        if tickvals:
-                            fig.update_xaxes(tickmode="array", tickvals=tickvals, ticktext=ticktext)
-                        # Remove heavy x-axis title and add single y-axis label
+                        fig.update_xaxes(tickmode="array", tickvals=month_doy, ticktext=month_letters)
                         fig.update_xaxes(title_text=None)
                         try:
-                            # Update all y-axis titles to None (remove repetition)
                             fig.update_yaxes(title_text=None)
                         except Exception:
                             pass
@@ -2628,7 +2694,7 @@ if cdf is not None:
 
                         st.plotly_chart(fig, use_container_width=True)
 
-                        # Downloads: PNG and CSV reflecting the current display crop
+                        # Downloads reflecting current thresholds
                         c1d, c2d = st.columns(2)
                         with c1d:
                             try:
@@ -2638,34 +2704,34 @@ if cdf is not None:
                                 html_bytes = fig.to_html(include_plotlyjs='cdn').encode('utf-8')
                                 st.download_button(label="📥 Download heatmaps (HTML)", data=html_bytes, file_name="diurnal_heatmaps.html", mime="text/html")
 
-                        # CSV long-format export limited to selected months/hours
                         with c2d:
                             try:
-                                mask = (cdf.index.month >= month_start) & (cdf.index.month <= month_end) & (cdf.index.hour >= hour_start) & (cdf.index.hour <= hour_end)
-                                export_df = cdf.loc[mask]
+                                export_df = cdf.copy()
                                 long_records = []
+                                thresholds_json = json.dumps(thresholds_state)
                                 for strip_name, (pivot_binned, info) in heatmap_dict.items():
                                     col = info.get('col')
                                     if not col or col not in export_df.columns:
                                         continue
-                                    s = coerce_to_numeric(export_df[col]).dropna()
+                                    s = pd.to_numeric(export_df[col], errors="coerce").dropna()
                                     if s.empty:
                                         continue
-                                    bin_codes = bin_metric(s, info.get('metric'))
-                                    colors, labels = get_color_scale_for_metric(info.get('metric'))
-                                    bin_labels = [labels[int(c)] if (pd.notna(c) and int(c) >= 0 and int(c) < len(labels)) else None for c in bin_codes]
-                                    for ts, val, bl in zip(s.index, s.values, bin_labels):
+                                    bins = [-np.inf] + info.get("thresholds", []) + [np.inf]
+                                    labels = info.get("labels", [])
+                                    cat = pd.cut(s, bins=bins, labels=labels, right=False)
+                                    for ts, val, bl in zip(cat.index, s.values, cat.astype(object).values):
                                         long_records.append({
                                             'datetime': ts.isoformat(),
                                             'variable': strip_name,
                                             'value': float(val),
-                                            'bin_label': bl,
+                                            'bin_label': bl if pd.notna(bl) else None,
                                             'month': int(ts.month),
                                             'hour': int(ts.hour),
+                                            'thresholds': thresholds_json,
                                         })
 
                                 if not long_records:
-                                    st.caption("No long-format data available for CSV export for the selected crop.")
+                                    st.caption("No long-format data available for CSV export.")
                                 else:
                                     long_df = pd.DataFrame(long_records)
                                     csv_bytes = long_df.to_csv(index=False).encode('utf-8')
@@ -3530,6 +3596,44 @@ if effective_page == "☀️ Solar Analysis":
         return pd.Series(out[temp_col].to_numpy(), index=solar_time.index, name="temp_c")
 
 
+    def _nearest_epw_by_solar_time(epw: pd.DataFrame, solar_time: pd.Series, preferred_cols: list[str], max_gap: str = "2H") -> Optional[pd.Series]:
+        """Nearest EPW variable to solar_time using merge_asof; returns Series aligned to solar_time index or None if missing."""
+        col = next((c for c in preferred_cols if c in epw.columns), None)
+        if col is None:
+            return None
+
+        stz = solar_time.dt.tz
+        if stz is None:
+            return None
+        epw_work = epw.copy()
+        if epw_work.index.tz is None:
+            epw_work.index = epw_work.index.tz_localize(stz)
+
+        epw_utc = epw_work.tz_convert("UTC")
+        solar_utc = solar_time.dt.tz_convert("UTC")
+        epw_utc = epw_utc[~epw_utc.index.duplicated(keep="first")].sort_index()
+
+        idx_name = epw_utc.index.name if epw_utc.index.name is not None else "index"
+        right = epw_utc.reset_index().rename(columns={idx_name: "ts"})
+        right_sorted = right.sort_values("ts")
+
+        left = pd.DataFrame({"solar_time": solar_utc})
+        left["_orig_order"] = np.arange(len(left))
+        left_sorted = left.sort_values("solar_time")
+
+        out = pd.merge_asof(
+            left_sorted,
+            right_sorted[["ts", col]],
+            left_on="solar_time",
+            right_on="ts",
+            direction="nearest",
+            tolerance=pd.Timedelta(max_gap),
+        )
+
+        out = out.sort_values("_orig_order").reset_index(drop=True)
+        return pd.Series(out[col].to_numpy(), index=solar_time.index, name=col)
+
+
     # 4) Label formatter: “21 SEP 11:00 19.40°C” (solar time)
     def _fmt_label(ts_solar: pd.Timestamp, temp_c: float) -> str:
         return f"{ts_solar.strftime('%d %b').upper()} {ts_solar.strftime('%H:%M')} {temp_c:.2f}°C"
@@ -3761,7 +3865,8 @@ if effective_page == "☀️ Solar Analysis":
         show_rays: bool = True,
         massing=None,
         epw: pd.DataFrame | None = None,
-        color_mode: str = "temperature",   # "temperature" | "season"
+        color_var: str = "temperature",  # "temperature" | "solar" | "humidity" | "wind"
+        hour_stride: int = 1,
         show_labels: bool = True,
         label_every: int = 1,
     ):
@@ -3809,40 +3914,80 @@ if effective_page == "☀️ Solar Analysis":
             ts = pd.Timestamp(year=date.year, month=m, day=d, tz=site.tz)
             _sunpath_for(ts, col, f"{ts:%b %d}")
 
-        # selected day: hourly positions (solar time labels + temp colors)
+        # selected day: hourly positions (solar time labels + data-driven colors)
         df = solar_positions(site, date)
         if not df.empty:
             df = _with_solar_time(df, site)
+            # subsample per requested hour stride (keep first row)
+            df = df.iloc[::max(1, int(hour_stride))]
+
+            color_series = None
+            color_title = None
+            cmin = None
+            cmax = None
+            colorscale = None
             if epw is not None:
-                temps = _nearest_temp_by_solar_time(epw, df["solar_time"])
-                df = df.join(temps)
+                if color_var == "temperature":
+                    color_series = _nearest_epw_by_solar_time(epw, df["solar_time"], ["temp_air","DryBulb","Dry_Bulb","drybulb","Temperature"])
+                    color_title = "Dry Bulb (°C)"
+                    cmin, cmax = -10, 40
+                    colorscale = "RdYlBu_r"
+                elif color_var == "solar":
+                    color_series = _nearest_epw_by_solar_time(epw, df["solar_time"], ["glohorrad","ghi","global_horiz","global_horizontal","solar","radiation"])
+                    color_title = "Solar Radiation (W/m²)"
+                    cmin, cmax = 0, 1000
+                    colorscale = "YlOrRd"
+                elif color_var == "humidity":
+                    color_series = _nearest_epw_by_solar_time(epw, df["solar_time"], ["relhum","relative_humidity","rh"])
+                    color_title = "Relative Humidity (%)"
+                    cmin, cmax = 0, 100
+                    colorscale = "PuBuGn"
+                elif color_var == "wind":
+                    color_series = _nearest_epw_by_solar_time(epw, df["solar_time"], ["windspd","wind_speed","wspd","wind"])
+                    color_title = "Wind Speed (m/s)"
+                    cmin, cmax = 0, 10
+                    colorscale = "Blues"
+            if color_series is not None:
+                color_series = pd.to_numeric(color_series, errors="coerce")
+                df["color_val"] = color_series
 
             az, alt = np.deg2rad(df["azimuth"].values), np.deg2rad(df["elevation"].values)
             sx = np.cos(alt) * np.sin(az)
             sy = np.cos(alt) * np.cos(az)
             sz = np.sin(alt)
 
-            colors = []
+            colors = None
             labels = []
-            for i, ts in enumerate(df.index):
-                temp_c = float(df.iloc[i]["temp_c"]) if ("temp_c" in df.columns) else np.nan
-                colors.append(_map_color(temp_c if not np.isnan(temp_c) else 20.0, ts.month, color_mode))
-                if show_labels and (i % label_every == 0):
-                    labels.append(_fmt_label(pd.Timestamp(df.iloc[i]["solar_time"]), temp_c if not np.isnan(temp_c) else 0.0))
-                else:
-                    labels.append(None)
-
-            if color_mode == "temperature" and epw is not None:
-                fig.add_trace(go.Scatter3d(x=[None], y=[None], z=[None], mode="markers",
-                                           marker=dict(size=0.1, color=[-10, 35], colorscale="RdYlBu_r",
-                                                       cmin=-10, cmax=35, showscale=False, colorbar=dict(title="°C")),
-                                           showlegend=False, hoverinfo="skip"))
+            if "color_val" in df.columns:
+                colors = df["color_val"].to_numpy()
+            if show_labels:
+                for i, ts in enumerate(df.index):
+                    if i % max(1, int(label_every)) == 0:
+                        val = df.iloc[i].get("color_val", np.nan)
+                        base_title = (color_title.split('(')[0].strip() if color_title else "Value")
+                        val_txt = "" if pd.isna(val) else f" | {base_title}: {val:.1f}"
+                        labels.append(f"{pd.Timestamp(df.iloc[i]['solar_time']).strftime('%d %b %H:%M')}{val_txt}")
+                    else:
+                        labels.append(None)
+            else:
+                labels = [None] * len(df)
 
             fig.add_trace(go.Scatter3d(
                 x=sx, y=sy, z=sz,
-                mode="lines+markers",
-                marker=dict(size=5, color=colors, line=dict(width=0.5, color="black")),
-                line=dict(width=2, color="#e2e8f0"),
+                mode="markers",
+                marker=dict(
+                    size=4,
+                    color=colors if colors is not None else "#f59e0b",
+                    colorscale=colorscale,
+                    cmin=cmin,
+                    cmax=cmax,
+                    showscale=colors is not None,
+                    colorbar=dict(title=color_title) if colors is not None else None,
+                    line=dict(width=0.8, color="rgba(255,255,255,0.6)"),
+                    symbol="circle",
+                    opacity=0.9,
+                ),
+                line=dict(width=0, color="rgba(0,0,0,0)"),
                 name=f"{date:%b %d}",
                 text=labels,
                 hovertemplate="<b>%{text}</b><br>Az %{customdata[0]:.1f}° · Alt %{customdata[1]:.1f}°<extra></extra>",
@@ -4130,20 +4275,55 @@ if effective_page == "☀️ Solar Analysis":
     sel_date = pd.Timestamp.now(tz=tzinfo).date()
     proj = c2.selectbox("2D projection", ["stereographic", "orthographic"], index=0)
     show3d = c3.checkbox("Show 3D dome & rays", value=False)
-    c4, c5, c6 = st.columns([1,1,1])
-    color_mode = c4.selectbox("Marker colors", ["temperature", "season"], index=0)
-    show_labels = c5.checkbox("Show labels", value=True)
-    label_every = c6.number_input("Label every Nth hour", min_value=1, max_value=24, value=1, step=1)
 
-    # EPW uploader (reuse your existing EPW load if you already have it)
-    # Reuse the loaded EPW (cdf) for temperatures
-    epw_df = cdf[["drybulb"]].rename(columns={"drybulb": "temp_air"}).copy()
+    # Prepare EPW-derived dataframe with relevant variables if present
+    epw_df = pd.DataFrame(index=cdf.index)
+    temp_col = get_metric_column(cdf, ["drybulb", "temp_air", "temperature", "tdb"])
+    if temp_col:
+        epw_df["temp_air"] = cdf[temp_col]
+    solar_col = get_metric_column(cdf, ["glohorrad", "ghi", "global_horiz", "global_horizontal", "solar", "radiation"])
+    if solar_col:
+        epw_df["glohorrad"] = cdf[solar_col]
+    rh_col = get_metric_column(cdf, ["relhum", "relative_humidity", "rh"])
+    if rh_col:
+        epw_df["relhum"] = cdf[rh_col]
+    wind_col = get_metric_column(cdf, ["windspd", "wind_speed", "wspd", "wind"])
+    if wind_col:
+        epw_df["windspd"] = cdf[wind_col]
 
     # Ensure tz-awareness consistent with site tz, then convert to UTC for clean joins
     if epw_df.index.tz is None:
         epw_df.index = epw_df.index.tz_localize(tzinfo)
     epw_df = epw_df.tz_convert("UTC").sort_index()
     epw_df = epw_df[~epw_df.index.duplicated(keep="first")]
+
+    # 3D-specific controls
+    avail_options = []
+    option_map = {}
+    if "temp_air" in epw_df.columns:
+        avail_options.append("Dry Bulb Temperature (°C)")
+        option_map["Dry Bulb Temperature (°C)"] = "temperature"
+    if "glohorrad" in epw_df.columns:
+        avail_options.append("Solar Radiation (W/m²)")
+        option_map["Solar Radiation (W/m²)"] = "solar"
+    if "relhum" in epw_df.columns:
+        avail_options.append("Relative Humidity (%)")
+        option_map["Relative Humidity (%)"] = "humidity"
+    if "windspd" in epw_df.columns:
+        avail_options.append("Wind Speed (m/s)")
+        option_map["Wind Speed (m/s)"] = "wind"
+    if not avail_options:
+        avail_options = ["Dry Bulb Temperature (°C)"]
+        option_map["Dry Bulb Temperature (°C)"] = "temperature"
+
+    c4, c5 = st.columns([1,1])
+    color_choice_label = c4.selectbox("Color sun points by", options=avail_options, index=0)
+    hour_stride = c5.slider("Show sun every N hours", min_value=1, max_value=4, value=1, step=1)
+    color_var = option_map.get(color_choice_label, "temperature")
+
+    c6, c7 = st.columns([1,1])
+    show_labels = c6.checkbox("Show labels", value=True)
+    label_every = c7.number_input("Label every Nth hour", min_value=1, max_value=24, value=1, step=1)
 
 
 
@@ -4159,7 +4339,8 @@ if effective_page == "☀️ Solar Analysis":
             show_rays=True,
             massing=[(-0.2,-0.1,0.2,0.3,0.0,0.25)],
             epw=epw_df,
-            color_mode=color_mode,
+            color_var=color_var,
+            hour_stride=hour_stride,
             show_labels=show_labels,
             label_every=label_every,
         )
@@ -4168,6 +4349,7 @@ if effective_page == "☀️ Solar Analysis":
             fig3d = go.Figure(fig3d)
         if isinstance(fig3d, go.Figure):
             st.plotly_chart(fig3d, use_container_width=True, config={"displayModeBar": True})
+            st.caption("Sun position colored by selected environmental variable.")
         else:
             st.warning(f"3D sun path unavailable (got {type(fig3d).__name__}).")
 
