@@ -1896,7 +1896,9 @@ def bin_metric(values: pd.Series, metric_name: str) -> pd.Series:
     try:
         # pd.cut returns categorical; convert to numeric codes (0, 1, 2, ...)
         cat = pd.cut(values, bins=bins, labels=labels, right=False, duplicates="drop")
-        return cat.cat.codes
+        codes = cat.cat.codes.astype(float)
+        codes[codes < 0] = np.nan
+        return codes
     except Exception:
         return pd.Series(np.nan, index=values.index)
 
@@ -2001,14 +2003,22 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
         labels = info.get("labels", labels_default)
         colors = info.get("colors", colors_default[: len(labels)])
         
-        # Create heatmap trace
+        hover_labels = info.get("hover_labels")
+        customdata = hover_labels if hover_labels is not None else None
+        hovertemplate = (
+            "DoY: %{x}<br>HoD: %{y}<br>Value: %{z:.2f}<br>Band: %{customdata}<extra></extra>"
+            if customdata is not None
+            else "DoY: %{x}<br>HoD: %{y}<br>Value: %{z:.2f}<extra></extra>"
+        )
+
         trace = go.Heatmap(
             z=pivot_binned.values,
             x=pivot_binned.columns,  # DOY 1..366
             y=pivot_binned.index,     # HOD 0..23
             colorscale=list(zip([i / (len(colors) - 1) for i in range(len(colors))], colors)),
             showscale=False,
-            hovertemplate="DoY: %{x}<br>HoD: %{y}<br>Bin: <extra></extra>",
+            customdata=customdata,
+            hovertemplate=hovertemplate,
         )
         fig.add_trace(trace, row=row, col=1)
         
@@ -2650,24 +2660,26 @@ if cdf is not None:
             if invalid_thresholds:
                 st.info("Adjust thresholds to continue.")
             else:
-                # Build heatmap dict from full EPW data using editable thresholds
-                def _build_pivot_with_thresholds(df: pd.DataFrame, col: str, metric_label: str, thresholds: list[float], units_suffix: str, palette_metric: str):
+                # Continuous heatmap helper: aggregate first (mean/median), keep thresholds for hover/legend only
+                def _build_pivot_with_thresholds(df: pd.DataFrame, col: str, metric_label: str, thresholds: list[float], units_suffix: str, palette_metric: str, agg: str = "mean"):
                     series = pd.to_numeric(df[col], errors="coerce")
                     series = series.dropna()
                     if series.empty:
                         return pd.DataFrame(), {"error": f"No valid data for {metric_label}"}
+
                     work = pd.DataFrame({"val": series})
                     work["hod"] = work.index.hour
                     work["doy"] = work.index.dayofyear
-                    pivot_raw = work.pivot_table(index="hod", columns="doy", values="val", aggfunc="mean")
+
+                    aggfunc = np.median if agg == "median" else "mean"
+                    pivot_raw = work.pivot_table(index="hod", columns="doy", values="val", aggfunc=aggfunc)
                     pivot_raw = pivot_raw.reindex(index=range(24), columns=range(1, 367))
 
+                    # Thresholds for interpretation (hover/legend), not for coloring
                     bins = [-np.inf] + thresholds + [np.inf]
                     labels = _labels_from_thresholds(thresholds, units_suffix)
-                    # pd.cut returns Categorical; codes are -1 for NaN
                     cat = pd.cut(pivot_raw.values.flatten(), bins=bins, labels=labels, right=False)
-                    codes = pd.Series(cat.codes).values.reshape(pivot_raw.shape)
-                    pivot_binned = pd.DataFrame(codes, index=pivot_raw.index, columns=pivot_raw.columns)
+                    label_grid = pd.Series(cat).astype(object).values.reshape(pivot_raw.shape)
 
                     colors_default, _ = get_color_scale_for_metric(palette_metric)
                     colors = colors_default[: len(labels)]
@@ -2678,25 +2690,26 @@ if cdf is not None:
                         "labels": labels,
                         "colors": colors,
                         "thresholds": thresholds,
+                        "hover_labels": label_grid,
                     }
-                    return pivot_binned, info
+                    return pivot_raw, info
 
                 heatmap_dict = {}
                 solar_col = get_metric_column(cdf, ["ghi", "global_horiz", "global_horizontal", "solar", "radiation"])
                 if solar_col:
-                    pivot_binned, info = _build_pivot_with_thresholds(cdf, solar_col, "Solar Radiation", thresholds_state["solar"], "", "solar")
+                    pivot_binned, info = _build_pivot_with_thresholds(cdf, solar_col, "Solar Radiation", thresholds_state["solar"], "", "solar", agg="mean")
                     if not pivot_binned.empty:
                         heatmap_dict["Solar Radiation"] = (pivot_binned, info)
 
                 rh_col = get_metric_column(cdf, ["relative_humidity", "relhum", "rh"])
                 if rh_col:
-                    pivot_binned, info = _build_pivot_with_thresholds(cdf, rh_col, "Humidity", thresholds_state["humidity"], "%", "humidity")
+                    pivot_binned, info = _build_pivot_with_thresholds(cdf, rh_col, "Humidity", thresholds_state["humidity"], "%", "humidity", agg="mean")
                     if not pivot_binned.empty:
                         heatmap_dict["Humidity"] = (pivot_binned, info)
 
                 wind_col = get_metric_column(cdf, ["wind_speed", "windspd", "wspd", "wind"])
                 if wind_col:
-                    pivot_binned, info = _build_pivot_with_thresholds(cdf, wind_col, "Wind Speed", thresholds_state["wind"], " m/s", "wind")
+                    pivot_binned, info = _build_pivot_with_thresholds(cdf, wind_col, "Wind Speed", thresholds_state["wind"], " m/s", "wind", agg="median")
                     if not pivot_binned.empty:
                         heatmap_dict["Wind Speed"] = (pivot_binned, info)
 
