@@ -20,6 +20,7 @@ import plotly.io as pio
 from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+import pvlib
 # Patch platform processor to avoid Windows WMI KeyError during h5py/pvlib import
 import platform as _platform
 _orig_proc_get = getattr(getattr(_platform, "_Processor", None), "get", None)
@@ -33,13 +34,6 @@ if _orig_proc_get:
         _platform._Processor.get = _safe_proc_get  # type: ignore[attr-defined]
     except Exception:
         pass
-
-import pvlib
-import live_sensors as ls
-from models import forecasting as fc
-from models import future_epw as fepw
-from metrics import comfort_energy as ce
-
 
 
 def _temp_unit() -> str:
@@ -3190,46 +3184,6 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
     # Keep a single axis in the slider preview to ensure both traces render together
 
 
-    # -------------------- Titles & layout --------------------
-    # TOP title (Temperature)
-    fig.add_annotation(
-        text=f"{agg} Temperature — comfort-aware",
-        x=0, xref="paper", xanchor="left",
-        y=1.06, yref="y domain", yanchor="bottom",   # <-- was "y1 domain"
-        showarrow=False, font=dict(size=16)
-    )
-    # BOTTOM title (RH)
-    # Title for the BOTTOM (Relative Humidity) subplot
-    fig.add_annotation(
-        text=f"{agg} Relative Humidity — comfort-aware",
-        x=0, xref="paper", xanchor="left",
-        y=1.0, yref="y2 domain", yanchor="bottom",
-        yshift=22,                    # <-- lifts the title above the buttons
-        showarrow=False, font=dict(size=16)
-    )
-
-
-
-    fig.update_layout(
-        height=850,
-        legend=dict(
-            orientation="h",
-            x=0, xanchor="left",
-            y=1.33, yanchor="top",
-            bgcolor="rgba(0,0,0,0)",
-            font=dict(size=13),
-            itemsizing="constant"
-        ),
-        margin=dict(l=110, r=30, t=165, b=115),
-        hovermode="x unified",
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        bargap=0.12,
-        uirevision="temp_rh_ref_clean"
-    )
-
-
-
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     # ==================== HUMIDITY BAR CHART ====================
@@ -3869,25 +3823,124 @@ if effective_page == "☀️ Solar Analysis":
         hour_stride: int = 1,
         show_labels: bool = True,
         label_every: int = 1,
+        marker_every: int = 1,
+        camera_eye: Optional[Dict[str, float]] = None,
     ):
         # Full celestial sphere + sun paths for seasonal dates and the selected date.
         fig = go.Figure()
 
-        # --- Sphere surface ---
-        theta = np.linspace(0, 2 * np.pi, 80)
-        phi = np.linspace(0, np.pi, 80)
+        # --- Ground disk + light dome surface ---
+        grid_xy = np.linspace(-1.05, 1.05, 40)
+        gx, gy = np.meshgrid(grid_xy, grid_xy)
+        gz = np.zeros_like(gx)
+        fig.add_trace(go.Surface(
+            x=gx, y=gy, z=gz,
+            showscale=False,
+            colorscale=[[0, "#1f2937"], [1, "#111827"]],
+            opacity=0.08,
+            hoverinfo="skip",
+            name=None,
+            showlegend=False,
+        ))
+
+        theta = np.linspace(0, 2 * np.pi, 64)
+        phi = np.linspace(0, np.pi, 32)
         th, ph = np.meshgrid(theta, phi)
         x_s = np.sin(ph) * np.cos(th)
         y_s = np.sin(ph) * np.sin(th)
         z_s = np.cos(ph)
         fig.add_trace(go.Surface(
             x=x_s, y=y_s, z=z_s,
-            opacity=0.15,
-            colorscale=[[0, "#4c4c4c"], [1, "#2f2f2f"]],
+            opacity=0.04,
+            colorscale=[[0, "#334155"], [1, "#0f172a"]],
             showscale=False,
-            lighting=dict(ambient=1, diffuse=0.2, specular=0),
+            lighting=dict(ambient=0.8, diffuse=0.2, specular=0),
             hoverinfo="skip",
-            name="Celestial sphere"
+            name=None,
+            showlegend=False,
+        ))
+
+        # Helper geometry: horizon ring, altitude rings, azimuth spokes, cardinal labels
+        def _ring_points(alt_deg: float, num=180):
+            az = np.linspace(0, 360, num, endpoint=False)
+            alt = np.full_like(az, alt_deg)
+            az_r = np.deg2rad(az)
+            alt_r = np.deg2rad(alt)
+            x = np.cos(alt_r) * np.sin(az_r)
+            y = np.cos(alt_r) * np.cos(az_r)
+            z = np.sin(alt_r)
+            return x, y, z
+
+        # Horizon ring
+        hx, hy, hz = _ring_points(0)
+        fig.add_trace(go.Scatter3d(
+            x=hx, y=hy, z=hz,
+            mode="lines",
+            line=dict(color="rgba(255,255,255,0.2)", width=2.2),
+            name=None,
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+        # Altitude rings every 15° with labels placed at az=180° (south)
+        for alt_deg in range(15, 90, 15):
+            rx, ry, rz = _ring_points(alt_deg)
+            fig.add_trace(go.Scatter3d(
+                x=rx, y=ry, z=rz,
+                mode="lines",
+                line=dict(color="rgba(255,255,255,0.12)", width=1.1),
+                name=None,
+                showlegend=False,
+                hoverinfo="skip",
+            ))
+            alt_r = np.deg2rad(alt_deg)
+            az_r = np.deg2rad(180)
+            lx = 1.02 * np.cos(alt_r) * np.sin(az_r)
+            ly = 1.02 * np.cos(alt_r) * np.cos(az_r)
+            lz = np.sin(alt_r)
+            fig.add_trace(go.Scatter3d(
+                x=[lx], y=[ly], z=[lz],
+                mode="text",
+                text=[f"{alt_deg}°"],
+                textposition="middle center",
+                textfont=dict(size=10, color="rgba(230,230,230,0.65)"),
+                name=None,
+                showlegend=False,
+                hoverinfo="skip",
+            ))
+
+        # Azimuth spokes every 30° (cardinals emphasized)
+        for az_deg in range(0, 360, 30):
+            az_r = np.deg2rad(az_deg)
+            x0 = 0; y0 = 0; z0 = 0
+            x1 = np.sin(az_r); y1 = np.cos(az_r); z1 = 0
+            is_cardinal = az_deg % 90 == 0
+            fig.add_trace(go.Scatter3d(
+                x=[x0, x1], y=[y0, y1], z=[z0, z1],
+                mode="lines",
+                line=dict(color="rgba(255,255,255,{:.2f})".format(0.22 if is_cardinal else 0.1), width=2.2 if is_cardinal else 1.2),
+                name=None,
+                showlegend=False,
+                hoverinfo="skip",
+            ))
+
+        # Cardinal labels on horizon
+        cardinals = {
+            "N": (0, 1.08, 0),   # az=0 -> y positive
+            "E": (1.08, 0, 0),   # az=90 -> x positive
+            "S": (0, -1.08, 0),  # az=180 -> y negative
+            "W": (-1.08, 0, 0),  # az=270 -> x negative
+        }
+        fig.add_trace(go.Scatter3d(
+            x=[v[0] for v in cardinals.values()],
+            y=[v[1] for v in cardinals.values()],
+            z=[v[2] for v in cardinals.values()],
+            mode="text",
+            text=list(cardinals.keys()),
+            textposition="middle center",
+            textfont=dict(color="rgba(230,230,230,0.8)", size=13),
+            name=None,
+            showlegend=False,
+            hoverinfo="skip",
         ))
 
         def _sunpath_for(ts: pd.Timestamp, color: str, label: str):
@@ -3902,17 +3955,22 @@ if effective_page == "☀️ Solar Analysis":
             fig.add_trace(go.Scatter3d(
                 x=x, y=y, z=z,
                 mode="lines",
-                line=dict(width=3, color=color),
+                line=dict(width=2, color=color),
                 name=label,
                 hovertemplate="%{customdata[0]:.1f}° az<br>%{customdata[1]:.1f}° alt<extra></extra>",
                 customdata=np.c_[df["azimuth"].values, df["elevation"].values],
             ))
 
         # seasonal arcs (full 24h)
-        season_days = [(12,21,"#2D7DD2"), (3,21,"#00B0F0"), (6,21,"#FF6B3D"), (9,21,"#FFA14A")]
-        for m, d, col in season_days:
+        season_days = [
+            (12, 21, "#2D7DD2", "Dec 21"),
+            (3, 21, "#00B0F0", "Mar 21"),
+            (6, 21, "#FF6B3D", "Jun 21"),
+            (9, 21, "#FFA14A", "Sep 21"),
+        ]
+        for m, d, col, label in season_days:
             ts = pd.Timestamp(year=date.year, month=m, day=d, tz=site.tz)
-            _sunpath_for(ts, col, f"{ts:%b %d}")
+            _sunpath_for(ts, col, label)
 
         # selected day: hourly positions (solar time labels + data-driven colors)
         df = solar_positions(site, date)
@@ -3920,108 +3978,123 @@ if effective_page == "☀️ Solar Analysis":
             df = _with_solar_time(df, site)
             # subsample per requested hour stride (keep first row)
             df = df.iloc[::max(1, int(hour_stride))]
+            # keep marker cadence by hour modulo marker_every
+            df = df[df.index.hour % max(1, int(marker_every)) == 0]
 
             color_series = None
             color_title = None
             cmin = None
             cmax = None
-            colorscale = None
+            colorscale = "Cividis"
             if epw is not None:
                 if color_var == "temperature":
                     color_series = _nearest_epw_by_solar_time(epw, df["solar_time"], ["temp_air","DryBulb","Dry_Bulb","drybulb","Temperature"])
                     color_title = "Dry Bulb (°C)"
-                    cmin, cmax = -10, 40
-                    colorscale = "RdYlBu_r"
+                    cmin, cmax = None, None
                 elif color_var == "solar":
                     color_series = _nearest_epw_by_solar_time(epw, df["solar_time"], ["glohorrad","ghi","global_horiz","global_horizontal","solar","radiation"])
                     color_title = "Solar Radiation (W/m²)"
-                    cmin, cmax = 0, 1000
-                    colorscale = "YlOrRd"
+                    cmin, cmax = None, None
                 elif color_var == "humidity":
                     color_series = _nearest_epw_by_solar_time(epw, df["solar_time"], ["relhum","relative_humidity","rh"])
                     color_title = "Relative Humidity (%)"
-                    cmin, cmax = 0, 100
-                    colorscale = "PuBuGn"
+                    cmin, cmax = None, None
                 elif color_var == "wind":
                     color_series = _nearest_epw_by_solar_time(epw, df["solar_time"], ["windspd","wind_speed","wspd","wind"])
                     color_title = "Wind Speed (m/s)"
-                    cmin, cmax = 0, 10
-                    colorscale = "Blues"
+                    cmin, cmax = None, None
             if color_series is not None:
                 color_series = pd.to_numeric(color_series, errors="coerce")
                 df["color_val"] = color_series
+                finite_vals = df["color_val"].replace([np.inf, -np.inf], np.nan).dropna()
+                if not finite_vals.empty:
+                    low, high = np.percentile(finite_vals, [5, 95])
+                    if low == high:
+                        high = low + 1e-6
+                    cmin, cmax = low, high
 
             az, alt = np.deg2rad(df["azimuth"].values), np.deg2rad(df["elevation"].values)
             sx = np.cos(alt) * np.sin(az)
             sy = np.cos(alt) * np.cos(az)
             sz = np.sin(alt)
 
-            colors = None
-            labels = []
-            if "color_val" in df.columns:
-                colors = df["color_val"].to_numpy()
-            if show_labels:
-                for i, ts in enumerate(df.index):
-                    if i % max(1, int(label_every)) == 0:
-                        val = df.iloc[i].get("color_val", np.nan)
-                        base_title = (color_title.split('(')[0].strip() if color_title else "Value")
-                        val_txt = "" if pd.isna(val) else f" | {base_title}: {val:.1f}"
-                        labels.append(f"{pd.Timestamp(df.iloc[i]['solar_time']).strftime('%d %b %H:%M')}{val_txt}")
-                    else:
-                        labels.append(None)
+            path_customdata = np.c_[df["azimuth"].values, df["elevation"].values]
+
+            colors = df["color_val"].to_numpy() if "color_val" in df.columns else None
+            unit = "" if color_title is None else color_title.split("(")[-1].replace(")", "")
+            local_times = pd.to_datetime(df["solar_time"])
+            if local_times.dt.tz is None:
+                local_times = local_times.dt.tz_localize(site.tz)
             else:
-                labels = [None] * len(df)
+                local_times = local_times.dt.tz_convert(site.tz)
+            date_strs = local_times.dt.strftime("%Y-%m-%d").to_numpy()
+            time_strs = local_times.dt.strftime("%H:%M").to_numpy()
+            value_labels = []
+            if colors is not None:
+                for v in colors:
+                    if pd.isna(v):
+                        value_labels.append("n/a")
+                    else:
+                        suffix = unit.strip()
+                        value_labels.append(f"{v:.1f} {suffix}" if suffix else f"{v:.1f}")
+            else:
+                value_labels = ["n/a"] * len(df)
 
             fig.add_trace(go.Scatter3d(
                 x=sx, y=sy, z=sz,
-                mode="markers",
+                mode="lines",
+                line=dict(width=4, color="#fbbf24"),
+                name="Selected day",
+                hoverinfo="skip",
+                customdata=path_customdata,
+                showlegend=True,
+            ))
+
+            every = max(1, int(label_every))
+            text_labels = []
+            if show_labels:
+                for i, t in enumerate(time_strs):
+                    text_labels.append(t if i % every == 0 else "")
+            else:
+                text_labels = [""] * len(time_strs)
+
+            fig.add_trace(go.Scatter3d(
+                x=sx, y=sy, z=sz,
+                mode="markers+text" if show_labels else "markers",
+                text=text_labels,
+                textposition="top center",
+                textfont=dict(size=11, color="rgba(240,240,240,0.92)"),
                 marker=dict(
-                    size=4,
-                    color=colors if colors is not None else "#f59e0b",
-                    colorscale=colorscale,
+                    size=9,
+                    color=colors if colors is not None else "#fbbf24",
+                    colorscale=colorscale or "Cividis",
                     cmin=cmin,
                     cmax=cmax,
-                    showscale=colors is not None,
-                    colorbar=dict(title=color_title) if colors is not None else None,
-                    line=dict(width=0.8, color="rgba(255,255,255,0.6)"),
+                    showscale=bool(colors is not None),
+                    colorbar=(dict(title=color_title or "Value", thickness=12, len=0.55, x=1.03) if colors is not None else None),
+                    line=dict(width=1.8, color="rgba(255,255,255,0.95)"),
                     symbol="circle",
-                    opacity=0.9,
+                    opacity=0.96,
                 ),
-                line=dict(width=0, color="rgba(0,0,0,0)"),
-                name=f"{date:%b %d}",
-                text=labels,
-                hovertemplate="<b>%{text}</b><br>Az %{customdata[0]:.1f}° · Alt %{customdata[1]:.1f}°<extra></extra>",
-                customdata=np.c_[df["azimuth"].values, df["elevation"].values],
+                name="Hour markers",
+                hovertemplate="Local %{customdata[1]}<br>Az %{customdata[2]:.1f}° · Alt %{customdata[3]:.1f}°<br>%{customdata[4]}<extra></extra>",
+                customdata=np.c_[date_strs, time_strs, df["azimuth"].values, df["elevation"].values, value_labels],
+                showlegend=False,
             ))
 
             if show_rays:
-                for x, y, z in zip(sx, sy, sz):
-                    fig.add_trace(go.Scatter3d(x=[0, x], y=[0, y], z=[0, z], mode="lines",
-                                               line=dict(width=1, color="rgba(200,200,200,0.65)"),
-                                               showlegend=False, hoverinfo="skip"))
-
-        # Cardinal markers
-        fig.add_trace(go.Scatter3d(
-            x=[0, 1, -1, 0, 0, 0, 0],
-            y=[0, 0, 0, 1, -1, 0, 0],
-            z=[0, 0, 0, 0, 0, 1, -1],
-            mode="text",
-            text=["", "E", "W", "N", "S", "Up", "Down"],
-            textposition="middle center",
-            textfont=dict(color="#d1d5db", size=12),
-            showlegend=False,
-            hoverinfo="skip"
-        ))
+                # Rays suppressed to reduce clutter
+                pass
 
         fig.update_layout(
-            height=720,
-            margin=dict(l=10, r=10, t=50, b=10),
-            title=f"Sun Path (3D) • {date:%b %d, %Y}",
-            title_font=dict(color="#e5e7eb", size=18),
+            height=750,
+            margin=dict(l=0, r=0, t=0, b=0),
+            title_text="",
+            legend_title_text="",
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
-                y=1.08,
+                y=1.02,
                 xanchor="center",
                 x=0.5,
                 bgcolor="rgba(13,17,23,0.85)",
@@ -4030,14 +4103,23 @@ if effective_page == "☀️ Solar Analysis":
                 font=dict(color="#e5e7eb", size=12)
             ),
             scene=dict(
-                xaxis=dict(visible=False),
-                yaxis=dict(visible=False),
-                zaxis=dict(visible=False),
-                aspectmode="data",
+                xaxis=dict(range=[-1.1, 1.1], visible=False),
+                yaxis=dict(range=[-1.1, 1.1], visible=False),
+                zaxis=dict(range=[0.0, 1.05], visible=False),
+                aspectmode="manual",
+                aspectratio=dict(x=1, y=1, z=0.6),
                 bgcolor="#0d1117",
             ),
-            plot_bgcolor="#0d1117", paper_bgcolor="#0d1117", font=dict(color="#e5e7eb"),
-            uirevision="sunpath_3d_arch"
+            scene_camera=dict(
+                eye=camera_eye if camera_eye is not None else dict(x=1.6, y=1.6, z=1.1),
+                up=dict(x=0, y=0, z=1)
+            ),
+            plot_bgcolor="#0d1117",
+            paper_bgcolor="#0d1117",
+            font=dict(color="#e5e7eb"),
+            dragmode="orbit",
+            scene_dragmode="orbit",
+            uirevision="sunpath3d"
         )
 
         return fig
@@ -4321,19 +4403,44 @@ if effective_page == "☀️ Solar Analysis":
     hour_stride = c5.slider("Show sun every N hours", min_value=1, max_value=4, value=1, step=1)
     color_var = option_map.get(color_choice_label, "temperature")
 
-    c6, c7 = st.columns([1,1])
-    show_labels = c6.checkbox("Show labels", value=True)
-    label_every = c7.number_input("Label every Nth hour", min_value=1, max_value=24, value=1, step=1)
+    show_labels = st.checkbox("Show labels on sun markers", value=True)
+    marker_every = st.slider("Show sun markers every N hours", min_value=1, max_value=4, value=1, step=1)
+    label_every = marker_every
 
 
 
 
     sel_ts = pd.Timestamp(sel_date, tz=tzinfo)
+    display_date = sel_ts.strftime("%b %d, %Y")
 
     fig2d = sunpath_plotly_2d(site, sel_ts, proj)
     st.plotly_chart(fig2d, use_container_width=True, config={"displayModeBar": True})
 
     if show3d:
+        st.subheader(f"Sun Path (3D) — {display_date}")
+        view_state = st.session_state.get("sunpath3d_view", "default")
+        v1, v2, v3, v4 = st.columns(4)
+        if v1.button("Reset view"):
+            view_state = "default"
+        if v2.button("Top"):
+            view_state = "top"
+        if v3.button("South-facing"):
+            view_state = "south"
+        if v4.button("East-facing"):
+            view_state = "east"
+        st.session_state["sunpath3d_view"] = view_state
+
+        def _camera_eye_for(view: str) -> Dict[str, float]:
+            base = {
+                "default": dict(x=1.25, y=1.25, z=0.9),
+                "top": dict(x=0.0, y=0.0, z=2.2),
+                "south": dict(x=0.0, y=-2.0, z=1.2),
+                "east": dict(x=2.0, y=0.0, z=1.2),
+            }.get(view, dict(x=1.25, y=1.25, z=0.9))
+            return base
+
+        camera_eye = _camera_eye_for(view_state)
+
         fig3d = sunpath_plotly_3d(
             site, sel_ts,
             show_rays=True,
@@ -4343,12 +4450,22 @@ if effective_page == "☀️ Solar Analysis":
             hour_stride=hour_stride,
             show_labels=show_labels,
             label_every=label_every,
+            marker_every=marker_every,
+            camera_eye=camera_eye,
         )
         # Coerce common non-figure returns and guard against bad types before plotting.
         if isinstance(fig3d, (dict, list)):
             fig3d = go.Figure(fig3d)
         if isinstance(fig3d, go.Figure):
-            st.plotly_chart(fig3d, use_container_width=True, config={"displayModeBar": True})
+            st.plotly_chart(
+                fig3d,
+                use_container_width=True,
+                config={
+                    "scrollZoom": True,
+                    "displayModeBar": True,
+                    "displaylogo": False,
+                },
+            )
             st.caption("Sun position colored by selected environmental variable.")
         else:
             st.warning(f"3D sun path unavailable (got {type(fig3d).__name__}).")
@@ -4356,6 +4473,9 @@ if effective_page == "☀️ Solar Analysis":
 
     # ======================== PLOT: CARTESIAN (PVSyst-style) ========================
     st.markdown("#### Cartesian sun path (PVSyst style)")
+
+    # Only temperature mode currently used for coloring (keeps prior behavior explicit)
+    color_mode = "temperature"
 
     # ---- Controls (feel free to move to a UI row above) ----
     cA, cB, cC, cD = st.columns([1,1,1,1])
@@ -4601,38 +4721,15 @@ if effective_page == "☀️ Solar Analysis":
             labels={"month":"Month", "pct":"% of hours", "category":""},
             title="Cloud coverage by month (stacked frequency)"
         )
-        fig_cloud.update_xaxes(
-            tickmode="array",
-            tickvals=list(range(1,13)),
-            ticktext=[pd.Timestamp(2001, m, 1).strftime("%b") for m in range(1,13)]
-        )
         st.plotly_chart(fig_cloud, use_container_width=True)
-        st.caption("Total sky cover reported in tenths; categories collapsed to match Clima’s visualization.")
 
-        # Customizable daily scatter & annual heatmap (any variable)
-    st.markdown("---")
-    st.markdown("#### Daily & hourly maps")
-    # Pick a variable to visualize
-    choices = []
-    labelmap = {}
-    if "glohorrad" in cdf: choices += ["GHI (Wh/m²)"]; labelmap["GHI (Wh/m²)"]="glohorrad"
-    if "difhorrad" in cdf: choices += ["DHI (Wh/m²)"]; labelmap["DHI (Wh/m²)"]="difhorrad"
-    if "dirnorrad" in cdf: choices += ["DNI (Wh/m²)"]; labelmap["DNI (Wh/m²)"]="dirnorrad"
-    if "relhum"    in cdf: choices += ["Relative Humidity (%)"]; labelmap["Relative Humidity (%)"]="relhum"
-    if "drybulb"   in cdf: choices += ["Dry-bulb (°C)"]; labelmap["Dry-bulb (°C)"]="drybulb"
-    if "totskycvr" in cdf: choices += ["Total Sky Cover (tenths)"]; labelmap["Total Sky Cover (tenths)"]="totskycvr"
-    if not choices:
-        st.info("No suitable variables found for maps.")
-    else:
-        vlabel = st.selectbox("Variable", choices, index=0)
-        vcol   = labelmap[vlabel]
-        # ---- Daily scatter (hour vs value, faceted by month) ----
-        # ---- Daily scatter (hour vs value, faceted by month) ----
-        scat = cdf[[vcol]].dropna().copy()
+        # Hourly scatter faceted by month with smoothed mean overlay
+        vcol = "totskycvr"
+        vlabel = "Total sky cover (tenths)"
+        scat = cdf[[vcol]].copy()
         scat["month"] = scat.index.month
-        scat["hour"]  = scat.index.hour
-        import plotly.express as px
-        import plotly.graph_objects as go
+        scat["hour"] = scat.index.hour
+
         fig_sc = px.scatter(
             scat,
             x="hour",
@@ -4642,7 +4739,7 @@ if effective_page == "☀️ Solar Analysis":
             opacity=0.35,
             labels={"hour": "Hour", vcol: vlabel},
             title=f"Daily scatter by month — {vlabel}",
-            height=650
+            height=650,
         )
         # Build smoothed “monthly mean by hour” curve to overlay on each facet
         curve = (
