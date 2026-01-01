@@ -1958,7 +1958,8 @@ def get_color_scale_for_metric(metric_name: str) -> Tuple[List[str], List[str]]:
         colors = ["#1a1a2e", "#3498db", "#f39c12", "#e74c3c", "#fff700"]
         labels = ["<100", "100–300", "300–500", "500–700", ">700"]
     elif any(x in metric_lower for x in ["humidity", "rh", "relhum"]):
-        colors = ["#e74c3c", "#f39c12", "#3498db", "#1a472a"]
+        # Blue-based palette for humidity bands
+        colors = ["#d8eaff", "#7fb6ff", "#2f80d3", "#1b1c70"]
         labels = ["<40%", "40–60%", "60–80%", ">80%"]
     elif any(x in metric_lower for x in ["wind", "speed", "wspd"]):
         colors = ["#3498db", "#2ecc71", "#e74c3c"]
@@ -1987,13 +1988,15 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
     fig = make_subplots(
         rows=n_strips, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.04,
+        vertical_spacing=0.06,
         subplot_titles=[f"{name}" for name, (_, info) in valid_strips.items()],
     )
     
     month_doy, month_letters = month_labels_at_midpoints(leap_year=False)
     month_boundaries = month_boundaries_doy(leap_year=False)
     
+    heatmap_indices = []
+
     for row, (strip_name, (pivot_binned, info)) in enumerate(valid_strips.items(), start=1):
         if pivot_binned.empty:
             continue
@@ -2002,6 +2005,22 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
         colors_default, labels_default = get_color_scale_for_metric(info["metric"])
         labels = info.get("labels", labels_default)
         colors = info.get("colors", colors_default[: len(labels)])
+
+        # Gentle DOY smoothing to reduce barcode noise (visual-only)
+        if info["metric"] == "Wind Direction":
+            def _rolling_mode(mat: pd.DataFrame, w: int = 7) -> pd.DataFrame:
+                out = mat.copy()
+                half = w // 2
+                for i in range(mat.shape[1]):
+                    lo = max(0, i - half)
+                    hi = min(mat.shape[1], i + half + 1)
+                    window = mat.iloc[:, lo:hi].mode(axis=1)
+                    out.iloc[:, i] = window.iloc[:, 0]
+                return out
+
+            pivot_plot = _rolling_mode(pd.DataFrame(pivot_binned).copy(), w=7)
+        else:
+            pivot_plot = pd.DataFrame(pivot_binned).copy().rolling(window=5, axis=1, center=True, min_periods=1).mean()
         
         hover_labels = info.get("hover_labels")
         customdata = hover_labels if hover_labels is not None else None
@@ -2011,16 +2030,33 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
             else "DoY: %{x}<br>HoD: %{y}<br>Value: %{z:.2f}<extra></extra>"
         )
 
+        # Colorbar ticks aligned to bands (or custom for wind direction)
+        trace_colorbar = None
+        trace_showscale = False
+
+        # position colorbar per subplot to avoid overlap
+        axis_key = "yaxis" if row == 1 else f"yaxis{row}"
+        try:
+            domain = fig.layout[axis_key].domain
+        except Exception:
+            domain = None
+        if domain:
+            y_center = (domain[0] + domain[1]) / 2.0
+
         trace = go.Heatmap(
-            z=pivot_binned.values,
+            z=pivot_plot.values,
             x=pivot_binned.columns,  # DOY 1..366
             y=pivot_binned.index,     # HOD 0..23
             colorscale=list(zip([i / (len(colors) - 1) for i in range(len(colors))], colors)),
-            showscale=False,
+            showscale=trace_showscale,
+            colorbar=trace_colorbar,
             customdata=customdata,
             hovertemplate=hovertemplate,
+            showlegend=False,
+            zsmooth=False if info["metric"] == "Wind Direction" else None,
         )
         fig.add_trace(trace, row=row, col=1)
+        heatmap_indices.append((len(fig.data) - 1, trace_showscale))
         
         # Configure y-axis (HOD)
         fig.update_yaxes(
@@ -2028,6 +2064,8 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
             tickmode="array",
             tickvals=[0, 12, 23],
             ticktext=["12:00am", "noon", "11:59pm"],
+            gridcolor="rgba(255,255,255,0.05)",
+            gridwidth=0.5,
             row=row, col=1,
         )
         # Add vertical month boundaries (per-row so lines align with each subplot)
@@ -2044,12 +2082,18 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
         tickfont=dict(size=11),
     )
 
+    # Ensure no heatmap shows a colorbar (discrete legends only)
+    for idx, _ in heatmap_indices:
+        if hasattr(fig.data[idx], "showscale"):
+            fig.data[idx].showscale = False
+
     # Add per-strip discrete legend swatches as shapes + annotations placed in paper coordinates
     # Reserve space on the right by increasing right margin
+    # Tight legend band immediately right of each subplot
     legend_x0 = 1.02
-    legend_x1 = 1.06
-    legend_label_x = 1.08
-    fig.update_layout(margin=dict(l=80, r=200, t=80, b=60))
+    legend_x1 = 1.04
+    legend_label_x = 1.045
+    fig.update_layout(margin=dict(l=80, r=160, t=80, b=60))
 
     # For each strip, draw legend boxes at appropriate paper y positions
     for idx, (strip_name, (pivot_binned, info)) in enumerate(valid_strips.items(), start=1):
@@ -2069,17 +2113,17 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
         y_low, y_high = domain[0], domain[1]
         center = (y_low + y_high) / 2.0
         n_labels = len(labels)
-        height_total = (y_high - y_low) * 0.8
-        height_per = min(0.03, height_total / max(1, n_labels))
+        height_total = (y_high - y_low) * 0.78
+        height_per = min(0.028, height_total / max(1, n_labels))
         # stack labels vertically centered at `center`
         for i, (col_hex, lbl) in enumerate(zip(colors, labels)):
             y0 = center + ( (n_labels - 1) / 2.0 - i) * height_per - (height_per / 2.0)
             y1 = y0 + height_per * 0.9
             # Add rectangle shape
             fig.add_shape(type="rect", xref="paper", x0=legend_x0, x1=legend_x1, yref="paper", y0=y0, y1=y1, fillcolor=col_hex, line=dict(width=0))
-            # Add label annotation
+            # Add label annotation (tight alignment beside swatch)
             fig.add_annotation(x=legend_label_x, y=(y0 + y1) / 2.0, xref="paper", yref="paper",
-                               text=lbl, showarrow=False, align="left", font=dict(size=10))
+                       text=lbl, showarrow=False, align="left", font=dict(size=10), xanchor="left", yanchor="middle")
 
     fig.update_layout(
         height=220 * n_strips,
@@ -2713,6 +2757,73 @@ if cdf is not None:
                     if not pivot_binned.empty:
                         heatmap_dict["Wind Speed"] = (pivot_binned, info)
 
+                # NEW: Wind Direction heatmap (sector mode per hod/doy)
+                if "wind_direction" in cdf.columns or "winddir" in cdf.columns or "wind_dir" in cdf.columns:
+                    dir_col = get_metric_column(cdf, ["wind_direction", "winddir", "wind_dir", "wd", "wdir"])
+                    if dir_col:
+                        dir_series = pd.to_numeric(cdf[dir_col], errors="coerce")
+                        dir_series = dir_series.mask(dir_series >= 999)  # drop 999 sentinels
+                        dir_series = dir_series.dropna()
+                        if not dir_series.empty:
+                            work_dir = pd.DataFrame({"val": dir_series})
+                            work_dir["hod"] = work_dir.index.hour
+                            work_dir["doy"] = work_dir.index.dayofyear
+
+                            sector_names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+                            sector_edges = [22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5]
+
+                            def dir_to_sector_code(deg: float) -> float:
+                                if pd.isna(deg):
+                                    return np.nan
+                                d = deg % 360.0
+                                if d >= 337.5 or d < 22.5:
+                                    return 0
+                                elif d < 67.5:
+                                    return 1
+                                elif d < 112.5:
+                                    return 2
+                                elif d < 157.5:
+                                    return 3
+                                elif d < 202.5:
+                                    return 4
+                                elif d < 247.5:
+                                    return 5
+                                elif d < 292.5:
+                                    return 6
+                                else:
+                                    return 7
+
+                            work_dir["sector"] = work_dir["val"].apply(dir_to_sector_code)
+                            work_dir = work_dir.dropna(subset=["sector"])
+
+                            def sector_mode(s: pd.Series) -> float:
+                                if s.empty:
+                                    return np.nan
+                                m = s.mode()
+                                return m.iat[0] if not m.empty else np.nan
+
+                            sector_mode_series = (
+                                work_dir.groupby(["hod", "doy"])["sector"].agg(lambda s: s.mode().iat[0] if not s.mode().empty else np.nan)
+                            )
+                            pivot_dir = sector_mode_series.unstack("doy")
+                            pivot_dir = pivot_dir.reindex(index=range(24), columns=range(1, 367))
+
+                            dir_colors = ["#4c6fff", "#3fb3ff", "#36d1a8", "#8bd36b", "#f6c445", "#f08c42", "#e15b9a", "#9d6bff"]
+                            # map codes back to compass labels for hover
+                            label_grid = pivot_dir.applymap(lambda v: sector_names[int(v)] if pd.notna(v) else np.nan)
+
+                            info_dir = {
+                                "metric": "Wind Direction",
+                                "col": dir_col,
+                                "labels": sector_names,
+                                "colors": dir_colors,
+                                "thresholds": [],
+                                "hover_labels": label_grid,
+                                "show_colorscale": False,  # compass legend rendered separately
+                                "colorbar": None,
+                            }
+                            heatmap_dict["Wind Direction"] = (pivot_dir, info_dir)
+
                 if not heatmap_dict:
                     st.info("No metric data available for heatmap generation.")
                 else:
@@ -2752,8 +2863,12 @@ if cdf is not None:
                                     s = pd.to_numeric(export_df[col], errors="coerce").dropna()
                                     if s.empty:
                                         continue
-                                    bins = [-np.inf] + info.get("thresholds", []) + [np.inf]
+                                    thresholds_list = info.get("thresholds", [])
+                                    bins = [-np.inf] + thresholds_list + [np.inf]
                                     labels = info.get("labels", [])
+                                    if len(labels) != len(bins) - 1:
+                                        labels = _labels_from_thresholds(thresholds_list, "")
+                                    assert len(labels) == len(bins) - 1, (len(labels), len(bins))
                                     cat = pd.cut(s, bins=bins, labels=labels, right=False)
                                     for ts, val, bl in zip(cat.index, s.values, cat.astype(object).values):
                                         long_records.append({
