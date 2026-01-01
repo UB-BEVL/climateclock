@@ -21,6 +21,8 @@ from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 import pvlib
+# local modules
+from metrics import comfort_energy as ce
 # Patch platform processor to avoid Windows WMI KeyError during h5py/pvlib import
 import platform as _platform
 _orig_proc_get = getattr(getattr(_platform, "_Processor", None), "get", None)
@@ -2126,6 +2128,8 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
                        text=lbl, showarrow=False, align="left", font=dict(size=10), xanchor="left", yanchor="middle")
 
     fig.update_layout(
+        autosize=False,
+        width=1200,
         height=220 * n_strips,
         showlegend=False,
         title_text="Annual Diurnal Resource Heatmaps",
@@ -2271,7 +2275,6 @@ if cdf is not None:
             if highlights:
                 st.markdown("#### 💡 Key takeaways")
                 st.markdown("\n".join(f"- {text}" for text in highlights))
-
         with comfort_tab:
             st.markdown("### 😌 Thermal Comfort & Loads")
             st.caption("Explore how often indoor comfort bands are met, where overheating or cold stress creep in, and how heating/cooling loads shift through the year.")
@@ -2839,7 +2842,7 @@ if cdf is not None:
                             pass
                         fig.add_annotation(x=-0.06, y=0.5, xref='paper', yref='paper', text='Time of Day', showarrow=False, textangle=-90, font=dict(size=11))
 
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, use_container_width=False, config={"responsive": False})
 
                         # Downloads reflecting current thresholds
                         c1d, c2d = st.columns(2)
