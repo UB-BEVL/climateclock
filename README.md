@@ -63,7 +63,13 @@ How to Run
 ----------
 - Install dependencies: pip install -r requirements.txt
 - Launch app: streamlit run app.py
+- Optional (fixed port): streamlit run app.py --server.port 8502
 - Open the provided local URL in a browser.
+
+Notes
+-----
+- Large tables (e.g., Raw Data views) use `streamlit-aggrid` for paginated rendering to keep the browser responsive.
+   If `streamlit-aggrid` is not available, the app falls back to Streamlit's built-in `st.dataframe`.
 
 Tips
 ----

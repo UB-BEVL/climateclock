@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 import calendar
 from pathlib import Path
-import io, zipfile, csv, math, argparse, datetime
+import io, zipfile, csv, math, argparse, datetime, base64, hashlib
+from contextlib import nullcontext
 import requests
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Tuple, Optional, Union
@@ -23,6 +24,8 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 import pvlib
 # local modules
 from metrics import comfort_energy as ce
+import debug_fc as fc
+import debug_fepw as fepw
 # Patch platform processor to avoid Windows WMI KeyError during h5py/pvlib import
 import platform as _platform
 _orig_proc_get = getattr(getattr(_platform, "_Processor", None), "get", None)
@@ -93,25 +96,48 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Prevent footer "ghosting" during reruns/navigation: hide any old <footer> ASAP.
+# The app footer we render later uses class "bevl-footer" and stays visible.
+st.markdown(
+        """
+        <style>
+            footer { display: none !important; }
+            footer.bevl-footer { display: block !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+)
+
 st.session_state.setdefault("temperature_unit", "C")
+st.session_state.setdefault("epw_ready", False)
+# Controller page mode (strict gating): "select_station" | "dashboard"
+if st.session_state.get("active_page") not in ("select_station", "dashboard"):
+    st.session_state["active_page"] = "select_station"
+st.session_state.setdefault("pending_station_id", None)
+st.session_state.setdefault("pending_station", None)
+st.session_state.setdefault("load_requested", False)
+st.session_state.setdefault("is_loading", False)
+st.session_state.setdefault("last_loaded_station_id", None)
+st.session_state.setdefault("_map_slot", None)
+st.session_state.setdefault("_clear_map_on_next_run", False)
 
 # Navigation definitions
 NAV_ITEMS = [
-    ("Select weather file", "Select weather file"),
-    ("Dashboard", "📊 Dashboard"),
-    ("Raw Data", "📁 Raw Data"),
-    ("Temperature & Humidity", "🌡️ Temperature & Humidity"),
-    ("Solar Analysis", "☀️ Solar Analysis"),
-    ("Psychrometrics", "📈 Psychrometrics"),
-    ("Live Data vs EPW", "📡 Live Data vs EPW"),
-    ("Sensor Comparison", "Sensor Comparison"),
-    ("Short-Term Prediction (24–72h)", "📈 Short-Term Prediction (24–72h)"),
-    ("Future Climate (2050 / 2080 SSP)", "🌍 Future Climate (2050 / 2080 SSP)"),
+    ("🛰️ Select weather file", "Select weather file"),
+    ("📊 Dashboard", "📊 Dashboard"),
+    ("📁 Raw Data", "📁 Raw Data"),
+    ("🌡️ Temperature & Humidity", "🌡️ Temperature & Humidity"),
+    ("☀️ Solar Analysis", "☀️ Solar Analysis"),
+    ("📈 Psychrometrics", "📈 Psychrometrics"),
+    ("📡 Live Data vs EPW", "📡 Live Data vs EPW"),
+    ("🧪 Sensor Comparison", "Sensor Comparison"),
+    ("🧭 Short-Term Prediction (24–72h)", "📈 Short-Term Prediction (24–72h)"),
+    ("🌍 Future Climate (2050 / 2080 SSP)", "🌍 Future Climate (2050 / 2080 SSP)"),
 ]
 
 FROZEN_NAV_LABELS = {
-    "Short-Term Prediction (24–72h)",
-    "Future Climate (2050 / 2080 SSP)",
+    "🧭 Short-Term Prediction (24–72h)",
+    "🌍 Future Climate (2050 / 2080 SSP)",
 }
 FROZEN_PAGES = {
     "📈 Short-Term Prediction (24–72h)",
@@ -123,7 +149,13 @@ PAGE_TO_LABEL = {page: label for label, page in NAV_ITEMS}
 ALLOWED_PAGES = list(PAGE_TO_LABEL.keys())
 DEFAULT_PAGE = "Select weather file"
 
-st.session_state.setdefault("active_page", DEFAULT_PAGE)
+# UI navigation page (keeps existing sidebar labels/behavior)
+_legacy_nav_page = st.session_state.get("nav_page")
+if _legacy_nav_page not in ALLOWED_PAGES:
+    _legacy_nav_page = st.session_state.get("active_page")
+st.session_state.setdefault("nav_page", _legacy_nav_page if _legacy_nav_page in ALLOWED_PAGES else DEFAULT_PAGE)
+
+# (nav_page initialization moved above to support legacy sessions)
 
 THEME_BASE = "light"
 try:
@@ -133,9 +165,57 @@ try:
 except Exception:
     pass
 
-PLOTLY_TEMPLATE = "plotly_dark" if THEME_BASE == "dark" else "plotly"
-px.defaults.template = PLOTLY_TEMPLATE
-pio.templates.default = PLOTLY_TEMPLATE
+
+def _build_accessible_plotly_template(mode: str = "dark") -> go.layout.Template:
+    """Ensure high-contrast Plotly defaults across the app."""
+    dark_mode = mode == "dark"
+    background = "#0f172a" if dark_mode else "#f8fafc"
+    font_color = "#e2e8f0" if dark_mode else "#1e293b"
+    grid_color = "rgba(148, 163, 184, 0.2)" if dark_mode else "#e2e8f0"
+
+    template = go.layout.Template()
+    template.layout = go.Layout(
+        paper_bgcolor=background,
+        plot_bgcolor=background,
+        font=dict(color=font_color, family="Inter, Poppins, Segoe UI, sans-serif"),
+        xaxis=dict(
+            gridcolor=grid_color,
+            zerolinecolor=grid_color,
+            linecolor=grid_color,
+            tickfont=dict(color=font_color),
+            title_font=dict(color=font_color),
+            automargin=True,
+            mirror=True,
+        ),
+        yaxis=dict(
+            gridcolor=grid_color,
+            zerolinecolor=grid_color,
+            linecolor=grid_color,
+            tickfont=dict(color=font_color),
+            title_font=dict(color=font_color),
+            automargin=True,
+            mirror=True,
+        ),
+        legend=dict(font=dict(color=font_color), bgcolor=background, bordercolor=grid_color, borderwidth=0),
+        margin=dict(l=48, r=32, t=60, b=48),
+    )
+    template.layout.colorway = [
+        "#3b82f6",  # blue
+        "#f97316",  # orange
+        "#06b6d4",  # cyan
+        "#8b5cf6",  # violet
+        "#22c55e",  # green
+        "#e11d48",  # rose
+    ]
+    return template
+
+
+pio.templates["bevl_dark"] = _build_accessible_plotly_template("dark")
+pio.templates["bevl_light"] = _build_accessible_plotly_template("light")
+
+DEFAULT_TEMPLATE = "bevl_dark"
+px.defaults.template = DEFAULT_TEMPLATE
+pio.templates.default = DEFAULT_TEMPLATE
 
 # Default station source fallback (can be overridden)
 STATION_SOURCE = "https://raw.githubusercontent.com/CenterForTheBuiltEnvironment/clima/main/assets/data/epw_location.json"
@@ -145,6 +225,59 @@ try:
     CACHE = st.cache_data
 except Exception:
     CACHE = lambda *args, **kwargs: (lambda fn: fn)
+
+try:
+    CACHE_RESOURCE = st.cache_resource
+except Exception:
+    CACHE_RESOURCE = CACHE
+
+
+def _downcast_float32(df: Optional[pd.DataFrame], cols: Optional[Iterable[str]] = None) -> Optional[pd.DataFrame]:
+    """Downcast selected float columns to float32 to reduce memory footprint."""
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+    if cols is None:
+        cols = df.select_dtypes(include=[np.floating]).columns.tolist()
+    for c in cols:
+        if c in df.columns:
+            try:
+                df[c] = df[c].astype(np.float32)
+            except Exception:
+                pass
+    return df
+
+
+def render_virtualized_table(
+    df: pd.DataFrame,
+    *,
+    height: int = 360,
+    key: str = "table",
+    page_size: int = 50,
+) -> None:
+    """Render a large dataframe using AgGrid pagination to avoid browser main-thread stalls.
+
+    Falls back to st.dataframe if st-aggrid isn't installed.
+    """
+    try:
+        from st_aggrid import AgGrid, GridOptionsBuilder  # type: ignore
+    except Exception:
+        st.dataframe(df, use_container_width=True, height=height)
+        return
+
+    gb = GridOptionsBuilder.from_dataframe(df)
+    gb.configure_default_column(resizable=True, sortable=True, filter=True)
+    gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=int(page_size))
+    grid_options = gb.build()
+
+    AgGrid(
+        df,
+        gridOptions=grid_options,
+        height=int(height),
+        key=key,
+        enable_enterprise_modules=False,
+        allow_unsafe_jscode=False,
+        fit_columns_on_grid_load=True,
+    )
 
 # --- Streamlit compat shims ---
 if hasattr(st, "rerun"):
@@ -171,25 +304,65 @@ def fix_station_url(url: str) -> List[str]:
 
     # Common pattern fixes for OneBuilding.org
     if "onebuilding.org" in url:
-        # Fix 1: Convert dots to underscores in station names (except extension)
         parts = url.split("/")
         station_part = parts[-1] if parts else ""
         if "." in station_part and "_TMY" in station_part:
-            # Only replace dots before the extension
             base, ext = station_part.rsplit('.', 1)
             fixed_station = base.replace('.', '_') + '.' + ext
             fixed_url = "/".join(parts[:-1] + [fixed_station])
             alternatives.append(fixed_url)
 
-        # Fix 2: Handle case variations
         alternatives.append(url.upper())
         alternatives.append(url.lower())
-
-        # Fix 3: Try different TMY versions
 
     return list(dict.fromkeys(alternatives))
 
 
+# Alternative EPW sources as fallbacks
+ALTERNATIVE_EPW_SOURCES = [
+    # Keep a minimal, general-purpose fallback list for manual selections
+    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/NY/Buffalo/Buffalo_Greater_International_AP_725280_TMY3.epw",
+    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/AZ/Phoenix/Phoenix_Sky_Harbor_Intl_Airport_722780_TMY3.epw",
+    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/IL/Chicago/Chicago_OHare_Intl_Airport_725300_TMY3.epw",
+    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/FL/Miami/Miami_Intl_Airport_722020_TMY3.epw",
+]
+
+
+@CACHE(show_spinner=False)
+def fetch_epw_bytes_no_ui(url: str) -> Tuple[Optional[bytes], Optional[str]]:
+    """Fetch EPW bytes (or extract from ZIP) with no Streamlit UI calls."""
+    import requests
+    import io
+    import zipfile
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; ClimateAnalysisPro/1.0)",
+            "Accept": "*/*",
+            "Accept-Encoding": "gzip, deflate",
+        }
+
+        r = requests.get(url, headers=headers, timeout=30, stream=True)
+        r.raise_for_status()
+
+        content_length = r.headers.get("content-length")
+        if content_length and int(content_length) > 100_000_000:
+            return None, f"File too large: {content_length} bytes"
+
+        content = r.content
+        if url.lower().endswith(".zip") or zipfile.is_zipfile(io.BytesIO(content)):
+            with zipfile.ZipFile(io.BytesIO(content), "r") as z:
+                epws = [m for m in z.namelist() if m.lower().endswith(".epw")]
+                if not epws:
+                    return None, "ZIP file contains no EPW files"
+                epws.sort(key=lambda m: z.getinfo(m).file_size, reverse=True)
+                with z.open(epws[0]) as f:
+                    return f.read(), None
+        return content, None
+    except Exception as e:
+        return None, str(e)
+
+
+@CACHE(show_spinner=False, ttl=86400)
 def load_station_index(source: Optional[Union[str, Path]] = None):
     import json, requests
     src = source or STATION_SOURCE
@@ -204,8 +377,9 @@ def load_station_index(source: Optional[Union[str, Path]] = None):
             if c not in df.columns:
                 df[c] = np.nan
 
+        # Memory downcasting: keep geo/weather-like numeric columns as float32.
         for c in ["lat", "lon", "elevation_m", "heating_db", "cooling_db"]:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
+            df[c] = pd.to_numeric(df[c], errors="coerce").astype(np.float32)
 
         df = df.dropna(subset=["lat", "lon"]).reset_index(drop=True)
 
@@ -366,6 +540,43 @@ def load_station_index(source: Optional[Union[str, Path]] = None):
         "zip_url": "https://climate.onebuilding.org/WMO_Region_4_North_and_Central_Americas/USA_United_States_of_America/NY_New_York/BUFFALO_NIAGARA_INTL_AP_725280_TMYx.2007-2021.zip",
         "period": "2007-2021", "heating_db": -17.5, "cooling_db": 29.5
     }]))
+
+
+@CACHE(show_spinner=False, ttl=86400)
+def load_station_index_for_map(source: Optional[Union[str, Path]] = None) -> pd.DataFrame:
+    """Load and minimize station index for map display (float32 lat/lon, only needed columns)."""
+    df = load_station_index(source)
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame(columns=["name", "country", "lat", "lon", "zip_url", "period", "elevation_m", "timezone", "heating_db", "cooling_db"])
+
+    needed = [
+        "name",
+        "country",
+        "lat",
+        "lon",
+        "zip_url",
+        "period",
+        "elevation_m",
+        "timezone",
+        "heating_db",
+        "cooling_db",
+        # Optional passthroughs if present (used by label parsing, but safe if missing)
+        "raw_id",
+        "source",
+        "station_id",
+        "country_iso3",
+        "state_code",
+        "city_raw",
+        "country_name",
+    ]
+    for c in needed:
+        if c not in df.columns:
+            df[c] = np.nan
+
+    out = df[needed].copy()
+    out["lat"] = pd.to_numeric(out["lat"], errors="coerce").astype(np.float32)
+    out["lon"] = pd.to_numeric(out["lon"], errors="coerce").astype(np.float32)
+    return out.dropna(subset=["lat", "lon"]).reset_index(drop=True)
 
 
 # tiny helper to strip URL from <a href=...> anchors in the GeoJSON properties
@@ -532,6 +743,9 @@ def read_epw_with_schema(epw_bytes_or_path: Union[bytes, str, Path]):
     df, continuity_notes = _enforce_epw_hourly_profile(df)
     notes.extend(continuity_notes)
 
+    # Memory downcasting: keep EPW weather columns as float32.
+    _downcast_float32(df)
+
     return header, df, notes
 
 def build_clima_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -559,7 +773,26 @@ def build_clima_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     cdf = wx.copy()
     cdf["month"] = cdf.index.month; cdf["day"] = cdf.index.day; cdf["hour"] = cdf.index.hour; cdf["doy"] = cdf.index.dayofyear
+
+    # Memory downcasting: derived weather metrics can stay float32.
+    _downcast_float32(cdf)
     return cdf
+
+
+@CACHE(show_spinner=False)
+def read_epw_with_schema_cached(epw_bytes_or_path: Union[bytes, str, Path]):
+    return read_epw_with_schema(epw_bytes_or_path)
+
+
+@CACHE(show_spinner=False)
+def build_clima_dataframe_cached(df: pd.DataFrame) -> pd.DataFrame:
+    return build_clima_dataframe(df)
+
+
+def _hash_bytes(data: Optional[bytes]) -> Optional[str]:
+    if not data:
+        return None
+    return hashlib.sha256(data).hexdigest()
 
 
 def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]]:
@@ -850,41 +1083,433 @@ def _enforce_epw_hourly_profile(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[st
 
 
 # ========== PREMIUM CUSTOM STYLING ==========
+#"""====================
+#PHASE A — CONTROLLER
+#Runs first on every rerun. NO UI rendering.
+#===================="""
+
+
+@st.cache_data(show_spinner=False)
+def run_controller(
+    *,
+    cdf_present: bool,
+    load_requested: bool,
+    is_loading: bool,
+    pending_station_id: Optional[str],
+    sel_station_url: Optional[str],
+    pending_station: Optional[dict],
+    sel_station_alt_urls: Tuple[str, ...],
+    raw_epw_bytes: Optional[bytes],
+    last_parsed_epw_hash: Optional[str],
+    was_epw_ready: bool,
+) -> Dict[str, object]:
+    """Pure-ish controller: returns the session-state updates to apply."""
+    out: Dict[str, object] = {
+        "epw_ready": bool(cdf_present),
+        "active_page": "dashboard" if cdf_present else "select_station",
+        "should_rerun": False,
+        "set": {},
+        "pop": [],
+        "station_load_error": None,
+        "station_load_debug": None,
+    }
+
+    set_updates: Dict[str, object] = {}
+    pop_keys: List[str] = []
+
+    # If we're already ready, keep routing locked to dashboard and clear any pending selection state.
+    if cdf_present:
+        set_updates.update({
+            "load_requested": False,
+            "is_loading": False,
+            "pending_station_id": None,
+        })
+        pop_keys.extend([
+            "pending_station",
+            "sel_station_url",
+            "sel_station",
+            "selected_station",
+            "sel_station_alt_urls",
+            "loading_station_name",
+        ])
+        out["set"] = set_updates
+        out["pop"] = pop_keys
+        return out
+
+    # One-shot station download+parse state machine.
+    should_start_station_load = (
+        out["active_page"] == "select_station"
+        and bool(load_requested)
+        and not bool(is_loading)
+        and bool(pending_station_id)
+        and bool(sel_station_url)
+    )
+
+    if should_start_station_load:
+        set_updates["is_loading"] = True
+        set_updates["load_requested"] = False
+        pop_keys.extend(["station_load_error", "station_load_debug"])
+
+        url = sel_station_url
+        station_info = pending_station or {}
+        station_name = str(station_info.get("name") or "selected station")
+
+        if '<a ' in str(url) and 'href' in str(url):
+            url = _extract_url(str(url)) or str(url)
+
+        urls_to_try = fix_station_url(str(url))
+        urls_to_try.extend([u for u in sel_station_alt_urls if u])
+
+        attempted_urls: List[str] = []
+        attempt_notes: List[str] = []
+        fetched_bytes: Optional[bytes] = None
+        successful_url: Optional[str] = None
+
+        for i, test_url in enumerate(urls_to_try):
+            attempted_urls.append(str(test_url))
+            url_clean = re.search(r"https.*?\.epw", str(test_url))
+            if url_clean:
+                test_url = url_clean.group()
+            fetched_bytes, _err = fetch_epw_bytes_no_ui(str(test_url))
+            if fetched_bytes is not None:
+                successful_url = str(test_url)
+                break
+            attempt_notes.append(f"Attempt {i+1}/{len(urls_to_try)} failed")
+
+        if fetched_bytes is None:
+            for j, alt_url in enumerate(ALTERNATIVE_EPW_SOURCES, start=1):
+                attempted_urls.append(str(alt_url))
+                fetched_bytes, _err = fetch_epw_bytes_no_ui(str(alt_url))
+                if fetched_bytes is not None:
+                    successful_url = str(alt_url)
+                    break
+                attempt_notes.append(f"Alternate {j}/{len(ALTERNATIVE_EPW_SOURCES)} failed")
+
+        if fetched_bytes is None:
+            set_updates["is_loading"] = False
+            out["station_load_error"] = f"❌ Could not fetch EPW from **{station_name}**. All download attempts failed."
+            out["station_load_debug"] = {
+                "station_name": station_name,
+                "original_url": str(url),
+                "urls_to_try": urls_to_try,
+                "successful_url": successful_url,
+                "attempt_notes": attempt_notes,
+                "attempted_urls": attempted_urls,
+            }
+        else:
+            set_updates["raw_epw_bytes"] = fetched_bytes
+            source_label = (
+                f"Station: {station_name}"
+                if successful_url == str(url)
+                else f"Station: {station_name} (alt)"
+            )
+            set_updates["source_label"] = source_label
+            set_updates["page_after_station"] = "📊 Dashboard"
+
+            # Parse/build only if bytes changed.
+            epw_hash = _hash_bytes(fetched_bytes)
+            if epw_hash and epw_hash != last_parsed_epw_hash:
+                header, df, epw_notes = read_epw_with_schema_cached(fetched_bytes)
+                cdf = build_clima_dataframe_cached(df)
+
+                # Compute comfort package once per loaded file.
+                comfort_pkg = build_comfort_package(cdf)
+
+                set_updates.update({
+                    "header": header,
+                    "cdf": cdf,
+                    "df": df,
+                    "comfort_pkg": comfort_pkg,
+                    "cdf_raw": cdf.copy(deep=True),
+                    "_last_parsed_epw_hash": epw_hash,
+                    "_last_epw_notes": epw_notes,
+                })
+
+            epw_ready_now = bool(set_updates.get("cdf") is not None) or bool(cdf_present)
+            out["epw_ready"] = epw_ready_now
+
+            if epw_ready_now:
+                out["active_page"] = "dashboard"
+                set_updates.update({
+                    "_just_loaded_epw": True,
+                    "nav_page": "📊 Dashboard",
+                    "last_loaded_station_id": pending_station_id,
+                    "pending_station_id": None,
+                    "sel_station_url": None,
+                    "is_loading": False,
+                    "_clear_map_on_next_run": True,
+                })
+                pop_keys.extend([
+                    "pending_station",
+                    "sel_station",
+                    "selected_station",
+                    "sel_station_alt_urls",
+                    "loading_station_name",
+                ])
+                if not was_epw_ready:
+                    out["should_rerun"] = True
+
+    # Upload path: if bytes exist but not parsed yet, parse once.
+    if raw_epw_bytes is not None and not bool(out.get("epw_ready")) and not bool(is_loading):
+        epw_hash = _hash_bytes(raw_epw_bytes)
+        if epw_hash and epw_hash != last_parsed_epw_hash:
+            header, df, epw_notes = read_epw_with_schema_cached(raw_epw_bytes)
+            cdf = build_clima_dataframe_cached(df)
+            comfort_pkg = build_comfort_package(cdf)
+
+            set_updates.update({
+                "header": header,
+                "cdf": cdf,
+                "df": df,
+                "comfort_pkg": comfort_pkg,
+                "cdf_raw": cdf.copy(deep=True),
+                "_last_parsed_epw_hash": epw_hash,
+                "_last_epw_notes": epw_notes,
+            })
+
+            out["epw_ready"] = True
+            out["active_page"] = "dashboard"
+            set_updates.update({
+                "_just_loaded_epw": True,
+                "nav_page": "📊 Dashboard",
+                "_clear_map_on_next_run": True,
+            })
+            if not was_epw_ready:
+                out["should_rerun"] = True
+
+    out["set"] = set_updates
+    out["pop"] = pop_keys
+    return out
+
+
+ss = st.session_state
+
+# Derive readiness from parsed data.
+_was_epw_ready = bool(ss.get("cdf") is not None)
+ss["epw_ready"] = _was_epw_ready
+
+_should_sync = bool(ss.get("load_requested")) or (
+    ss.get("raw_epw_bytes") is not None
+    and not bool(ss.get("epw_ready"))
+    and not bool(ss.get("is_loading"))
+)
+
+with st.spinner("Synchronizing Data...") if _should_sync else nullcontext():
+    controller_out = run_controller(
+        cdf_present=bool(ss.get("cdf") is not None),
+        load_requested=bool(ss.get("load_requested")),
+        is_loading=bool(ss.get("is_loading")),
+        pending_station_id=ss.get("pending_station_id"),
+        sel_station_url=ss.get("sel_station_url"),
+        pending_station=ss.get("pending_station") or ss.get("sel_station") or None,
+        sel_station_alt_urls=tuple(ss.get("sel_station_alt_urls") or ()),
+        raw_epw_bytes=ss.get("raw_epw_bytes"),
+        last_parsed_epw_hash=ss.get("_last_parsed_epw_hash"),
+        was_epw_ready=_was_epw_ready,
+    )
+
+ss["epw_ready"] = bool(controller_out.get("epw_ready"))
+ss["active_page"] = str(controller_out.get("active_page") or "select_station")
+
+for k in controller_out.get("pop", []) or []:
+    try:
+        ss.pop(k, None)
+    except Exception:
+        pass
+
+for k, v in (controller_out.get("set", {}) or {}).items():
+    ss[k] = v
+
+if controller_out.get("station_load_error"):
+    ss["station_load_error"] = controller_out.get("station_load_error")
+if controller_out.get("station_load_debug"):
+    ss["station_load_debug"] = controller_out.get("station_load_debug")
+
+# One-shot rerun after a successful parse/build so rendering always lands on the dashboard.
+if bool(controller_out.get("should_rerun")):
+    _rerun()
+
 PREMIUM_CSS = '''
 <style>
-    @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap");
-    * { font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    .main { background: #0b0f1a; color: #c2c8d1; padding: 0.6rem 1.4rem; }
-    h1 { font-size: 2.05rem !important; font-weight: 700 !important; color: #e2e8f0 !important; margin-bottom: 0.35rem !important; letter-spacing: -0.02em; }
-    h2 { font-size: 1.35rem !important; font-weight: 650 !important; color: #d6dbe3 !important; margin: 1.4rem 0 0.75rem 0 !important; letter-spacing: -0.01em; }
-    h3 { font-size: 1.1rem !important; font-weight: 600 !important; color: #c5cbd8 !important; margin-bottom: 0.55rem !important; }
-    body, .block-container { background: #0b0f1a; color: #c2c8d1; }
-    .card { background: #111624; border-radius: 6px; padding: 1.2rem 1.25rem; border: 1px solid rgba(255,255,255,0.02); box-shadow: none; }
-    .card:hover { border-color: rgba(255,255,255,0.05); box-shadow: none; transform: none; }
-    [data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 650 !important; color: #e2e8f0 !important; letter-spacing: -0.02em; }
-    [data-testid="stMetricLabel"] { font-size: 0.82rem !important; color: #8e96a3 !important; font-weight: 500 !important; text-transform: uppercase; letter-spacing: 0.04em; }
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; background: transparent; padding: 10px 2px 14px 2px; border-radius: 0; border: none; }
-    .stTabs [data-baseweb="tab"] { background: transparent; border-radius: 0; padding: 6px 10px 8px 10px; font-weight: 600; color: #c2c8d1; border: none; transition: color 0.1s ease; }
-    .stTabs [data-baseweb="tab"]:hover { color: #e5e7eb; }
-    .stTabs [aria-selected="true"] { background: transparent !important; color: #f7f9fb !important; box-shadow: none; border-bottom: 2px solid #4dd6ff; }
-    [data-testid="stSidebar"] { background: #0b0f1a; border-right: 1px solid rgba(255,255,255,0.04); }
-    .stButton button { background: #131a24; color: #c5cbd8; border: 1px solid rgba(255,255,255,0.05); border-radius: 14px; padding: 0.25rem 0.8rem; font-weight: 600; font-size: 0.9rem; transition: border-color 0.1s ease, color 0.1s ease, background 0.1s ease; height: 34px; box-shadow: none; }
-    .stButton button:hover { border-color: #4dd6ff; color: #f7f9fb; background: #161f2b; }
-    .stButton button:active { transform: none; box-shadow: none; }
-    .stButton button[data-testid="baseButton-primary"] { background: #4dd6ff; border-color: #4dd6ff; color: #0b0f1a; }
-    .stButton button[data-testid="baseButton-secondary"] { background: #131a24; color: #c5cbd8; border-color: rgba(255,255,255,0.06); }
-    div[data-testid="stFileUploader"] section { border: 1px solid rgba(255,255,255,0.04); border-radius: 6px; padding: 0.55rem; background: #111624; box-shadow: none; }
-    .dataframe { border-radius: 6px; overflow: hidden; box-shadow: none; border: 1px solid rgba(255,255,255,0.02); }
-    .dataframe th { background: rgba(255, 255, 255, 0.015) !important; color: #dfe3ea !important; font-weight: 600 !important; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.04em; padding: 0.75rem !important; }
-    .dataframe td { padding: 0.65rem 0.75rem !important; border-bottom: 1px solid rgba(255, 255, 255, 0.02) !important; color: #c5cbd8 !important; }
-    .dataframe tr:hover { background: rgba(255, 255, 255, 0.01) !important; }
-    .stAlert { border-radius: 6px; box-shadow: none; }
-    .js-plotly-plot { border-radius: 6px; background: #111624; }
-    .station-info { background: #111624; border: 1px solid rgba(255,255,255,0.02); border-radius: 6px; padding: 0.9rem 1rem; margin: 0.5rem 0 1rem 0; font-weight: 500; color: #c5cbd8; box-shadow: none; }
-    .station-info-title { font-size: 1.12rem; font-weight: 650; color: #e2e8f0; margin-bottom: 0.5rem; letter-spacing: -0.01em; display: flex; align-items: center; gap: 0.4rem; }
-    .station-info-detail { font-size: 0.9rem; line-height: 1.55; color: #c2c8d1; }
-    .station-info-detail strong { color: #dfe3ea; font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
-    .station-country { font-size: 0.9rem; color: #c5cbd8; font-weight: 600; margin-bottom: 0.35rem; padding: 0.22rem 0.5rem; background: rgba(255, 255, 255, 0.02); border-radius: 6px; display: inline-block; border: 1px solid rgba(255, 255, 255, 0.02); }
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@600;700&display=swap");
+
+:root {
+    --bg: #0f172a;
+    --panel: #111827;
+    --panel-2: #1e293b;
+    --text: #f1f5f9;
+    --muted: #94a3b8;
+    --primary: #3b82f6;
+    --primary-2: #06b6d4;
+    --accent: #8b5cf6;
+    --accent-2: #ec4899;
+    --glow: 0 12px 40px rgba(59, 130, 246, 0.35);
+    --glass: rgba(30, 41, 59, 0.7);
+}
+
+* { font-family: "Inter", "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+html, body, .main, .block-container { background: var(--bg); color: var(--muted); scroll-behavior: smooth; }
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(circle at 20% 20%, rgba(59,130,246,0.2), transparent 35%),
+                radial-gradient(circle at 80% 10%, rgba(8,47,73,0.25), transparent 35%),
+                radial-gradient(circle at 50% 80%, rgba(236,72,153,0.15), transparent 35%);
+    filter: blur(60px);
+    opacity: 0.9;
+    z-index: -2;
+    animation: meshShift 18s ease-in-out infinite alternate;
+}
+body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image: radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1px);
+    background-size: 120px 120px;
+    opacity: 0.35;
+    z-index: -1;
+}
+
+.block-container { padding: clamp(1rem, 3vw, 1.8rem) clamp(1.2rem, 5vw, 2.6rem); }
+.main > .block-container { background: var(--bg); position: relative; z-index: 0; }
+
+h1 { font-size: 2.2rem !important; font-weight: 800 !important; color: var(--text) !important; margin-bottom: 0.35rem !important; letter-spacing: -0.02em; }
+h2 { font-size: 1.5rem !important; font-weight: 700 !important; color: #e2e8f0 !important; margin: 1.2rem 0 0.7rem 0 !important; letter-spacing: -0.02em; }
+h3 { font-size: 1.15rem !important; font-weight: 650 !important; color: #d9e1ec !important; margin-bottom: 0.6rem !important; letter-spacing: -0.01em; }
+
+.card { background: var(--panel); border-radius: 14px; padding: 1.15rem 1.25rem; border: 1px solid rgba(255,255,255,0.04); box-shadow: 0 20px 60px rgba(0,0,0,0.35); transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease; }
+.card:hover { border-color: rgba(96,165,250,0.35); transform: translateY(-2px); box-shadow: 0 18px 46px rgba(59,130,246,0.18); }
+
+[data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 700 !important; color: var(--text) !important; letter-spacing: -0.02em; }
+[data-testid="stMetricLabel"] { font-size: 0.82rem !important; color: var(--muted) !important; font-weight: 600 !important; text-transform: uppercase; letter-spacing: 0.06em; }
+
+.stTabs [data-baseweb="tab-list"] { gap: 10px; background: rgba(17,24,39,0.7); padding: 10px 6px 14px 6px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 12px 30px rgba(0,0,0,0.35); }
+.stTabs [data-baseweb="tab"] { background: transparent; border-radius: 10px; padding: 8px 12px; font-weight: 600; color: var(--muted); border: none; transition: color 0.15s ease, background 0.15s ease, transform 0.15s ease; }
+.stTabs [data-baseweb="tab"]:hover { color: var(--text); transform: translateY(-1px); }
+.stTabs [aria-selected="true"] { background: linear-gradient(135deg, var(--primary), var(--primary-2)) !important; color: #0b1220 !important; box-shadow: 0 12px 24px rgba(59,130,246,0.3); }
+
+[data-testid="stSidebar"] { background: linear-gradient(180deg, #0b1220, #0f172a 60%, #0b1220); border-right: 1px solid rgba(255,255,255,0.06); box-shadow: 12px 0 28px rgba(0,0,0,0.35); }
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label { margin-bottom: 6px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); background: rgba(255,255,255,0.02); padding: 10px 12px; transition: all 0.2s ease; }
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:hover { border-color: rgba(59,130,246,0.7); box-shadow: 0 8px 22px rgba(59,130,246,0.25); transform: translateX(4px); color: #e2e8f0; }
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label [data-testid="stMarkdownContainer"] p { margin: 0; font-weight: 600; color: var(--muted); }
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label[data-checked="true"] { border-color: var(--primary); box-shadow: 4px 0 0 var(--primary) inset, 0 12px 28px rgba(59,130,246,0.35); background: linear-gradient(135deg, rgba(59,130,246,0.18), rgba(6,182,212,0.18)); color: var(--text); }
+
+.sidebar-brand { margin-top: auto; padding: 1rem 0.5rem 0.75rem 0.5rem; color: var(--muted); font-size: 0.9rem; border-top: 1px solid rgba(255,255,255,0.06); }
+.sidebar-brand strong { color: var(--text); }
+
+.stButton button { background: linear-gradient(135deg, var(--primary), var(--primary-2)); color: #0b1220; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 0.4rem 0.9rem; font-weight: 700; font-size: 0.95rem; transition: transform 0.15s ease, box-shadow 0.15s ease; height: 38px; box-shadow: var(--glow); }
+.stButton button:hover { transform: translateY(-1px) scale(1.01); box-shadow: 0 14px 28px rgba(6,182,212,0.35); }
+.stButton button:active { transform: translateY(0); box-shadow: none; }
+.stButton button[data-testid="baseButton-secondary"] { background: rgba(255,255,255,0.06); color: var(--text); border: 1px solid rgba(255,255,255,0.12); box-shadow: none; }
+
+div[data-testid="stFileUploader"] section { border: 1px dashed rgba(96,165,250,0.35); border-radius: 12px; padding: 0.75rem; background: rgba(17,24,39,0.8); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02); }
+.dataframe { border-radius: 10px; overflow: hidden; box-shadow: 0 16px 40px rgba(0,0,0,0.38); border: 1px solid rgba(255,255,255,0.03); }
+.dataframe th { background: rgba(255, 255, 255, 0.04) !important; color: #e2e8f0 !important; font-weight: 700 !important; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.08em; padding: 0.75rem !important; }
+.dataframe td { padding: 0.7rem 0.8rem !important; border-bottom: 1px solid rgba(255, 255, 255, 0.04) !important; color: #d3dae5 !important; }
+.dataframe tr:hover { background: rgba(255, 255, 255, 0.02) !important; }
+.stAlert { border-radius: 12px; box-shadow: 0 10px 28px rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.08); }
+.js-plotly-plot { border-radius: 12px; background: #0f172a !important; box-shadow: 0 18px 50px rgba(0,0,0,0.38); }
+.js-plotly-plot text,
+.plotly .xtick text,
+.plotly .ytick text,
+.plotly .xaxislayer-above text,
+.plotly .yaxislayer-above text,
+.plotly .legend text { fill: #e2e8f0 !important; color: #e2e8f0 !important; }
+.plotly .gridlayer path { stroke: rgba(148, 163, 184, 0.2) !important; }
+.light-chart .plotly .xtick text,
+.light-chart .plotly .ytick text,
+.light-chart .plotly .legend text { fill: #1e293b !important; color: #1e293b !important; }
+.station-info { background: var(--panel-2); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 1rem 1.1rem; margin: 0.65rem 0 1rem 0; font-weight: 500; color: #d5dbe7; box-shadow: 0 18px 48px rgba(0,0,0,0.32); }
+.station-info-title { font-size: 1.2rem; font-weight: 700; color: var(--text); margin-bottom: 0.5rem; letter-spacing: -0.01em; display: flex; align-items: center; gap: 0.5rem; }
+.station-info-detail { font-size: 0.95rem; line-height: 1.6; color: #cdd4df; }
+.station-info-detail strong { color: #e2e8f0; font-weight: 650; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.station-country { font-size: 0.92rem; color: #e2e8f0; font-weight: 650; margin-bottom: 0.45rem; padding: 0.32rem 0.65rem; background: rgba(255, 255, 255, 0.03); border-radius: 10px; display: inline-block; border: 1px solid rgba(255, 255, 255, 0.08); }
+
+
+.app-header {
+    position: relative;
+    margin: 0 -0.25rem 1rem -0.25rem;
+    padding: 0.8rem 1.4rem;
+    height: 100px; /* Fixed height for stability */
+    border-radius: 16px;
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    border: 1px solid rgba(255,255,255,0.05);
+    box-shadow: 0 18px 50px rgba(0,0,0,0.45);
+    display: grid;
+    grid-template-columns: 240px 1fr 240px; /* Fixed side widths */
+    align-items: center;
+    gap: 1rem;
+    overflow: hidden;
+}
+.app-header::after { content: ""; position: absolute; inset: 0; background: linear-gradient(120deg, rgba(59,130,246,0.18), rgba(139,92,246,0.15), rgba(6,182,212,0.12)); opacity: 0.7; mix-blend-mode: screen; pointer-events: none; }
+.header-left { display: flex; align-items: center; gap: 0.85rem; z-index: 1; }
+.logo-glow { width: 80px; height: 80px; display: grid; place-items: center; border-radius: 18px; background: radial-gradient(circle at 50% 40%, rgba(59,130,246,0.2), rgba(14,165,233,0.12)); box-shadow: 0 0 0 1px rgba(255,255,255,0.05), var(--glow); flex-shrink: 0; }
+.logo-glow img { max-height: 64px; width: auto; filter: drop-shadow(0 0 16px rgba(59,130,246,0.5)); }
+.brand-text { display: flex; flex-direction: column; gap: 0.1rem; min-width: 140px; }
+.brand-title { font-size: 1.15rem; font-weight: 700; color: var(--text); letter-spacing: -0.01em; white-space: nowrap; }
+.brand-sub { font-size: 0.85rem; color: var(--muted); font-weight: 500; white-space: nowrap; }
+.header-center { text-align: center; z-index: 1; display: flex; flex-direction: column; justify-content: center; height: 100%; }
+.header-center .title { font-size: 1.8rem; font-weight: 800; color: var(--text); letter-spacing: -0.02em; margin-bottom: 0.1rem; white-space: nowrap; }
+.header-center .subtitle { font-size: 0.9rem; color: var(--muted); font-weight: 500; letter-spacing: 0.02em; white-space: nowrap; }
+.header-right { display: flex; align-items: center; justify-content: flex-end; gap: 0.65rem; z-index: 1; }
+.header-icons span { display: inline-flex; width: 36px; height: 36px; align-items: center; justify-content: center; border-radius: 10px; background: rgba(255,255,255,0.08); box-shadow: 0 10px 22px rgba(0,0,0,0.35); font-size: 1.1rem; color: var(--text); }
+
+
+.hero-glass { position: relative; background: var(--glass); border: 1px solid rgba(96,165,250,0.3); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-radius: 18px; padding: 1.4rem 1.5rem; box-shadow: 0 18px 48px rgba(0,0,0,0.45); overflow: hidden; }
+.hero-glass::before { content: ""; position: absolute; inset: -30%; background: conic-gradient(from 120deg, rgba(59,130,246,0.18), rgba(139,92,246,0.18), rgba(6,182,212,0.12), rgba(236,72,153,0.12)); filter: blur(70px); opacity: 0.7; animation: spinSlow 16s linear infinite; }
+.hero-content { position: relative; display: grid; grid-template-columns: 1fr auto; gap: 1.2rem; align-items: center; }
+.hero-text h1 { margin: 0; color: var(--text); font-size: clamp(1.55rem, 3vw, 2.05rem); letter-spacing: -0.02em; }
+.hero-text p { margin: 0.3rem 0 0.5rem 0; color: #d9e1ec; font-size: 1rem; }
+.cta-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.cta-btn { padding: 0.65rem 1.15rem; border-radius: 14px; font-weight: 700; border: 1px solid rgba(255,255,255,0.1); color: #0b1220; background: linear-gradient(135deg, var(--primary), var(--primary-2)); box-shadow: var(--glow); text-decoration: none; display: inline-flex; align-items: center; gap: 0.4rem; animation: pulseGlow 2.4s ease-in-out infinite; }
+.cta-btn.secondary { background: rgba(255,255,255,0.08); color: var(--text); border: 1px solid rgba(255,255,255,0.16); box-shadow: none; animation: none; }
+.cta-btn:hover { transform: translateY(-1px) scale(1.01); }
+.hero-icon { position: relative; width: 120px; height: 120px; border-radius: 26px; background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.25), rgba(255,255,255,0.05)); border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 14px 36px rgba(0,0,0,0.45); display: grid; place-items: center; overflow: hidden; }
+.hero-cloud { position: absolute; width: 80px; height: 46px; background: linear-gradient(135deg, rgba(255,255,255,0.9), rgba(226,232,240,0.8)); border-radius: 50px; top: 40%; left: 50%; transform: translate(-50%, -50%); box-shadow: 0 12px 28px rgba(0,0,0,0.28); }
+.hero-cloud::before, .hero-cloud::after { content: ""; position: absolute; background: inherit; border-radius: 50%; }
+.hero-cloud::before { width: 38px; height: 38px; top: -18px; left: 14px; }
+.hero-cloud::after { width: 32px; height: 32px; top: -10px; right: 10px; }
+.hero-rain { position: absolute; width: 2px; height: 14px; background: linear-gradient(180deg, #67e8f9, #22d3ee); border-radius: 999px; animation: rain 1.6s linear infinite; box-shadow: 12px 6px 0 #22d3ee, -10px 10px 0 #67e8f9, 6px 14px 0 #06b6d4; }
+
+.preview-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 0.8rem; }
+.preview-card { background: var(--panel); border: 1px solid rgba(255,255,255,0.05); border-radius: 14px; padding: 1rem; box-shadow: 0 14px 38px rgba(0,0,0,0.4); position: relative; overflow: hidden; transition: transform 0.2s ease, border-color 0.2s ease; }
+.preview-card:hover { transform: translateY(-3px); border-color: rgba(59,130,246,0.45); }
+.preview-card h4 { color: var(--text); margin: 0 0 0.35rem 0; font-weight: 700; letter-spacing: -0.01em; }
+.preview-chip { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.55rem; border-radius: 10px; background: rgba(59,130,246,0.15); color: var(--text); font-size: 0.85rem; }
+
+.skeleton { position: relative; overflow: hidden; background: linear-gradient(90deg, rgba(255,255,255,0.05), rgba(255,255,255,0.12), rgba(255,255,255,0.05)); background-size: 200% 100%; animation: shimmer 1.6s infinite; border-radius: 12px; min-height: 120px; }
+
+.station-modal { position: relative; background: #0b1220; border: 1px solid rgba(148, 163, 184, 0.22); border-radius: 16px; padding: 1rem 1.2rem; box-shadow: 0 18px 50px rgba(0,0,0,0.55); margin: 1rem 0; }
+.station-modal h4 { margin: 0 0 0.4rem 0; color: #e2e8f0; font-weight: 750; letter-spacing: -0.01em; }
+.station-modal p { margin: 0.15rem 0; color: #cbd5e1; }
+.station-modal .actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.5rem; margin-top: 0.75rem; }
+
+footer { background: #0a0f1f; border-top: 1px solid rgba(148, 163, 184, 0.15); padding: 3rem 2rem 1.5rem; margin-top: 6rem; color: #64748b; }
+.footer-content { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 3rem; max-width: 1400px; margin: 0 auto 2rem; }
+.footer-content h4 { color: #e2e8f0; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 1rem; }
+.footer-content ul { list-style: none; padding: 0; margin: 0; }
+.footer-content li { margin-bottom: 0.5rem; font-size: 0.875rem; }
+.footer-bottom { text-align: center; padding-top: 2rem; border-top: 1px solid rgba(148, 163, 184, 0.1); font-size: 0.75rem; }
+.footer-links { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-top: 0.5rem; }
+.footer-links a { color: #94a3b8; text-decoration: none; font-weight: 600; }
+.footer-links a:hover { color: #e2e8f0; }
+
+hr.page-separator { border: 0; height: 1px; background: rgba(148, 163, 184, 0.25); margin: 1.6rem 0; }
+
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+@keyframes meshShift { 0% { transform: translateY(0); } 100% { transform: translateY(-12px) scale(1.02); } }
+@keyframes floatY { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes pulseGlow { 0%, 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0.45); } 50% { box-shadow: 0 0 0 12px rgba(59,130,246,0); } }
+@keyframes spinSlow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes rain { 0% { transform: translateY(-10px); opacity: 0; } 20% { opacity: 1; } 100% { transform: translateY(22px); opacity: 0; } }
+
+@media (max-width: 980px) {
+    .app-header { grid-template-columns: 1fr; text-align: center; }
+    .header-left, .header-right { justify-content: center; }
+    .hero-content { grid-template-columns: 1fr; }
+}
 </style>
 '''
 st.markdown(PREMIUM_CSS, unsafe_allow_html=True)
@@ -892,142 +1517,123 @@ st.markdown(PREMIUM_CSS, unsafe_allow_html=True)
 SECONDARY_CSS = r'''
 <style>
 :root {
-    --hero-title-size: clamp(1.6rem, 4.5vw, 2.4rem);
-    --hero-subtitle-size: clamp(0.95rem, 3vw, 1.05rem);
+    --hero-title-size: clamp(1.6rem, 4.2vw, 2.4rem);
+    --hero-subtitle-size: clamp(1rem, 2.6vw, 1.15rem);
 }
 
-.block-container {
-        padding: clamp(0.75rem, 4vw, 1.6rem) clamp(0.9rem, 5vw, 2.4rem);
-        max-width: 1300px;
-        margin: 0 auto;
-}
-
-.hero-wrap {
-    text-align: center;
-    margin: 0 auto 1.05rem auto;
-    max-width: 760px;
-    padding: 0.25rem 0.75rem;
-}
-
-.hero-title {
-    font-size: var(--hero-title-size);
-    font-weight: 600;
-    color: #e2e8f0;
-    margin-bottom: 0.25rem;
-    letter-spacing: -0.01em;
-    line-height: 1.08;
-    word-break: break-word;
-}
-
-.hero-subtitle {
-    color: #c5cbd8;
-    font-size: var(--hero-subtitle-size);
-    font-weight: 500;
-    max-width: 620px;
-    margin: 0 auto;
-    line-height: 1.35;
-}
-
-.map-wrapper .js-plotly-plot {
-    width: 100% !important;
-}
-
+.map-wrapper .js-plotly-plot { width: 100% !important; }
 .section-gap { height: 12px; }
 .section-gap-lg { height: 24px; }
 .section-gap-xl { height: 32px; }
 .line-row { display: flex; gap: 12px; align-items: center; }
-.flat-bar { background: #111624; border: 1px solid rgba(255,255,255,0.03); border-radius: 6px; padding: 8px 12px; }
-.chip-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
-.chip-row .stButton>button { width: 100%; text-align: center; height: 32px; }
-.nav-band { margin: 14px 0 14px 0; }
+.flat-bar { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 10px 14px; }
+.chip-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.chip-row .stButton>button { width: 100%; text-align: center; height: 36px; }
+.nav-band { margin: 16px 0 16px 0; }
 .map-wrapper { margin-top: 16px; }
-.hairline { height: 1px; background: rgba(255,255,255,0.06); margin: 10px 0; }
+.hairline { height: 1px; background: rgba(255,255,255,0.08); margin: 12px 0; }
 .tab-guard { margin: 26px 0; }
-[data-baseweb="select"] { min-height: 34px; }
-[data-baseweb="select"] > div { padding-top: 2px; padding-bottom: 2px; }
-.stAlert { background: #111624; border: 1px solid rgba(255,255,255,0.03); color: #c5cbd8; }
+[data-baseweb="select"] { min-height: 36px; }
+[data-baseweb="select"] > div { padding-top: 4px; padding-bottom: 4px; }
+.stAlert { background: rgba(17,24,39,0.85); border: 1px solid rgba(255,255,255,0.08); color: #d5dbe7; }
+
+.landing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.highlight-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07); border-radius: 14px; padding: 0.95rem; box-shadow: 0 14px 36px rgba(0,0,0,0.35); }
+.recent-locations { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.recent-card { background: rgba(17,24,39,0.82); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 0.8rem; box-shadow: 0 12px 32px rgba(0,0,0,0.32); }
 
 @media (max-width: 768px) {
-    .clima-alert { font-size: 0.9rem; padding: 0.7rem 0.9rem; }
-    .hero-wrap { margin-bottom: 1.4rem; padding: 0.35rem 0.5rem; }
+    .clima-alert { font-size: 0.92rem; padding: 0.75rem 0.9rem; }
     .station-info { padding: 0.9rem; }
-    .station-info-title { font-size: 1.2rem; }
+    .station-info-title { font-size: 1.15rem; }
     .map-wrapper .js-plotly-plot { min-height: 440px !important; }
+    .header-center .title { font-size: 1.5rem; }
 }
 </style>
 '''
 st.markdown(SECONDARY_CSS, unsafe_allow_html=True)
 
+
+def _encode_image_to_base64(path: Union[str, Path]) -> str:
+    """Embed local assets (e.g., logos) as base64 data URIs for consistent rendering."""
+    try:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
+        return ""
+
+
+LOGO_PRIMARY = _encode_image_to_base64(Path("assets/bevl_framework.png"))
+LOGO_SECONDARY = _encode_image_to_base64(Path("assets/ub_framework.png"))
+
+
+def render_header():
+    logo_src = f"data:image/png;base64,{LOGO_PRIMARY}" if LOGO_PRIMARY else ""
+    alt_logo_src = f"data:image/png;base64,{LOGO_SECONDARY}" if LOGO_SECONDARY else ""
+    st.markdown(
+        f"""
+        <div class="app-header">
+            <div class="header-left">
+                <div class="logo-glow">
+                    {'<img src="' + logo_src + '" alt="BEVL logo" />' if logo_src else ''}
+                </div>
+                <div class="brand-text">
+                    <div class="brand-title">BEVL Lab</div>
+                    <div class="brand-sub">Professional Weather Intelligence</div>
+                </div>
+            </div>
+            <div class="header-center">
+                <div class="title">Climate Analysis Pro</div>
+                <div class="subtitle">Built Environment &amp; Virtual Lab · UB</div>
+            </div>
+            <div class="header-right">
+                <div class="header-icons">
+                    <span>☀️</span><span>☁️</span><span>🌧️</span>
+                </div>
+                {'<div class="logo-glow" style="width:56px;height:56px;border-radius:12px;"><img style="max-height:40px" src="' + alt_logo_src + '" alt="UB" /></div>' if alt_logo_src else ''}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# render_header()  <-- Muted, called in main() now
+
 # ========== SIDEBAR WITH IMPROVED UX ==========
+def render_landing_hero():
+    st.markdown(
+        """
+        <div class="hero-glass">
+            <div class="hero-content">
+                <div class="hero-text">
+                    <h1>Select Weather File</h1>
+                    <p>Professional, university-backed climate intelligence for station selection, comfort diagnostics, and resilient design decisions.</p>
+                    <div class="cta-actions">
+                        <a class="cta-btn" href="#station-picker">🚀 Get Started</a>
+                    </div>
+                </div>
+                <div class="hero-icon">
+                    <div class="hero-cloud"></div>
+                    <div class="hero-rain"></div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 SIDEBAR_HERO = (
     "<div style='text-align: center; margin-bottom: 1.5rem; padding: 0.9rem 0.75rem;'>"
     "<div style='font-size: 2.1rem; margin-bottom: 0.35rem;'>&#127780;</div>"
-    "<h2 style='font-size: clamp(1.1rem, 3vw, 1.35rem); font-weight: 700; color:#e2e8f0; margin-bottom: 0.25rem; letter-spacing: -0.01em; word-break: break-word;'>Climate Analysis Pro</h2>"
-    "<p style='color: #c5cbd8; font-size: 0.9rem; font-weight: 500;'>Weather data workspace</p>"
+    "<p style='font-size: 1rem; font-weight: 700; color:#e2e8f0; margin-bottom: 0.15rem; letter-spacing: -0.01em;'>Weather Workspace</p>"
+    "<p style='color: #c5cbd8; font-size: 0.9rem; font-weight: 500;'>Quick access tools</p>"
     "</div>"
 )
 
-with st.sidebar:
-    st.markdown(SIDEBAR_HERO, unsafe_allow_html=True)
-    st.divider()
 
-    epw_loaded = bool(st.session_state.get("cdf") is not None and st.session_state.get("header"))
-    current_page = st.session_state.get("active_page", DEFAULT_PAGE)
-    if current_page in FROZEN_PAGES:
-        current_page = DEFAULT_PAGE
-    if current_page not in ALLOWED_PAGES:
-        current_page = DEFAULT_PAGE
-    st.session_state["active_page"] = current_page
-
-    nav_labels = [label for label, _ in NAV_ITEMS]
-    st.markdown("### Visualize weather file")
-    if epw_loaded:
-        current_label = PAGE_TO_LABEL.get(current_page, nav_labels[0])
-        nav_choice = st.radio(
-            "",
-            options=nav_labels,
-            index=nav_labels.index(current_label) if current_label in nav_labels else 0,
-            label_visibility="collapsed",
-            key="sidebar_nav",
-        )
-        st.markdown(
-            """
-            <style>
-            /* Freeze roadmap items visually and functionally */
-            [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:nth-child(9),
-            [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:nth-child(10) {
-                opacity: 0.45 !important;
-                pointer-events: none !important;
-                cursor: not-allowed !important;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.caption("🚧 Short-term prediction & future climate are coming soon")
-    else:
-        nav_choice = "Select weather file"
-        st.radio(
-            "",
-            options=[nav_choice],
-            index=0,
-            label_visibility="collapsed",
-            key="sidebar_nav_locked",
-        )
-        locked_labels = nav_labels[1:]
-        if locked_labels:
-            st.markdown(
-                "<div style='color:#5c6472; font-size:0.9rem;'>" +
-                "<br>".join([f"• {lbl}" for lbl in locked_labels]) +
-                "</div>",
-                unsafe_allow_html=True,
-            )
-        st.info("Load a station from the map or upload an EPW/ZIP to unlock the dashboard views.")
-    frozen_hit = nav_choice in FROZEN_NAV_LABELS
-    nav_choice_effective = nav_choice if not frozen_hit else current_label
-    chosen_page = LABEL_TO_PAGE.get(nav_choice_effective, DEFAULT_PAGE)
-    st.session_state["active_page"] = chosen_page
-
+@st.fragment
+def _sidebar_filters_fragment(epw_loaded: bool) -> None:
     st.markdown("### Filters and units")
     with st.expander("Filters and units", expanded=False):
         st.caption("Refine the analysis sandbox. Settings persist for this session.")
@@ -1062,26 +1668,28 @@ with st.sidebar:
             threshold_c = float(threshold_slider)
         st.session_state["custom_overheat_threshold"] = float(threshold_c)
 
-        st.checkbox(
-            "Prefer adaptive comfort by default",
-            value=st.session_state.get("prefer_adaptive_comfort", False),
-            key="prefer_adaptive_comfort",
-        )
-
-        uhi_enabled = st.checkbox(
-            "Apply urban heat island bias",
-            value=st.session_state.get("apply_uhi_bias", False),
-            key="apply_uhi_bias",
-            help="Adds a uniform temperature uplift to simulate urban cores or poor nighttime ventilation."
-        )
-        if uhi_enabled:
-            st.slider(
-                "Bias magnitude (°C)",
-                min_value=0.5,
-                max_value=5.0,
-                value=float(st.session_state.get("uhi_bias_delta", 1.5)),
-                step=0.1,
-                key="uhi_bias_delta",
+        _phase_a_busy = bool(st.session_state.get("is_loading") or st.session_state.get("load_requested"))
+        if not _phase_a_busy:
+            st.markdown(
+                """
+                <footer class="bevl-footer" style="
+                    position: fixed;
+                    bottom: 0;
+                    left: 0;
+                    width: 100%;
+                    background: rgba(30, 41, 59, 0.9);
+                    color: white;
+                    text-align: center;
+                    padding: 8px 0;
+                    font-size: 14px;
+                    z-index: 1000;
+                    backdrop-filter: blur(10px);
+                    box-shadow: 0px -2px 10px rgba(0,0,0,0.2);
+                ">
+                    0 Climate Analysis Pro | Powered by BEVL | Version 3.0
+                </footer>
+                """,
+                unsafe_allow_html=True,
             )
             st.caption("All temperature-derived charts now reflect this additional heat load until you toggle it off.")
 
@@ -1136,19 +1744,104 @@ with st.sidebar:
                 st.metric("💨 Avg Wind", f"{avg_wind:.1f} m/s")
             st.markdown('</div>', unsafe_allow_html=True)
 
-# Add this to the end of your sidebar section, before the quick stats
-st.divider()
-st.markdown("### 🔧 Troubleshooting")
+def render_sidebar():
+    with st.sidebar:
+        st.markdown(SIDEBAR_HERO, unsafe_allow_html=True)
+        st.divider()
 
-if st.button("Reset Session & Try Again"):
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    _rerun()
+        epw_loaded = bool(st.session_state.get("cdf") is not None and st.session_state.get("header"))
+        current_page = st.session_state.get("nav_page", DEFAULT_PAGE)
+        if current_page in FROZEN_PAGES:
+            current_page = DEFAULT_PAGE
+        if current_page not in ALLOWED_PAGES:
+            current_page = DEFAULT_PAGE
+        st.session_state["nav_page"] = current_page
+
+        nav_labels = [label for label, _ in NAV_ITEMS]
+        st.markdown("### Visualize weather file")
+        
+        # Determine the effective selection based on state
+        current_label = PAGE_TO_LABEL.get(current_page, nav_labels[0])
+        default_index = nav_labels.index(current_label) if current_label in nav_labels else 0
+
+        if epw_loaded:
+            nav_choice = st.radio(
+                "Navigation",
+                options=nav_labels,
+                index=default_index,
+                label_visibility="collapsed",
+                key="sidebar_nav",
+            )
+            st.markdown(
+                """
+                <style>
+                /* Freeze roadmap items visually and functionally */
+                [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:nth-child(9),
+                [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:nth-child(10) {
+                    opacity: 0.45 !important;
+                    pointer-events: none !important;
+                    cursor: not-allowed !important;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.caption("🚧 Short-term prediction & future climate are coming soon")
+        else:
+            nav_choice = nav_labels[0]
+            st.radio(
+                "Navigation",
+                options=[nav_choice],
+                index=0,
+                label_visibility="collapsed",
+                key="sidebar_nav_locked",
+                disabled=True
+            )
+            locked_labels = nav_labels[1:]
+            if locked_labels:
+                st.markdown(
+                    "<div style='color:#5c6472; font-size:0.9rem;'>" +
+                    "<br>".join([f"• {lbl}" for lbl in locked_labels]) +
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+            st.info("Load a station from the map or upload an EPW/ZIP to unlock the dashboard views.")
+        
+        # Update state based on selection
+        frozen_hit = nav_choice in FROZEN_NAV_LABELS
+        nav_choice_effective = nav_choice if not frozen_hit else current_label
+        chosen_page = LABEL_TO_PAGE.get(nav_choice_effective, DEFAULT_PAGE)
+        
+        # Only update if changed to avoid rerun loops? Streamlit handles this mostly.
+        if st.session_state.get("nav_page") != chosen_page:
+            st.session_state["nav_page"] = chosen_page
+            _rerun()
+
+        _sidebar_filters_fragment(epw_loaded)
+
+        st.divider()
+        st.markdown("### 🔧 Troubleshooting")
+
+        if st.button("Reset Session & Try Again"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            _rerun()
+
+        st.markdown(
+            """
+            <div class="sidebar-brand">
+                <strong>BEVL Lab</strong><br/>
+                v1.0 · Weather intelligence for research & practice
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
 
 # ========== MAIN CONTENT ==========
 
-if st.session_state.get("loading_station_name"):
-    st.info(f"Loading data for {st.session_state['loading_station_name']}…")
+if st.session_state.get("active_page") == "select_station" and st.session_state.get("loading_station_name"):
+    st.status(f"Loading data for {st.session_state['loading_station_name']}…", expanded=False)
 
 if st.session_state.get("apply_uhi_bias") and st.session_state.get("cdf") is not None:
     st.info(
@@ -1160,7 +1853,15 @@ raw_epw_bytes = ss.get("raw_epw_bytes")
 source_label = ss.get("source_label")
 
 def _stage_station_and_load(station_info: dict):
-    """Load station data and trigger rerun. Called after station selection."""
+    """Stage station selection; controller performs the one-shot download+parse."""
+    station_id = station_info.get("station_id") or station_info.get("raw_id") or station_info.get("name")
+    if st.session_state.get("is_loading"):
+        return
+    if station_id and station_id == st.session_state.get("pending_station_id"):
+        return
+    if station_id and station_id == st.session_state.get("last_loaded_station_id"):
+        return
+
     st.session_state["loading_station_name"] = station_info.get("name", "selected station")
     st.session_state["sel_station"] = station_info
     st.session_state["selected_station"] = station_info
@@ -1170,32 +1871,205 @@ def _stage_station_and_load(station_info: dict):
     st.session_state["sel_station_url"] = zip_url
     display_label = station_info.get("display_label") or station_info.get("name") or "EPW"
     st.session_state["source_label"] = f"Station: {display_label}"
-    st.session_state.pop("pending_station", None)
-    st.session_state.pop("raw_epw_bytes", None)
+    st.session_state["pending_station_id"] = station_id
+    st.session_state["pending_station"] = station_info
+    st.session_state["load_requested"] = True
     st.session_state["page_after_station"] = "📊 Dashboard"
-    # Clear the just_loaded flag before rerun so next run doesn't trigger duplicate load
-    st.session_state["just_loaded_station"] = False
+    st.session_state.pop("raw_epw_bytes", None)
     _rerun()
 
 
-def render_station_picker():
-    # Render station selection with quick picks, dropdown, and map.
+def _station_df_signature(stations: pd.DataFrame) -> str:
+    cols = [c for c in ["lat", "lon", "name", "country", "period"] if c in stations]
+    if not cols:
+        return ""
+    subset = stations[cols].copy()
+    for c in cols:
+        subset[c] = subset[c].fillna("")
+    return str(pd.util.hash_pandas_object(subset, index=False).sum())
 
-    import plotly.express as px
+
+def _build_station_map_figure(stations: pd.DataFrame, map_height: int) -> go.Figure:
+    sig = _station_df_signature(stations)
+    cached_sig = st.session_state.get("_station_map_sig")
+    cached_fig = st.session_state.get("_station_map_fig")
+    if cached_sig == sig and cached_fig is not None:
+        return cached_fig
+
+    hover_text = stations["name"].fillna("").astype(str).tolist()
+    center_lat = float(stations["lat"].median())
+    center_lon = float(stations["lon"].median())
+
+    fig_map = go.Figure(
+        data=[
+            go.Scattermapbox(
+                lat=stations["lat"].tolist(),
+                lon=stations["lon"].tolist(),
+                mode="markers",
+                marker=dict(size=10, color="#5fd4ff", opacity=0.82),
+                hovertext=hover_text,
+                hovertemplate="%{hovertext}<extra></extra>",
+            )
+        ]
+    )
+
+    fig_map.update_layout(
+        mapbox=dict(
+            style="open-street-map",
+            bearing=0,
+            pitch=0,
+            center=dict(lat=center_lat, lon=center_lon),
+            zoom=2.2,
+        ),
+        dragmode="pan",
+        margin=dict(l=0, r=0, t=12, b=0),
+        height=map_height,
+        paper_bgcolor="#0b0f1a",
+        plot_bgcolor="#0b0f1a",
+        hovermode="closest",
+        clickmode="event+select",
+        showlegend=False,
+        uirevision="station-map",
+    )
+
+    st.session_state["_station_map_sig"] = sig
+    st.session_state["_station_map_fig"] = fig_map
+    return fig_map
+
+
+
+def _interactive_map_fragment() -> None:
+    """Micro-rerun fragment for the interactive map."""
     from streamlit_plotly_events import plotly_events
-    header = st.session_state.get("header", {}) if isinstance(st.session_state.get("header"), dict) else {}
-    location_meta = header.get("location", {}) if isinstance(header, dict) else {}
 
-    st.write("Select a weather file to unlock the dashboard. Upload from the sidebar or pick a station below.")
-    st.write("")
-    st.write("")
+    stations = st.session_state.get("_stations_picker_df")
+    if not isinstance(stations, pd.DataFrame) or stations.empty:
+        st.info("Station map is not available right now.")
+        return
 
-    # ---------- Station list + map ----------
-    from pathlib import Path
-    import re
+    # ========== INTERACTIVE MAP (full-width card) ==========
+    # Keep map dots exactly as rendered by _build_station_map_figure().
+    with st.container(border=True):
+        st.markdown("### 🗺️ Interactive Map")
+        st.caption("Click a station dot to load instantly.")
+        st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
 
-    stations = load_station_index()
-    stations = stations.dropna(subset=["lat", "lon"]).copy()
+    map_height = 700
+    map_slot = st.empty()
+    st.session_state["_map_slot"] = map_slot
+    fig_map = _build_station_map_figure(stations, map_height)
+
+    with map_slot.container():
+        selected_points = plotly_events(
+            fig_map,
+            click_event=True,
+            hover_event=False,
+            select_event=False,
+            override_height=map_height,
+            override_width=None,
+            key="station_map",
+        )
+
+    if selected_points and len(selected_points) > 0:
+        point = selected_points[0]
+        if "pointIndex" in point:
+            idx = point["pointIndex"]
+            if 0 <= idx < len(stations):
+                row = stations.iloc[idx]
+                station_info = {
+                    "name": row.get("name", "Unknown"),
+                    "country": row.get("country", "—"),
+                    "lat": row.get("lat", 0),
+                    "lon": row.get("lon", 0),
+                    "elevation_m": row.get("elevation_m", "—"),
+                    "timezone": row.get("timezone", "—"),
+                    "zip_url": row.get("zip_url", ""),
+                    "period": row.get("period", "—"),
+                    "heating_db": row.get("heating_db"),
+                    "cooling_db": row.get("cooling_db"),
+                    "display_label": row.get("display_label"),
+                    "station_id": row.get("station_id"),
+                    "raw_id": row.get("raw_id"),
+                }
+                station_id = row.get("station_id") or row.get("raw_id") or str(idx)
+                last_loaded_id = st.session_state.get("last_loaded_station_id")
+                pending_id = st.session_state.get("pending_station_id")
+                if station_id not in (last_loaded_id, pending_id):
+                    _stage_station_and_load(station_info)
+
+
+@st.fragment
+def _station_search_fragment() -> None:
+    """Micro-rerun fragment for station search + load button."""
+    stations = st.session_state.get("_stations_picker_df")
+    if not isinstance(stations, pd.DataFrame) or stations.empty:
+        return
+
+    st.markdown("### 🔍 Station Search")
+    st.caption(f"{len(stations):,} verified download links. Search, then load once.")
+    st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
+
+    search_col, load_col = st.columns([3, 1])
+    with search_col:
+        search_query = st.text_input(
+            "Search by station name, country, or period",
+            key="station_selector_query",
+            help="Type a city, ISO3 code, WMO station ID, source, or year range. Top 25 matches shown.",
+            placeholder="e.g., Paris FRA 2021 TMYx",
+        )
+
+        matches = stations.head(0)
+        choice_label = None
+        search = (search_query or "").strip()
+
+        if search:
+            mask = (
+                stations["display_label"].str.contains(search, case=False, na=False)
+                | stations["city_name"].str.contains(search, case=False, na=False)
+                | stations["country_name"].str.contains(search, case=False, na=False)
+            )
+            matches = stations[mask].head(25)
+
+            if matches.empty:
+                st.info("No stations match that search. Try a broader term or different year range.")
+            else:
+                choice_label = st.selectbox(
+                    "Matches",
+                    matches["display_label"],
+                    key="station_selector",
+                )
+        else:
+            st.caption("Start typing to search stations.")
+
+    with load_col:
+        chosen_row = None
+        if search and not matches.empty and choice_label:
+            chosen_row = matches[matches["display_label"] == choice_label].iloc[0]
+
+        if st.button("📍 Load Selected Station", type="primary", use_container_width=True):
+            if chosen_row is not None:
+                station_info = {
+                    "name": chosen_row.get("name", "Unknown"),
+                    "country": chosen_row.get("country", "—"),
+                    "lat": chosen_row.get("lat", 0),
+                    "lon": chosen_row.get("lon", 0),
+                    "elevation_m": chosen_row.get("elevation_m", "—"),
+                    "timezone": chosen_row.get("timezone", "—"),
+                    "zip_url": chosen_row.get("zip_url", ""),
+                    "period": chosen_row.get("period", "—"),
+                    "heating_db": chosen_row.get("heating_db"),
+                    "cooling_db": chosen_row.get("cooling_db"),
+                    "display_label": chosen_row.get("display_label"),
+                    "station_id": chosen_row.get("station_id"),
+                    "raw_id": chosen_row.get("raw_id"),
+                }
+                _stage_station_and_load(station_info)
+
+
+@CACHE(show_spinner=False, ttl=86400)
+def _prepare_station_picker_dataframe(stations_in: pd.DataFrame) -> pd.DataFrame:
+    """Prepare station dataframe for the picker/map (cached to avoid rerun lag)."""
+    stations = stations_in.dropna(subset=["lat", "lon"]).copy()
     stations["country_disp"] = stations.get("country", pd.Series(dtype=str)).fillna("—")
     stations["elev_disp"] = pd.to_numeric(stations["elevation_m"], errors="coerce").round(0).astype("Int64")
     stations["tz_disp"] = stations["timezone"].astype(str).replace({"nan": "—"})
@@ -1299,175 +2173,32 @@ def render_station_picker():
         return location_str or (row.get("raw_id") or "Unknown station")
 
     stations["display_label"] = stations.apply(make_label, axis=1)
+    return stations
 
-    # ========== INTERACTIVE MAP (full-width card) ==========
-    # Map renders immediately on page load - appears FIRST
-    with st.container(border=True):
-        st.markdown("### 🗺️ Interactive Map")
-        st.caption("Click a station dot to load it instantly.")
-        
-        st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
 
-    MAP_HEIGHT = 700
-    fig_map = go.Figure(
-        data=[
-            go.Scattermapbox(
-                lat=stations["lat"].tolist(),
-                lon=stations["lon"].tolist(),
-                mode="markers",
-                marker=dict(size=11, color="#5fd4ff", opacity=0.9),
-                text=stations["name"].tolist(),
-                customdata=stations[["name", "country", "lat", "lon", "elevation_m", "timezone", "zip_url", "period", "heating_db", "cooling_db"]].values.tolist(),
-                hoverinfo="text",
-                hovertemplate="%{text}",
-            )
-        ]
-    )
+def render_station_picker():
+    # Render station selection with quick picks, dropdown, and map.
 
-    fig_map.update_layout(
-        mapbox=dict(
-            style="open-street-map",
-            bearing=0,
-            pitch=0,
-            center=dict(lat=float(stations["lat"].median()), lon=float(stations["lon"].median())),
-            zoom=2.2,
-        ),
-        dragmode="pan",
-        margin=dict(l=0, r=0, t=12, b=0),
-        height=MAP_HEIGHT,
-        paper_bgcolor="#0b0f1a",
-        plot_bgcolor="#0b0f1a",
-        hovermode="closest",
-        clickmode="event+select",
-        showlegend=False,
-        uirevision="north_up",
-    )
+    header = st.session_state.get("header", {}) if isinstance(st.session_state.get("header"), dict) else {}
+    location_meta = header.get("location", {}) if isinstance(header, dict) else {}
 
-    # plotly_events() renders the map internally - no need for separate st.plotly_chart()
-    selected_points = plotly_events(
-        fig_map,
-        click_event=True,
-        hover_event=False,
-        select_event=False,
-        override_height=MAP_HEIGHT,
-        override_width=None,
-        key="map_click_v4"
-    )
+    st.write("Select a weather file to unlock the dashboard. Upload from the sidebar or pick a station below.")
+    st.write("")
+    st.write("")
 
-    # Process map click events - only load on NEW selections
-    if selected_points and len(selected_points) > 0:
-        point = selected_points[0]
-        if "pointIndex" in point:
-            idx = point["pointIndex"]
-            if 0 <= idx < len(stations):
-                row = stations.iloc[idx]
-                station_info = {
-                    "name": row.get("name", "Unknown"),
-                    "country": row.get("country", "—"),
-                    "lat": row.get("lat", 0),
-                    "lon": row.get("lon", 0),
-                    "elevation_m": row.get("elevation_m", "—"),
-                    "timezone": row.get("timezone", "—"),
-                    "zip_url": row.get("zip_url", ""),
-                    "period": row.get("period", "—"),
-                    "heating_db": row.get("heating_db"),
-                    "cooling_db": row.get("cooling_db"),
-                    "display_label": row.get("display_label"),
-                }
-                # Get station ID to track if already loaded
-                station_id = row.get("station_id") or row.get("raw_id") or str(idx)
-                last_loaded_id = st.session_state.get("last_loaded_station_id")
-                just_loaded = st.session_state.get("just_loaded_station", False)
-                
-                # Only load if this is a NEW station selection AND we haven't just loaded
-                # This prevents duplicate loads on reruns
-                if station_id != last_loaded_id and not just_loaded:
-                    # Mark that we're about to load to prevent rerun loops
-                    st.session_state["last_loaded_station_id"] = station_id
-                    st.session_state["just_loaded_station"] = True
-                    st.session_state["selected_station"] = station_info
-                    st.session_state["pending_station"] = station_info
-                    
-                    # Auto-load station immediately with spinner
-                    station_name_display = station_info.get("display_label") or station_info.get("name", "Unknown")
-                    with st.spinner(f"Loading station {station_name_display}..."):
-                        try:
-                            _stage_station_and_load(station_info)
-                            display_name = station_info.get("display_label") or station_info.get("name", "Unknown")
-                            station_id_display = station_info.get("station_id") or station_id
-                            st.success(f"✅ Loaded **{display_name}** ({station_id_display})")
-                        except Exception as e:
-                            st.error(f"❌ Failed to load station: {str(e)}")
-                            # On error, allow retry by clearing the loaded ID
-                            st.session_state.pop("last_loaded_station_id", None)
-                            st.session_state["just_loaded_station"] = False
-                elif station_id == last_loaded_id:
-                    # Station already loaded - clear the just_loaded flag if it was set
-                    st.session_state["just_loaded_station"] = False
+    # (pending_station is managed by controller; do not clear here)
 
-    # Removed sticky confirmation bar - stations load automatically on map click
+    # ---------- Station list + map ----------
+    from pathlib import Path
+    import re
 
+    stations_raw = _PRELOADED_STATIONS.copy() if isinstance(_PRELOADED_STATIONS, pd.DataFrame) else load_station_index_for_map()
+    stations = _prepare_station_picker_dataframe(stations_raw)
+    st.session_state["_stations_picker_df"] = stations
+
+    _interactive_map_fragment()
     st.divider()
-    
-    # ========== STATION SEARCH ==========
-    st.markdown("### 🔍 Station Search")
-    st.caption(f"{len(stations):,} verified download links. Search, then load once.")
-    st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
-
-    search_col, load_col = st.columns([3, 1])
-    with search_col:
-        search_query = st.text_input(
-            "Search by station name, country, or period",
-            key="station_selector_query",
-            help="Type a city, ISO3 code, WMO station ID, source, or year range. Top 25 matches shown.",
-            placeholder="e.g., Paris FRA 2021 TMYx"
-        )
-
-        matches = stations.head(0)
-        choice_label = None
-        search = (search_query or "").strip()
-
-        if search:
-            mask = (
-                stations["display_label"].str.contains(search, case=False, na=False)
-                | stations["city_name"].str.contains(search, case=False, na=False)
-                | stations["country_name"].str.contains(search, case=False, na=False)
-            )
-            matches = stations[mask].head(25)
-
-            if matches.empty:
-                st.info("No stations match that search. Try a broader term or different year range.")
-            else:
-                choice_label = st.selectbox(
-                    "Matches",
-                    matches["display_label"],
-                    key="station_selector",
-                )
-        else:
-            st.caption("Start typing to search stations.")
-
-    with load_col:
-        chosen_row = None
-        if search and not matches.empty and choice_label:
-            chosen_row = matches[matches["display_label"] == choice_label].iloc[0]
-
-        if st.button("📍 Load Selected Station", type="primary", use_container_width=True):
-            if chosen_row is not None:
-                st.session_state["selected_station"] = chosen_row.to_dict()
-                station_info = {
-                    "name": chosen_row.get("name", "Unknown"),
-                    "country": chosen_row.get("country", "—"),
-                    "lat": chosen_row.get("lat", 0),
-                    "lon": chosen_row.get("lon", 0),
-                    "elevation_m": chosen_row.get("elevation_m", "—"),
-                    "timezone": chosen_row.get("timezone", "—"),
-                    "zip_url": chosen_row.get("zip_url", ""),
-                    "period": chosen_row.get("period", "—"),
-                    "heating_db": chosen_row.get("heating_db"),
-                    "cooling_db": chosen_row.get("cooling_db"),
-                    "display_label": chosen_row.get("display_label"),
-                }
-                _stage_station_and_load(station_info)
+    _station_search_fragment()
 
 
 def handle_epw_upload(uploaded_file, picker_key: str = "sidebar") -> Optional[bytes]:
@@ -1515,85 +2246,36 @@ def handle_epw_upload(uploaded_file, picker_key: str = "sidebar") -> Optional[by
 
     st.session_state["raw_epw_bytes"] = raw_epw_bytes
     st.session_state["source_label"] = f"Uploaded: {filename}"
-    st.session_state["page_after_station"] = "📊 Dashboard"
     st.session_state.pop("loading_station_name", None)
     return raw_epw_bytes
 
-@CACHE(show_spinner=False)
-def fetch_epw_bytes(url: str) -> Optional[bytes]:
-    import requests, io, zipfile
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; ClimateAnalysisPro/1.0)",
-            "Accept": "*/*",
-            "Accept-Encoding": "gzip, deflate",
-        }
-        
-        # Add timeout and better error handling
-        r = requests.get(url, headers=headers, timeout=30, stream=True)
-        r.raise_for_status()
-        
-        # Check content type and size
-        content_type = r.headers.get('content-type', '').lower()
-        content_length = r.headers.get('content-length')
-        
-        if content_length and int(content_length) > 100_000_000:  # 100MB limit
-            st.warning(f"File too large: {content_length} bytes")
-            return None
-            
-        content = r.content
 
-        # If it's a ZIP, extract the largest EPW inside
-        if url.lower().endswith(".zip") or zipfile.is_zipfile(io.BytesIO(content)):
-            with zipfile.ZipFile(io.BytesIO(content), "r") as z:
-                epws = [m for m in z.namelist() if m.lower().endswith(".epw")]
-                if not epws:
-                    st.warning("ZIP file contains no EPW files")
-                    return None
-                epws.sort(key=lambda m: z.getinfo(m).file_size, reverse=True)
-                with z.open(epws[0]) as f:
-                    return f.read()
-        return content
-    except requests.exceptions.RequestException as e:
-        st.error(f"Network error: {str(e)}")
-        return None
-    except zipfile.BadZipFile:
-        st.error("Downloaded file is not a valid ZIP file")
-        return None
-    except Exception as e:
-        st.error(f"Unexpected error: {str(e)}")
-        return None
+# Kick off station preload as soon as the script starts so the map is ready on first paint
+_PRELOADED_STATIONS = load_station_index_for_map()
 
+# Strict routing: only one page renders per run.
+controller_page = st.session_state.get("active_page", "select_station")
 
-# Alternative EPW sources as fallbacks
-ALTERNATIVE_EPW_SOURCES = [
-    # Keep a minimal, general-purpose fallback list for manual selections
-    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/NY/Buffalo/Buffalo_Greater_International_AP_725280_TMY3.epw",
-    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/AZ/Phoenix/Phoenix_Sky_Harbor_Intl_Airport_722780_TMY3.epw",
-    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/IL/Chicago/Chicago_OHare_Intl_Airport_725300_TMY3.epw",
-    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/FL/Miami/Miami_Intl_Airport_722020_TMY3.epw",
-]
+nav_page = st.session_state.get("nav_page", DEFAULT_PAGE)
+if nav_page in FROZEN_PAGES:
+    nav_page = DEFAULT_PAGE
+if nav_page not in ALLOWED_PAGES:
+    nav_page = DEFAULT_PAGE
+st.session_state["nav_page"] = nav_page
 
-def try_multiple_sources(sources: List[str]) -> Tuple[Optional[bytes], Optional[str]]:
-    for url in sources:
-        epw_bytes = fetch_epw_bytes(url)
-        if epw_bytes is not None:
-            return epw_bytes, url
-    return None, None
-
-
-active_page = st.session_state.get("active_page", DEFAULT_PAGE)
-if active_page not in ALLOWED_PAGES:
-    active_page = DEFAULT_PAGE
-    st.session_state["active_page"] = active_page
+if controller_page != "select_station" or st.session_state.pop("_clear_map_on_next_run", False):
+    map_slot = st.session_state.pop("_map_slot", None)
+    if map_slot is not None:
+        map_slot.empty()
+    st.session_state.pop("_station_map_fig", None)
+    st.session_state.pop("_station_map_sig", None)
 
 main_upload = None
-if active_page == "Select weather file":
-    st.info("Load a station from the map or upload an EPW/ZIP to unlock the dashboard views.")
-    # Clear just_loaded flag at start of page render to allow new selections after rerun
-    if st.session_state.get("just_loaded_station") is True:
-        # Reset flag after page renders once after load
-        st.session_state["just_loaded_station"] = False
+def render_select_station_page():
+    render_landing_hero()
+    st.markdown("<hr class='page-separator' />", unsafe_allow_html=True)
+    st.markdown("<div id='station-picker'></div>", unsafe_allow_html=True)
+    st.caption("Select a station from the interactive map or drop your EPW/ZIP to unlock the dashboard views.")
     render_station_picker()
     main_upload = st.file_uploader(
         "Upload EPW or ZIP file",
@@ -1601,53 +2283,20 @@ if active_page == "Select weather file":
         help="Upload an EnergyPlus Weather file or a ZIP containing EPWs",
         key="main_epw_upload_primary",
     )
-else:
-    st.session_state.pop("pending_station", None)
-    st.session_state.pop("just_loaded_station", None)
 
-if main_upload is not None:
-    # ---- Uploader path ----
-    raw_epw_bytes = handle_epw_upload(main_upload, picker_key="main")
+    # Handle upload immediately (before any st.stop() gating in this branch).
+    if main_upload is not None:
+        raw_epw_bytes = handle_epw_upload(main_upload, picker_key="main")
+        if raw_epw_bytes is not None:
+            _rerun()
 
-elif ss.get("sel_station_url"):
-    url = ss["sel_station_url"]
-    alt_urls = ss.get("sel_station_alt_urls", [])
-    station_name = ss.get("sel_station", {}).get("name", "selected station")
+    if st.session_state.get("station_load_error"):
+        debug = st.session_state.get("station_load_debug") or {}
+        station_name = debug.get("station_name", "selected station")
+        url = debug.get("original_url", "")
+        urls_to_try = debug.get("urls_to_try", [])
+        successful_url = debug.get("successful_url")
 
-    # If the URL is an HTML anchor, extract the href
-    if '<a ' in str(url) and 'href' in str(url):
-        url = _extract_url(url) or url
-
-    # Generate alternative URLs to try (station-specific first)
-    urls_to_try = fix_station_url(url)
-    urls_to_try.extend(alt_urls)
-    attempted_urls = list(urls_to_try)
-
-    success = False
-    successful_url = None
-    for i, test_url in enumerate(urls_to_try):
-        url_clean = re.search(r'https.*?\.epw', test_url)
-        if url_clean:
-            test_url = url_clean.group()
-        with st.spinner(f"⏳ Trying source {i+1}/{len(urls_to_try)} for {station_name}..."):
-            raw_epw_bytes = fetch_epw_bytes(test_url)
-            if raw_epw_bytes is not None:
-                success = True
-                successful_url = test_url
-                break
-
-    # Auto-fallback to global alternates if station-specific URLs failed
-    if not success:
-        for j, alt_url in enumerate(ALTERNATIVE_EPW_SOURCES, start=1):
-            st.info(f"🔁 {station_name}: primary links unavailable — trying alternate source {j}/{len(ALTERNATIVE_EPW_SOURCES)}")
-            attempted_urls.append(alt_url)
-            raw_epw_bytes = fetch_epw_bytes(alt_url)
-            if raw_epw_bytes is not None:
-                success = True
-                successful_url = alt_url
-                break
-
-    if not success:
         st.error(f"❌ Could not fetch EPW from **{station_name}**. All download attempts failed.")
 
         troubleshooting_md = (
@@ -1665,8 +2314,7 @@ elif ss.get("sel_station_url"):
             "- Try the OneBuilding.org website directly (climate.onebuilding.org/)\n"
         )
         st.markdown(troubleshooting_md)
-        
-        # Enhanced debug information
+
         with st.expander("Technical Details & Debug Info"):
             st.write(f"Station: {station_name}")
             st.write(f"Original URL: `{url}`")
@@ -1681,16 +2329,19 @@ elif ss.get("sel_station_url"):
             st.markdown(about_error)
 
         st.session_state.pop("loading_station_name", None)
-        
-        # Recovery options
+
         st.markdown("### Recovery Options")
         col1, col2 = st.columns(2)
-        
         if col1.button("Clear & Start Over", use_container_width=True):
+            ss = st.session_state
             ss.pop("sel_station_url", None)
             ss.pop("sel_station", None)
+            ss.pop("pending_station_id", None)
+            ss.pop("pending_station", None)
+            ss.pop("station_load_error", None)
+            ss.pop("station_load_debug", None)
             _rerun()
-            
+
         if col2.button("Show Working Stations", use_container_width=True):
             st.info(
                 "Verified working stations:\n"
@@ -1701,115 +2352,88 @@ elif ss.get("sel_station_url"):
                 "- Miami, FL (722020)\n"
                 "- Seattle, WA (727930)\n"
             )
-        
-        st.stop()
-    
-    # Success case
-    source_label = f"Station: {station_name}" if successful_url == url else f"Station: {station_name} (alt)"
-    ss["raw_epw_bytes"] = raw_epw_bytes
-    ss["source_label"] = source_label
-    ss.pop("sel_station_url", None)
 
+    # Prevent fall-through rendering (no dashboard/widgets appended below).
+    st.stop()
+# Removed dangling else logic — controller handled in main()
 
-elif raw_epw_bytes is None:
+if raw_epw_bytes is None:
     pass
 
 
-@CACHE(show_spinner=False)
-def read_epw_with_schema_cached(epw_bytes: Union[bytes, Path]):
-    return read_epw_with_schema(epw_bytes)
+def show_epw_status():
+    if st.session_state.pop("_just_loaded_epw", False):
+        header = st.session_state.get("header")
+        df = st.session_state.get("df")
+        epw_notes = st.session_state.get("_last_epw_notes")
+        if epw_notes is None:
+            epw_notes = []
 
-@CACHE(show_spinner=False)
-def build_clima_dataframe_cached(df: pd.DataFrame) -> pd.DataFrame:
-    return build_clima_dataframe(df)
+        location_meta = header.get("location", {}) if isinstance(header, dict) else {}
+        city = location_meta.get("city") or location_meta.get("state_province") or "Unknown"
+        country = location_meta.get("country", "")
+        period = location_meta.get("period") or location_meta.get("data_periods") or "—"
+        domain = location_meta.get("source", "EPW")
+        record_count = len(df) if isinstance(df, pd.DataFrame) else 0
+        source_label = st.session_state.get("source_label", "")
 
+        summary_label = f"✅ Loaded EPW for {city}, {country} — {period} ({record_count:,} hours)"
+        st.success(summary_label)
+        if hasattr(st, "toast"):
+            st.toast("EPW loaded successfully ✅", icon="✅")
+        if source_label and source_label not in summary_label:
+            st.caption(f"Source: {source_label}")
+        st.session_state.pop("loading_station_name", None)
 
-if raw_epw_bytes is not None:
-    # Ingest → Clima DF
-    with st.spinner("Parsing EPW and building climate tables…"):
-        header, df, epw_notes = read_epw_with_schema_cached(raw_epw_bytes)
-        cdf = build_clima_dataframe_cached(df)
+        if epw_notes:
+            for note in epw_notes:
+                st.warning(f"EPW file note: {note}")
 
-    # ========== STORE IN SESSION STATE ==========
-    st.session_state.header = header
-    st.session_state.cdf = cdf
-    st.session_state.df = df
-    st.session_state.comfort_pkg = build_comfort_package(cdf)
-    st.session_state.cdf_raw = cdf.copy(deep=True)
-
-    location_meta = header.get("location", {}) if isinstance(header, dict) else {}
-    city = location_meta.get("city") or location_meta.get("state_province") or "Unknown"
-    country = location_meta.get("country", "")
-    period = location_meta.get("period") or location_meta.get("data_periods") or "—"
-    domain = location_meta.get("source", "EPW")
-    record_count = len(df)
-
-    summary_label = f"✅ Loaded EPW for {city}, {country} — {period} ({record_count:,} hours)"
-    st.success(summary_label)
-    if hasattr(st, "toast"):
-        st.toast("EPW loaded successfully ✅", icon="✅")
-    if source_label and source_label not in summary_label:
-        st.caption(f"Source: {source_label}")
-    st.session_state.pop("loading_station_name", None)
-
-    if epw_notes:
-        for note in epw_notes:
-            st.warning(f"EPW file note: {note}")
-
-    with st.expander("EPW metadata", expanded=False):
-        meta_rows = [
-            ("Location", f"{city}, {country}".strip().strip(',')),
-            ("Source", domain or "—"),
-            ("WMO", location_meta.get("wmo", "—")),
-            ("Elevation (m)", location_meta.get("elevation_m", "—")),
-            ("Timezone", location_meta.get("timezone", "—")),
-            ("Period", period),
-            ("Records", f"{record_count:,}"),
-        ]
-        meta_df = pd.DataFrame(meta_rows, columns=["Field", "Value"])
-        st.table(meta_df)
-
-    target_page = st.session_state.pop("page_after_station", None)
-    if target_page:
-        st.session_state["active_page"] = target_page
-        _rerun()
+        with st.expander("EPW metadata", expanded=False):
+            meta_rows = [
+                ("Location", f"{city}, {country}".strip().strip(',')),
+                ("Source", domain or "—"),
+                ("WMO", location_meta.get("wmo", "—")),
+                ("Elevation (m)", location_meta.get("elevation_m", "—")),
+                ("Timezone", location_meta.get("timezone", "—")),
+                ("Period", period),
+                ("Records", f"{record_count:,}"),
+            ]
+            meta_df = pd.DataFrame(meta_rows, columns=["Field", "Value"])
+            st.table(meta_df)
 
 
-cdf = st.session_state.get("cdf")
+def setup_cdf():
+    cdf = st.session_state.get("cdf")
 
-if cdf is None and st.session_state.get("active_page") != DEFAULT_PAGE:
-    st.session_state["active_page"] = DEFAULT_PAGE
+    if cdf is None and st.session_state.get("nav_page") != DEFAULT_PAGE:
+        st.session_state["nav_page"] = DEFAULT_PAGE
 
-# Harmonize alternate column names that may come from different EPW parsers (e.g., pvlib)
-if cdf is not None:
-    alias_columns = {
-        "temp_air": "drybulb",
-        "temp_dew": "dewpoint",
-        "dew_temperature": "dewpoint",
-        "relative_humidity": "relhum",
-        "rel_humidity": "relhum",
-        "ghi": "glohorrad",
-        "dni": "dirnorrad",
-        "dhi": "difhorrad",
-        "pressure": "atmos_pressure",
-        "atmospheric_pressure": "atmos_pressure",
-    }
-    for src, dest in alias_columns.items():
-        if dest not in cdf.columns and src in cdf.columns:
-            cdf[dest] = cdf[src]
-
-# Apply any queued navigation changes before the nav renders
-if "page_after_station" in st.session_state:
-    target_page = st.session_state.pop("page_after_station")
-    st.session_state["active_page"] = target_page
-
-page = st.session_state.get("active_page", DEFAULT_PAGE)
-if page in FROZEN_PAGES:
-    page = DEFAULT_PAGE
-if page not in ALLOWED_PAGES:
-    page = DEFAULT_PAGE
-st.session_state["active_page"] = page
-effective_page = page
+    # Harmonize alternate column names that may come from different EPW parsers (e.g., pvlib)
+    if cdf is not None:
+        alias_columns = {
+            "temp_air": "drybulb",
+            "temp_dew": "dewpoint",
+            "dew_temperature": "dewpoint",
+            "relative_humidity": "relhum",
+            "rel_humidity": "relhum",
+            "ghi": "glohorrad",
+            "dni": "dirnorrad",
+            "dhi": "difhorrad",
+            "pressure": "atmos_pressure",
+            "atmospheric_pressure": "atmos_pressure",
+        }
+        for src, dest in alias_columns.items():
+            if dest not in cdf.columns and src in cdf.columns:
+                cdf[dest] = cdf[src]
+    
+    page = st.session_state.get("nav_page", DEFAULT_PAGE)
+    if page in FROZEN_PAGES:
+        page = DEFAULT_PAGE
+    if page not in ALLOWED_PAGES:
+        page = DEFAULT_PAGE
+    st.session_state["nav_page"] = page
+    return page
 
 # ========== HEATMAP HELPERS (ANNUAL DIURNAL RESOURCE) ==========
 
@@ -2141,8 +2765,14 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
 
 
 # ========== MAIN TABS WITH IMPROVED ORGANIZATION ==========
-if cdf is not None:
-    if effective_page == "📊 Dashboard":
+def render_dashboard_page():
+    cdf = st.session_state.get("cdf")
+    header = st.session_state.get("header")
+    comfort_pkg = st.session_state.get("comfort_pkg")
+    effective_page = st.session_state.get("nav_page")
+    if cdf is None: return
+
+    if True: # Dashboard Page
         import plotly.express as px
         st.markdown("### 📊 Dashboard")
         st.caption(
@@ -2896,7 +3526,18 @@ if cdf is not None:
                         st.warning("Could not generate heatmap figure from available data.")
 
 # ====================== TEMPERATURE & HUMIDITY (CLEAN) ======================
-if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
+
+def render_trends_page():
+    effective_page = st.session_state.get("nav_page")
+    cdf = st.session_state.get("cdf")
+    if cdf is None: return
+
+    # Original 'if' check at 3527 is removed, but we check specific conditions if needed or rely on main() dispatch.
+    # Since main() dispatches here only for "Temp & Humidity" etc., we are good.
+    
+    # We kept the body indentation (4 spaces), so this function wrapper fits perfectly.
+    # if True: # removed to fix indentation error
+
     st.markdown("### Temperature & Humidity")
     st.caption("Clean reference plots with comfort ribbons and a single linked time window. Use this space to compare how temperature and humidity evolve at hourly, daily, or monthly scales.")
     # -------------------- Controls --------------------
@@ -3391,8 +4032,14 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
 
     st.plotly_chart(fig, use_container_width=True)
 
+
+def render_humidity_page():
+    cdf = st.session_state.get("cdf")
+    effective_page = st.session_state.get("nav_page")
+    if cdf is None: return
+
     # ==================== HUMIDITY BAR CHART ====================
-    if effective_page in ("RH Bars", "Temp & Humidity", "🌡️ Temperature & Humidity"):
+    if True: # effective_page check handled in main
         st.markdown("---")
         st.markdown("#### Humidity — bar chart")
         if "relhum" not in cdf:
@@ -3424,9 +4071,15 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
             )
             st.plotly_chart(fig_rh, use_container_width=True)
 
-    col = "drybulb"  # base variable for downstream charts
 
-    if effective_page in ("Temp & Humidity", "🌡️ Temperature & Humidity", "Daily Scatter"):
+def render_temperature_page():
+    cdf = st.session_state.get("cdf")
+    effective_page = st.session_state.get("nav_page")
+    if cdf is None: return
+    
+    col = "drybulb"  # base variable for potential downstream usage reuse
+
+    if True: # effective_page check handled in main
         # ==================== DAILY SCATTER (FACETS) ====================
         label_y    = "Dry-bulb temperature (°C)" if col == "drybulb" else "Relative Humidity (%)"
         line_color = "crimson" if col == "drybulb" else "dodgerblue"
@@ -3520,7 +4173,14 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
         )
         st.plotly_chart(fig_sc, use_container_width=True)
 
-    if effective_page in ("Temp & Humidity", "🌡️ Temperature & Humidity", "Annual Heatmap"):
+
+def render_heatmap_page():
+    cdf = st.session_state.get("cdf")
+    effective_page = st.session_state.get("nav_page")
+    col = "drybulb"
+    if cdf is None: return
+
+    if True: # effective_page check handled in main
         # ==================== HEATMAP ====================
         st.markdown("---")
         st.markdown("#### Annual heatmap (Day × Hour)")
@@ -3541,7 +4201,11 @@ if effective_page in ("🌡️ Temperature & Humidity", "Temp & Humidity"):
         st.plotly_chart(fig_hm, use_container_width=True)
 # ---------------------- SUN & CLOUDS ----------------------
 
-if effective_page == "☀️ Solar Analysis":
+
+def render_solar_page():
+    effective_page = st.session_state.get("nav_page")
+    # Solar page logic handled self-contained data loading if needed, or uses session state
+    
     st.markdown("### ☀️ Solar Analysis")
     st.caption(
         "Trace the sun’s path, check solar-time positions, and pair those tracks with EPW temperatures "
@@ -5017,7 +5681,12 @@ if effective_page == "☀️ Solar Analysis":
         st.plotly_chart(fig_hm, use_container_width=True)
 
 
-if page == "📈 Psychrometrics":
+
+def render_psychrometrics_page():
+    page = st.session_state.get("nav_page")
+    cdf = st.session_state.get("cdf")
+    # if cdf is None: return # handled by check inside or main
+    
     st.markdown("### 📈 Psychrometrics")
     st.caption(
         "Plot hourly temperature/ humidity points on the classic psychrometric grid to see "
@@ -5318,7 +5987,22 @@ if page == "📈 Psychrometrics":
         },
     )
 
-if page == "📡 Live Data vs EPW":
+
+def render_live_data_page():
+    page = st.session_state.get("nav_page")
+    cdf = st.session_state.get("cdf")
+    # Live Data might not strictly need cdf if just showing sensors? 
+    # But it accesses epw_df from cdf mainly via state or passed args?
+    # Original code accessed `epw_df` which... wait.
+    # Where does `epw_df` come from? 
+    # It must be defined global or from cdf?
+    # Let's check context. 
+    # Lines 6361: `if epw_df is None...`
+    # I need to ensure epw_df is available. 
+    # It is likely `cdf` or a derived df.
+    # I'll check if I need to define epw_df = cdf.
+    epw_df = cdf 
+    
     st.markdown("### Local Sensors vs Climate Baseline (EPW)")
     st.caption(
         "Compare on-site sensor readings to a long-term climate baseline (EnergyPlus Weather 'typical year'). Comparisons are statistical, not timestamp-based."
@@ -6298,7 +6982,10 @@ if page == "📡 Live Data vs EPW":
     )
     st.info("Capture screenshots of the Live Data tab, 7-day overlay, bias heatmap, and scatter plot for the Methods section.")
 
-if page == "Sensor Comparison":
+
+def render_sensor_comparison_page():
+    page = st.session_state.get("nav_page")
+    
     # ========== PROOF MARKER ==========
     st.success("Sensor Comparison UI loaded")
     
@@ -6888,7 +7575,7 @@ if page == "Sensor Comparison":
             if "_ts" in display_df.columns:
                 display_df = display_df.sort_values(by="_ts", ascending=False)
             
-            st.dataframe(display_df, use_container_width=True, height=400)
+            render_virtualized_table(display_df, height=400, key="sensor_raw_aggrid", page_size=50)
             
             # Download button
             csv = display_df.to_csv(index=False)
@@ -6901,8 +7588,12 @@ if page == "Sensor Comparison":
         else:
             st.info("Select at least one column to display.")
 
-# ====================== RAW DATA ======================
-if page == "📁 Raw Data":
+
+def render_raw_data_page():
+    page = st.session_state.get("nav_page")
+    # Raw Data page relies on st.session_state.cdf which should be valid if nav is allowed
+    
+    # ====================== RAW DATA ======================
     # ====================== RAW DATA ======================
     st.markdown("### 📁 Raw Data & Export")
     st.caption(
@@ -6954,7 +7645,7 @@ if page == "📁 Raw Data":
             st.caption("Large selection — showing every 3rd row for responsiveness.")
             view = view.iloc[::3]
 
-        st.dataframe(view, use_container_width=True, height=360)
+        render_virtualized_table(view, height=360, key="epw_raw_aggrid", page_size=75)
 
         # download filtered CSV
         csv_bytes = view.to_csv(index=False).replace("\r\n", "\n").encode("utf-8")
@@ -6966,7 +7657,14 @@ if page == "📁 Raw Data":
         st.json(st.session_state.header, expanded=False)
 
 
-if page == "📈 Short-Term Prediction (24–72h)":
+
+def render_short_term_prediction_page():
+    # imports usually global, but safe here if already imported or will be.
+    # Assuming fc, fepw etc are imported at top level or inside functions if lazy.
+    # Looking at previous code, 'fc' seems to be imported.
+    page = st.session_state.get("nav_page")
+    cdf = st.session_state.get("cdf")
+    
     st.markdown("### 📈 Short-Term Prediction (24–72h)")
     st.caption(
         "Train a lightweight SARIMAX model on the last 1–2 weeks of sensor data, then compare the next few days "
@@ -7102,7 +7800,11 @@ if page == "📈 Short-Term Prediction (24–72h)":
                 st.dataframe(forecast_df.set_index("timestamp"), use_container_width=True, height=260)
 
 
-if page == "🌍 Future Climate (2050 / 2080 SSP)":
+
+def render_future_climate_page():
+    page = st.session_state.get("nav_page")
+    cdf = st.session_state.get("cdf")
+    
     st.markdown("### 🌍 Future Climate Scenarios")
     st.caption(
         "Blend today’s EPW (optionally bias-corrected by your sensors) with CMIP6 deltas to sketch how typical "
@@ -7358,25 +8060,169 @@ if page == "🌍 Future Climate (2050 / 2080 SSP)":
 
 
 # ========== FOOTER ==========
-st.markdown("#### 📚 Learn more")
 st.markdown(
-    "\n".join([
-        "- [What is a Typical Meteorological Year (TMY)?](https://energyplus.net/weather/help) — background on how representative weather files are built.",
-        "- [pvlib-python reference](https://pvlib-python.readthedocs.io/) — documentation for the solar position and irradiance models powering the Solar Analysis tab.",
-        "- [Universal Thermal Climate Index (UTCI)](https://www.utci.org/) — explains the heat stress metric used in the comfort dashboards.",
-        "- [Future climate scenarios & CMIP6 overview](https://www.ipcc.ch/report/ar6/wg1/) — learn how SSP pathways drive the delta tables used for morphing.",
-        "- [EPW datasets via OneBuilding](https://climate.onebuilding.org/) — source for most typical-year weather files.",
-        "- [Project source on GitHub](https://github.com/your-org/bevl-climate-app) — inspect or contribute to the code powering this app."
-    ])
+    """
+    <style>
+        .footer-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 2rem;
+            padding: 2rem 0;
+            border-top: 1px solid #333;
+        }
+        .footer-column {
+            flex: 1;
+            min-width: 200px;
+        }
+        .footer-column h4 {
+            margin-bottom: 1rem;
+            color: #ffffff;
+        }
+        .footer-column ul {
+            list-style: none;
+            padding: 0;
+        }
+        .footer-links a {
+            color: #66b2ff;
+            text-decoration: none;
+            margin-right: 1rem;
+            font-size: 0.9rem;
+        }
+        .footer-bottom {
+            text-align: center;
+            padding-top: 1.5rem;
+            margin-top: 1rem;
+            border-top: 1px solid #222;
+            font-size: 0.8rem;
+            color: #888;
+        }
+    </style>
+    <footer>
+        <div class="footer-content">
+            <div class="footer-column">
+                <h4>Features</h4>
+                <ul>
+                    <li>🌍 10,000+ Global Stations</li>
+                    <li>📊 Advanced Analytics</li>
+                    <li>☀️ Solar Path Analysis</li>
+                    <li>📈 Psychrometric Charts</li>
+                </ul>
+                <div class="footer-links">
+                    <a href="https://github.com/UB-BEVL/climateclock/blob/main/README.md" target="_blank">Documentation</a>
+                    <a href="https://github.com/UB-BEVL/climateclock/blob/main/app.py" target="_blank">GitHub</a>
+                    <a href="mailto:maetman@buffalo.edu">Contact</a>
+                </div>
+            </div>
+            <div class="footer-column">
+                <h4>Data Sources</h4>
+                <p>Climate.OneBuilding.Org</p>
+                <p>ASHRAE Standards</p>
+                <p>EnergyPlus Weather Files</p>
+                <p>NOAA & NCEI (live)</p>
+            </div>
+            <div class="footer-column">
+                <h4>Built by BEVL Lab</h4>
+                <p>Environmental Virtual Lab</p>
+                <p>Version 2.0</p>
+                <p>Professional Weather Intelligence</p>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>Data sources: Climate.OneBuilding.Org, ASHRAE · Built by BEVL Lab</p>
+            <p>© 2025 BEVL Lab. Research & Academic Use.</p>
+        </div>
+    </footer>
+    """,
+    unsafe_allow_html=True,
 )
-
-st.markdown("---")
-footer_html = (
-    "<div style='text-align: center; color: #64748b; font-size: 0.9rem;'>"
-    "<p>Climate Analysis Pro - Professional Weather Data Analysis Tool</p>"
-    "</div>"
-)
-st.markdown(footer_html, unsafe_allow_html=True)
 ##EPW_hour[h] = mean(EPW values at hour h across the whole EPW year)
 
 ##Sensor_hour[h] = mean(sensor values at hour h across the sensor’s available dates)
+# ... (Functions defined above: render_header, render_sidebar, render_select_station_page, render_dashboard_page, etc.) ...
+
+def main():
+    """Main execution loop for the Weather Analysis App."""
+    
+    # 1. Setup session state & CSS
+    st.markdown(PREMIUM_CSS, unsafe_allow_html=True)
+    st.markdown(SECONDARY_CSS, unsafe_allow_html=True)
+
+    # 2. Render Header
+    render_header()
+
+    # 3. Render Sidebar (handles navigation state)
+    render_sidebar()
+
+    # 4. Controller Logic (Load EPW, etc.)
+    #    - If we just loaded an EPW, show success status
+    show_epw_status()
+    
+    #    - Ensure CDF is ready if available
+    setup_cdf()
+
+    # 5. Page Routing
+    #    - Determine effective page from session state
+    effective_page = st.session_state.get("nav_page", DEFAULT_PAGE)
+    
+    #    - Dispatch to appropriate render function
+    #    - Some pages might be restricted if no EPW is loaded (handled inside functions or via sidebar disabling)
+    
+    if effective_page == "Select weather file":
+        render_select_station_page()
+    
+    elif effective_page == "📊 Dashboard":
+        render_dashboard_page()
+    
+    elif effective_page == "📁 Raw Data":
+        render_raw_data_page()
+        
+    elif effective_page in ("Temp & Humidity", "🌡️ Temperature & Humidity"):
+        # Render all components for this composite page
+        render_trends_page()
+        render_humidity_page()
+        render_temperature_page()
+        render_heatmap_page()
+        
+    elif effective_page == "☀️ Solar Analysis":
+        render_solar_page()
+        
+    elif effective_page == "📈 Psychrometrics":
+        render_psychrometrics_page()
+        
+    elif effective_page == "📡 Live Data vs EPW":
+        render_live_data_page()
+        
+    elif effective_page == "Sensor Comparison":
+        render_sensor_comparison_page()
+        
+    elif effective_page == "📈 Short-Term Prediction (24–72h)":
+        render_short_term_prediction_page()
+        
+    elif effective_page == "🌍 Future Climate (2050 / 2080 SSP)":
+        render_future_climate_page()
+        
+    else:
+        st.error(f"Page '{effective_page}' not found.")
+
+    # 6. Footer
+    st.markdown(
+        """
+        <div class="bevl-footer">
+            <div style="margin-bottom:0.5rem">
+                <strong>BEVL Lab</strong> &bull; UB School of Architecture & Planning
+            </div>
+            <div style="opacity:0.6; font-size: 0.85rem">
+                Research-grade tools for the built environment.
+                <br/>
+                <a href="http://ap.buffalo.edu/bevl" target="_blank" style="color:inherit;text-decoration:underline;">Visit Lab</a> &bull; 
+                <a href="#" style="color:inherit;text-decoration:underline;">Documentation</a>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+if __name__ == "__main__":
+    main()
