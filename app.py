@@ -88,6 +88,80 @@ def convert_threshold_for_display(temp_c: float) -> float:
     return _c_to_f(temp_c) if _temp_unit() == "F" else temp_c
 
 
+# ========== UI COMPONENTS ==========
+
+# ========== UI COMPONENTS ==========
+from contextlib import contextmanager
+import time
+
+@contextmanager
+def cloud_loader(message: str = "Loading…"):
+    placeholder = st.empty()
+    placeholder.markdown(
+        f"""
+        <div style="
+            position: fixed;
+            right: 16px;s
+            top: 16px;
+            z-index: 9999;
+            padding: 6px 10px;
+            background: rgba(15,23,42,0.92);
+            border-radius: 999px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.6);
+            font-size: 12px;
+            color: #e5e7eb;
+        ">
+            <div class="cloud-loader">
+                <span></span><span></span><span></span>
+            </div>
+            <span>{message}</span>
+        </div>
+
+        <style>
+        .cloud-loader {{
+            position: relative;
+            width: 26px;
+            height: 18px;
+        }}
+        .cloud-loader span {{
+            position: absolute;
+            display: block;
+            background: #38bdf8;
+            border-radius: 999px;
+            opacity: 0.85;
+            animation: cloud-pulse 1.4s infinite ease-in-out;
+        }}
+        .cloud-loader span:nth-child(1) {{
+            width: 14px; height: 14px;
+            left: 0; bottom: 0;
+        }}
+        .cloud-loader span:nth-child(2) {{
+            width: 18px; height: 18px;
+            left: 8px; bottom: 0;
+            animation-delay: 0.12s;
+        }}
+        .cloud-loader span:nth-child(3) {{
+            width: 12px; height: 12px;
+            left: 18px; bottom: 2px;
+            animation-delay: 0.24s;
+        }}
+        @keyframes cloud-pulse {{
+            0%, 100% {{ transform: translateY(0); opacity: 0.8; }}
+            50%      {{ transform: translateY(-2px); opacity: 1.0; }}
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    try:
+        yield
+    finally:
+        time.sleep(0.05)
+        placeholder.empty()
+
 # ========== IMPROVED LAYOUT ==========
 st.set_page_config(
     page_title="Climate Analysis Pro",
@@ -98,14 +172,20 @@ st.set_page_config(
 
 # Prevent footer "ghosting" during reruns/navigation: hide any old <footer> ASAP.
 # The app footer we render later uses class "bevl-footer" and stays visible.
+# Prevent footer "ghosting" during reruns/navigation: hide any old <footer> ASAP.
+# The app footer we render later uses class "bevl-footer" and stays visible.
 st.markdown(
-        """
-        <style>
-            footer { display: none !important; }
-            footer.bevl-footer { display: block !important; }
-        </style>
-        """,
-        unsafe_allow_html=True,
+    """
+    <style>
+        footer { display: none !important; }
+        footer.bevl-footer { display: block !important; }
+        /* Hide Streamlit's default running spinner icon */
+        [data-testid="stStatusWidget"] {
+            display: none !important;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 st.session_state.setdefault("temperature_unit", "C")
@@ -2286,9 +2366,10 @@ def render_select_station_page():
 
     # Handle upload immediately (before any st.stop() gating in this branch).
     if main_upload is not None:
-        raw_epw_bytes = handle_epw_upload(main_upload, picker_key="main")
-        if raw_epw_bytes is not None:
-            _rerun()
+        with cloud_loader("Parsing EPW…"):
+            raw_epw_bytes = handle_epw_upload(main_upload, picker_key="main")
+            if raw_epw_bytes is not None:
+                _rerun()
 
     if st.session_state.get("station_load_error"):
         debug = st.session_state.get("station_load_debug") or {}
@@ -2359,6 +2440,36 @@ def render_select_station_page():
 
 if raw_epw_bytes is None:
     pass
+
+
+
+def get_active_location_name() -> str:
+    """Resolve the active station location name from session state."""
+    ss = st.session_state
+    # 1. Try likely keys for station dicts (e.g. from map picker)
+    for key in ["selected_station", "selectedstation", "selstation"]:
+        sel = ss.get(key)
+        if isinstance(sel, dict):
+            for field in ["display_label", "displaylabel", "station_name", "name", "city_name", "cityname"]:
+                val = sel.get(field)
+                if val:
+                    return str(val)
+    
+    # 2. Try header metadata (EPW parse result)
+    header = ss.get("header", {})
+    if isinstance(header, dict):
+        for key in ["location_name", "city", "source"]:
+            val = header.get(key)
+            if val:
+                return str(val)
+    
+    # 3. Fallback string keys
+    for key in ["loading_station_name", "loadingstationname", "source_label", "sourcelabel"]:
+        val = ss.get(key)
+        if val:
+            return str(val).replace("Uploaded: ", "")
+    
+    return "Unknown Location"
 
 
 def show_epw_status():
@@ -3269,7 +3380,12 @@ def render_dashboard_page():
         # ========== HEATMAPS TAB CONTENT ==========
         with heatmaps_tab:
             st.divider()
-            st.subheader("Annual Diurnal Resource Heatmaps")
+            st.divider()
+            
+            # Dynamic header with location
+            location_label = get_active_location_name()
+            
+            st.markdown(f"<h3>{location_label} – Annual Diurnal Resource Heatmaps</h3>", unsafe_allow_html=True)
             st.caption("Adjust legend thresholds to explore how different performance ranges appear across the year.")
 
             import json
@@ -3472,14 +3588,26 @@ def render_dashboard_page():
                             pass
                         fig.add_annotation(x=-0.06, y=0.5, xref='paper', yref='paper', text='Time of Day', showarrow=False, textangle=-90, font=dict(size=11))
 
+                        # Ensure proper left margin for "Time of Day" label
+                        safe_name = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
+                        
+                        fig.update_layout(
+                            title=f"{location_label} – Annual Diurnal Resource Heatmaps",
+                            margin=dict(l=90, r=10, t=60, b=20),
+                            yaxis=dict(title_standoff=15),
+                        )
+                        # Specific fix for left-most subplots (usually column 1)
+                        fig.update_yaxes(title_standoff=15)
+
                         st.plotly_chart(fig, use_container_width=False, config={"responsive": False})
 
                         # Downloads reflecting current thresholds
+                        clean_loc = safe_name # reuse safe_name
                         c1d, c2d = st.columns(2)
                         with c1d:
                             try:
-                                png_bytes = fig.to_image(format="png", scale=2)
-                                st.download_button(label="📥 Download heatmaps as PNG", data=png_bytes, file_name="diurnal_heatmaps.png", mime="image/png")
+                                png_bytes = fig.to_image(format="png", scale=2, width=1200, height=800)
+                                st.download_button(label="📥 Download heatmaps as PNG", data=png_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.png", mime="image/png")
                             except Exception:
                                 html_bytes = fig.to_html(include_plotlyjs='cdn').encode('utf-8')
                                 st.download_button(label="📥 Download heatmaps (HTML)", data=html_bytes, file_name="diurnal_heatmaps.html", mime="text/html")
@@ -3986,8 +4114,13 @@ def render_trends_page():
     )
 
     # Reduce excess padding so the two panels read as a single, compact stack
+    location_name = get_active_location_name()
+    safe_name = location_name.replace(" ", "_").replace(",", "").replace("__", "_")
+
     fig.update_layout(
-        margin=dict(l=70, r=30, t=45, b=40),
+        title=f"{location_name} – Temperature & Humidity",
+        title_x=0.5,
+        margin=dict(l=80, r=40, t=80, b=40),
         plot_bgcolor="rgba(12, 17, 26, 1)",
         paper_bgcolor="rgba(12, 17, 26, 1)",
         legend=dict(font=dict(color="#e5e7eb", size=12)),
@@ -4032,6 +4165,22 @@ def render_trends_page():
 
     st.plotly_chart(fig, use_container_width=True)
 
+    # Download buttons for Trends
+    d1, d2 = st.columns(2)
+    with d1:
+        try:
+            # Generate PNG (wrapping in try/except to avoid crashes on some hosts)
+            png_bytes = fig.to_image(format="png", width=1600, height=700, scale=2)
+            st.download_button(f"📥 Download Trends (PNG)", png_bytes, f"{safe_name}_temperature_humidity.png", "image/png")
+        except Exception:
+            pass
+    with d2:
+        try:
+            html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")
+            st.download_button("📥 Download Trends (HTML)", html_bytes, "trends_chart.html", "text/html")
+        except Exception:
+            pass
+
 
 def render_humidity_page():
     cdf = st.session_state.get("cdf")
@@ -4070,6 +4219,21 @@ def render_humidity_page():
                 bargap=0.15
             )
             st.plotly_chart(fig_rh, use_container_width=True)
+            
+            # Download buttons for Humidity Bar
+            d1, d2 = st.columns(2)
+            with d1:
+                try:
+                    png_bytes = fig_rh.to_image(format="png", width=1200, height=600, scale=2)
+                    st.download_button("📥 Download Humidity (PNG)", png_bytes, "humidity_chart.png", "image/png", key="dl_hum_png")
+                except Exception:
+                    pass
+            with d2:
+                try:
+                    html_bytes = fig_rh.to_html(include_plotlyjs="cdn").encode("utf-8")
+                    st.download_button("📥 Download Humidity (HTML)", html_bytes, "humidity_chart.html", "text/html", key="dl_hum_html")
+                except Exception:
+                    pass
 
 
 def render_temperature_page():
@@ -4212,6 +4376,13 @@ def render_solar_page():
         "before taking shading or PV decisions. The plots highlight seasonal envelopes so you can "
         "see when the sun is high, low, or missing entirely."
     )
+
+    # Ensure Session State Data (Hoisted to prevent NameError)
+    cdf = st.session_state.get("cdf")
+    header = st.session_state.get("header")
+    if cdf is None or header is None:
+        st.info("No EPW data loaded. Please upload a file in the Sidebar.")
+        return
 
 # sunpath.py
 # A compact, production-minded sun-path plotter (2D angular + optional 3D)
@@ -4470,6 +4641,8 @@ def render_solar_page():
         show_analemmas: bool = True,
         hours_for_analemma=range(6, 19),
         analemma_step_days: int = 7,
+        show_labels: bool = False,
+        marker_step: int = 3,
     ) -> go.Figure:
         from datetime import timedelta
 
@@ -4527,7 +4700,7 @@ def render_solar_page():
             x=[az_unit(a)[0] * 1.07 for _, a in cardinals],
             y=[az_unit(a)[1] * 1.07 for _, a in cardinals],
             text=[t for t, _ in cardinals], mode="text", showlegend=False, hoverinfo="skip",
-            textfont=dict(size=16, color="#e5e7eb", family="Arial Black")
+            textfont=dict(size=20, color="#e5e7eb", family="Arial Black")
         ))
 
         # Altitude ring labels (placed toward southern rim for readability)
@@ -4574,6 +4747,27 @@ def render_solar_page():
         xs_sel, ys_sel, az_sel, el_sel, idx_sel = sunpath_for_day(date)
         if xs_sel.size > 0:
             fig.add_trace(go.Scatter(x=xs_sel, y=ys_sel, mode="lines", line=dict(color="#22d3ee", width=2.4, dash="dot"), name=f"{date:%b %d} Path", showlegend=True, hoverinfo="skip"))
+            
+            # Add markers every N hours
+            # Extract indices where minute==0 and hour % marker_step == 0
+            mask_indices = [i for i, t in enumerate(idx_sel) if t.minute == 0 and t.hour % marker_step == 0]
+            if mask_indices:
+                xm = xs_sel[mask_indices]
+                ym = ys_sel[mask_indices]
+                tm = idx_sel[mask_indices]
+                lbls = [t.strftime("%H:%M") for t in tm]
+                
+                fig.add_trace(go.Scatter(
+                    x=xm, y=ym,
+                    mode="markers+text" if show_labels else "markers",
+                    text=lbls if show_labels else None,
+                    textposition="top center",
+                    marker=dict(size=8, color="#22d3ee", line=dict(width=1, color="#fff")),
+                    textfont=dict(color="#e5e7eb", size=11),
+                    name="Hour Markers",
+                    showlegend=False,
+                    hoverinfo="skip"
+                ))
 
         # Current sun marker: pick nearest to 'now' in site tz (if within same day samples)
         now_local = pd.Timestamp.now(tz=site.tz)
@@ -4658,20 +4852,20 @@ def render_solar_page():
                    font=dict(size=12, color="#e5e7eb"), bordercolor="#334155", borderwidth=1, bgcolor="rgba(15,23,42,0.85)", borderpad=6)
 
         fig.update_layout(
-            xaxis=dict(scaleanchor="y", range=[-1.12, 1.12], visible=False),
-            yaxis=dict(range=[-1.12, 1.12], visible=False),
-            margin=dict(l=20, r=180, t=56, b=20),
-            height=700,
-            title=f"Sun Path Diagram • {date:%b %d, %Y}",
+            xaxis=dict(scaleanchor="y", range=[-1.15, 1.15], visible=False),
+            yaxis=dict(range=[-1.15, 1.15], visible=False),
+            margin=dict(l=20, r=20, t=60, b=40),
+            height=750,
+            title=dict(text=f"Sun Path Diagram • {date:%b %d, %Y}", x=0.5, font=dict(size=18, color="#e5e7eb")),
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
-                y=1.02,
-                xanchor="left",
-                x=0,
-                bgcolor="rgba(0,0,0,0.55)",
+                y=-0.1,
+                xanchor="center",
+                x=0.5,
+                bgcolor="rgba(0,0,0,0)",
                 bordercolor="#444",
-                borderwidth=1,
+                borderwidth=0,
                 font=dict(color="#e5e7eb")
             ),
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#e5e7eb"),
@@ -5180,35 +5374,19 @@ def render_solar_page():
 
     # ---------- CLI / Demo ----------
 
-    def main():
-        p = argparse.ArgumentParser()
-        p.add_argument("--lat", type=float, required=True)
-        p.add_argument("--lon", type=float, required=True)
-        p.add_argument("--tz", type=str, required=True)
-        p.add_argument("--date", type=str, default="2025-09-23")
-        p.add_argument("--projection", type=str, default="stereographic", choices=["stereographic", "orthographic"])
-        p.add_argument("--show3d", action="store_true")
-        args = p.parse_args()
+    # ===== SUN PATH IMPLEMENTATION =====
+    
+    # Data validated at top of function
 
-        site = Site(args.lat, args.lon, args.tz)
-        date = pd.Timestamp(args.date, tz=site.tz)
-
-        opt2d = Options2D(projection=args.projection, show_annual_grid=True, show_hour_labels=True)
-        fig2d, _ = draw_sunpath_2d(site, date, opt2d)
-
-        opt3d = Options3D(show_3d=args.show3d, show_rays=True,
-                        massing=[(-0.2, -0.1, 0.2, 0.3, 0.0, 0.25)])
-        if opt3d.show_3d:
-            fig3d, _ = draw_sunpath_3d(site, date, opt3d, rays_point=(0.0, 0.0, 0.0))
-
-        plt.show()
-
-            # ===== SUN PATH (render above cloud coverage) =====
     from datetime import timezone, timedelta
 
-    # Build timezone from EPW header offset, then a Site from the same header
-    loc = header["location"]
-    tz_hours = float(loc.get("timezone") or 0.0)            # e.g., -5 for Buffalo
+    # Timezone & Location
+    # Redefine locally to ensure scope availability (belt & suspenders)
+    cdf = st.session_state.get("cdf")
+    header = st.session_state.get("header")
+    
+    loc = header.get("location", {})
+    tz_hours = float(loc.get("timezone") or 0.0)
     tzinfo = timezone(timedelta(hours=tz_hours))
 
     site = Site(
@@ -5221,71 +5399,90 @@ def render_solar_page():
 
         # ===== SUN PATH (interactive) =====
 
-    c1, c2, c3 = st.columns([1,1,1])
-    # Sun-path date input removed per UX request; use today's date in site timezone
-    sel_date = pd.Timestamp.now(tz=tzinfo).date()
-    proj = c2.selectbox("2D projection", ["stereographic", "orthographic"], index=0)
-    show3d = c3.checkbox("Show 3D dome & rays", value=False)
 
-    # Prepare EPW-derived dataframe with relevant variables if present
+    c1, c2, c3 = st.columns([1.4, 1.1, 0.9])
+    with c1:
+        color_mode = st.selectbox(
+            "Color sun points by",
+            ["Dry Bulb Temperature (°C)", "Solar Radiation", "None"],
+            index=0,
+            key="solar_color_mode",
+        )
+    with c2:
+        projection = st.selectbox(
+            "2D projection",
+            ["stereographic", "azimuthal", "orthographic"],
+            index=0,
+            key="solar_projection",
+        )
+    with c3:
+        show_dome = st.checkbox("Show 3D dome & rays", value=False, key="solar_show_dome")
+
+    c4, c5 = st.columns([1.4, 0.8])
+    with c4:
+        marker_step = st.slider(
+            "Show sun markers every N hours",
+            min_value=1,
+            max_value=4,
+            value=3,
+            step=1,
+            key="solar_marker_step",
+        )
+    with c5:
+        show_labels = st.checkbox(
+            "Show labels on sun markers",
+            value=False,
+            key="solar_show_labels",
+        )
+
+    # Prepare EPW-derived dataframe with relevant variables
     epw_df = pd.DataFrame(index=cdf.index)
     temp_col = get_metric_column(cdf, ["drybulb", "temp_air", "temperature", "tdb"])
-    if temp_col:
-        epw_df["temp_air"] = cdf[temp_col]
+    if temp_col: epw_df["temp_air"] = cdf[temp_col]
     solar_col = get_metric_column(cdf, ["glohorrad", "ghi", "global_horiz", "global_horizontal", "solar", "radiation"])
-    if solar_col:
-        epw_df["glohorrad"] = cdf[solar_col]
-    rh_col = get_metric_column(cdf, ["relhum", "relative_humidity", "rh"])
-    if rh_col:
-        epw_df["relhum"] = cdf[rh_col]
-    wind_col = get_metric_column(cdf, ["windspd", "wind_speed", "wspd", "wind"])
-    if wind_col:
-        epw_df["windspd"] = cdf[wind_col]
+    if solar_col: epw_df["glohorrad"] = cdf[solar_col]
+    
+    # Map selection to internal color_var
+    if color_mode == "Dry Bulb Temperature (°C)":
+        color_var = "temperature"
+    elif color_mode == "Solar Radiation":
+        color_var = "solar"
+    else:
+        color_var = "temperature" # fallback/none
 
-    # Ensure tz-awareness consistent with site tz, then convert to UTC for clean joins
-    if epw_df.index.tz is None:
-        epw_df.index = epw_df.index.tz_localize(tzinfo)
-    epw_df = epw_df.tz_convert("UTC").sort_index()
-    epw_df = epw_df[~epw_df.index.duplicated(keep="first")]
+    # Aliases for 3D chart compatibility
+    hour_stride = marker_step
+    label_every = marker_step
 
-    # 3D-specific controls
-    avail_options = []
-    option_map = {}
-    if "temp_air" in epw_df.columns:
-        avail_options.append("Dry Bulb Temperature (°C)")
-        option_map["Dry Bulb Temperature (°C)"] = "temperature"
-    if "glohorrad" in epw_df.columns:
-        avail_options.append("Solar Radiation (W/m²)")
-        option_map["Solar Radiation (W/m²)"] = "solar"
-    if "relhum" in epw_df.columns:
-        avail_options.append("Relative Humidity (%)")
-        option_map["Relative Humidity (%)"] = "humidity"
-    if "windspd" in epw_df.columns:
-        avail_options.append("Wind Speed (m/s)")
-        option_map["Wind Speed (m/s)"] = "wind"
-    if not avail_options:
-        avail_options = ["Dry Bulb Temperature (°C)"]
-        option_map["Dry Bulb Temperature (°C)"] = "temperature"
-
-    c4, c5 = st.columns([1,1])
-    color_choice_label = c4.selectbox("Color sun points by", options=avail_options, index=0)
-    hour_stride = c5.slider("Show sun every N hours", min_value=1, max_value=4, value=1, step=1)
-    color_var = option_map.get(color_choice_label, "temperature")
-
-    show_labels = st.checkbox("Show labels on sun markers", value=True)
-    marker_every = st.slider("Show sun markers every N hours", min_value=1, max_value=4, value=1, step=1)
-    label_every = marker_every
-
-
-
-
+    # Sun-path date
+    sel_date = pd.Timestamp.now(tz=tzinfo).date() # default simple
     sel_ts = pd.Timestamp(sel_date, tz=tzinfo)
     display_date = sel_ts.strftime("%b %d, %Y")
 
-    fig2d = sunpath_plotly_2d(site, sel_ts, proj)
-    st.plotly_chart(fig2d, use_container_width=True, config={"displayModeBar": True})
+    # Ensure tz-awareness consistent
+    if epw_df.index.tz is None:
+        epw_df.index = epw_df.index.tz_localize(tzinfo)
+    
+    # 2D Plot
+    fig = sunpath_plotly_2d(site, sel_ts, projection, show_labels=show_labels, marker_step=marker_step)
 
-    if show3d:
+    # Layout Improvement with Global helper
+    active_location_name = get_active_location_name()
+    fig.update_layout(
+        title=f"{active_location_name} – Sun Path Diagram",
+        title_x=0.5,
+        legend=dict(
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=-0.1,
+            yanchor="top",
+        ),
+    )
+    
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+
+    if show_dome:
         st.subheader(f"Sun Path (3D) — {display_date}")
         view_state = st.session_state.get("sunpath3d_view", "default")
         v1, v2, v3, v4 = st.columns(4)
@@ -5319,7 +5516,7 @@ def render_solar_page():
             hour_stride=hour_stride,
             show_labels=show_labels,
             label_every=label_every,
-            marker_every=marker_every,
+            marker_every=marker_step,
             camera_eye=camera_eye,
         )
         # Coerce common non-figure returns and guard against bad types before plotting.
@@ -5698,6 +5895,7 @@ def render_psychrometrics_page():
     st.caption("Clean grid with absolute humidity (g/kg), RH isolines, saturation curve, and hourly EPW scatter.")
 
     # ------- Controls -------
+    # Row 1: Toggles
     cA, cB = st.columns([1.2, 1])
     auto_zoom = cA.checkbox("Auto zoom to EPW range", value=True, help="Fit axes to EPW hourly temperature and absolute humidity range.")
     show_enthalpy = cB.checkbox("Show enthalpy & v lines", value=True)
@@ -5750,7 +5948,23 @@ def render_psychrometrics_page():
     else:
         P_kPa = 101.325
 
+    # Row 2: Month Filter
+    import pandas as pd
+    month_options = ["All"] + [pd.Timestamp(2001, m, 1).strftime("%b") for m in range(1, 13)]
+    selected_month = st.select_slider(
+        "Filter hourly points by month",
+        options=month_options,
+        value="All",
+        key="psychro_month_filter",
+    )
+
     dfp = cdf[["drybulb", "relhum"]].dropna().copy()
+    dfp["month"] = dfp.index.month
+
+    if selected_month != "All":
+        month_num = month_options.index(selected_month)  # Jan=1, etc.
+        dfp = dfp[dfp["month"] == month_num]
+
     if dfp.empty:
         st.info("No points to plot.")
         st.stop()
@@ -5838,19 +6052,32 @@ def render_psychrometrics_page():
     fig_psy.add_trace(go.Scatter(
         x=T_axis, y=y_sat_gpkg, mode="lines",
         line=dict(width=2.5, color="rgba(120,120,120,1.0)"),
+        showlegend=False,
         name="Saturation (100% RH)", hovertemplate="Tdb %{x:.1f}°C<br>Abs %{y:.2f} g/kg<extra></extra>"
     ))
 
-    # RH isolines (dashed gray)
+    # RH isolines (dashed gray) + Inline Labels
     for rh in rh_list:
         fig_psy.add_trace(go.Scatter(
             x=T_axis, y=rh_curves_gpkg[rh], mode="lines",
             line=dict(width=1.2, dash="dot", color="rgba(120,120,120,0.8)"),
-            name=f"{rh}% RH", showlegend=(rh in (20,40,60,80)),
+            name=f"{rh}% RH", showlegend=False,
             hovertemplate=f"{rh}% RH<br>Tdb %{{x:.1f}}°C<br>Abs %{{y:.2f}} g/kg<extra></extra>"
         ))
+        # Add inline label for filtered RH lines (20, 40, 60, 80)
+        if rh in [20, 40, 60, 80]:
+            # Simple heuristic: pick a T near the nicer part of the curve (e.g., T=25 or T=35)
+            # Find y at T=30
+            y_lbl = np.interp(30.0, T_axis, rh_curves_gpkg[rh])
+            if Y_MIN <= y_lbl <= Y_MAX and 30.0 <= X_MAX:
+                fig_psy.add_annotation(
+                    x=30.0, y=y_lbl, text=f"{rh}%",
+                    showarrow=False,
+                    font=dict(size=10, color="rgba(200,200,200,0.6)"),
+                    bgcolor="rgba(15,23,42,0.4)", # slight bg for readability
+                )
 
-    # Optional: enthalpy & specific volume helpers
+    # Optional: enthalpy & specific volume helpers + Labels
     if show_enthalpy:
         for h in enthalpy_levels:
             w_line = w_from_enthalpy(T_axis, h)
@@ -5858,25 +6085,35 @@ def render_psychrometrics_page():
             fig_psy.add_trace(go.Scatter(
                 x=T_axis, y=y_line, mode="lines",
                 line=dict(width=1.25, dash="dash", color="rgba(255,165,0,0.85)"),
-                name=(f"h={h} kJ/kg"), hoverinfo="skip"
+                name=(f"h={h} kJ/kg"), showlegend=False, hoverinfo="skip"
             ))
+            # Label
+            y_lbl_h = np.interp(35.0, T_axis, y_line)
+            if Y_MIN <= y_lbl_h <= Y_MAX:
+                fig_psy.add_annotation(
+                    x=35.0, y=y_lbl_h, text=f"h={h}",
+                    showarrow=False,
+                    font=dict(size=10, color="rgba(255,165,0,0.85)"),
+                    align="left"
+                )
+
         for v in v_levels:
             w_line = w_from_specific_volume(T_axis, v, P_kPa)
             y_line = abs_hum_gpkg_from_w(w_line)
             fig_psy.add_trace(go.Scatter(
                 x=T_axis, y=y_line, mode="lines",
                 line=dict(width=1.25, dash="dot", color="rgba(90,140,255,0.85)"),
-                name=(f"v={v:.2f} m3/kg"), hoverinfo="skip"
+                name=(f"v={v:.2f} m3/kg"), showlegend=False, hoverinfo="skip"
             ))
-
-    # RH % labels along the right margin (like PVSyst look)
-    for rh in rh_list:
-        x_lab = X_MAX - 0.2
-        y_curve = np.interp(x_lab, T_axis, rh_curves_gpkg[rh])
-        if Y_MIN <= y_curve <= Y_MAX:
-            fig_psy.add_annotation(x=X_MAX, y=y_curve, text=f"{rh}%",
-                                xanchor="left", showarrow=False,
-                                font=dict(size=11, color="rgba(120,120,120,0.9)"))
+            # Label
+            y_lbl_v = np.interp(20.0, T_axis, y_line)
+            if Y_MIN <= y_lbl_v <= Y_MAX:
+                fig_psy.add_annotation(
+                    x=20.0, y=y_lbl_v, text=f"v={v}",
+                    showarrow=False,
+                    font=dict(size=10, color="rgba(90,140,255,0.85)"),
+                    align="left"
+                )
 
     # Scatter points (hourly conditions)
     custom = np.c_[RH_pts, Pv_pts, h_pts, v_pts, dp_pts, tw_pts]
@@ -5884,6 +6121,7 @@ def render_psychrometrics_page():
         x=T_pts, y=Y_pts_gpkg, mode="markers",
         marker=dict(size=4, opacity=0.35, color="royalblue"),
         name="Hourly conditions",
+        showlegend=False,
         customdata=custom,
         hovertemplate=(
             "<b>Hourly</b><br>"
@@ -5955,23 +6193,28 @@ def render_psychrometrics_page():
             tr.marker.opacity = 0.45
 
 
+    # Dynamic Header Logic
+    loc_name = get_active_location_name()
+    safe_name = loc_name.replace(" ", "_").replace(",", "").replace("/", "_")
+
     fig_psy.update_layout(
-        margin=dict(l=90, r=280, t=70, b=80),  # extra right for the legend
+        margin=dict(l=90, r=60, t=70, b=80),
         height=680,
-        legend=dict(
-            orientation="v",
-            x=1.18, y=1.0,
-            xanchor="left", yanchor="top",
-            bgcolor="rgba(0,0,0,0)",
-            bordercolor="rgba(255,255,255,0.20)",
-            borderwidth=0.8,
-            itemclick=False,
-            itemdoubleclick=False
-        ),
         hovermode="closest",
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        title=dict(text="Psychrometric Chart", x=0.01, xanchor="left", yanchor="top", pad=dict(t=10, b=10)),
+        title=dict(text=f"{loc_name} – Psychrometric Chart", x=0.5, xanchor="center", yanchor="top", pad=dict(t=10, b=10)),
+        showlegend=False,
+        # Add Right Axis for RH
+        yaxis2=dict(
+            overlaying="y",
+            side="right",
+            title=dict(text="Relative Humidity (%)", font=dict(size=11)),
+            tickfont=dict(size=10),
+            tickvals=[], 
+            showgrid=False,
+            zeroline=False,
+        ),
     )
     fig_psy.add_annotation(
         xref="paper", yref="paper", x=0.0, y=1.12,
@@ -5986,6 +6229,27 @@ def render_psychrometrics_page():
             "modeBarButtonsToRemove": ["select2d", "lasso2d"],
         },
     )
+
+    # Download buttons for Psychrometric Chart
+    d1, d2 = st.columns(2)
+    with d1:
+        try:
+            # Explicitly safe dimensions to prevent memory crash
+            png_bytes = fig_psy.to_image(format="png", width=1200, height=900, scale=2)
+            st.download_button(
+                label="Download chart (PNG)",
+                data=png_bytes,
+                file_name=f"{safe_name}_psychrometric_chart.png",
+                mime="image/png",
+            )
+        except Exception:
+            pass
+    with d2:
+        try:
+            html_bytes = fig_psy.to_html(include_plotlyjs="cdn").encode("utf-8")
+            st.download_button("📥 Download Chart (HTML)", html_bytes, "psychrometric_chart.html", "text/html", key="dl_psy_html")
+        except Exception:
+            pass
 
 
 def render_live_data_page():
@@ -6008,6 +6272,18 @@ def render_live_data_page():
         "Compare on-site sensor readings to a long-term climate baseline (EnergyPlus Weather 'typical year'). Comparisons are statistical, not timestamp-based."
     )
 
+    # Brute-force distinguishable styles for multi-sensor plots
+    SENSOR_STYLES = [
+        {"color": "#f97316", "dash": "solid"},    # vivid orange
+        {"color": "#22c55e", "dash": "dot"},      # green dotted
+        {"color": "#3b82f6", "dash": "dash"},     # blue dashed
+        {"color": "#e11d48", "dash": "dashdot"},  # magenta dash-dot
+        {"color": "#a855f7", "dash": "longdash"}, # violet long dash
+        {"color": "#facc15", "dash": "solid"},    # yellow solid
+        {"color": "#06b6d4", "dash": "dot"},      # cyan dotted
+        {"color": "#ef4444", "dash": "dash"},     # red dashed
+    ]
+
     # ---------- State + helpers ----------
     focus_threshold = float(st.session_state.get("custom_overheat_threshold", 30))
     st.session_state.setdefault("sensor_df", pd.DataFrame())
@@ -6015,6 +6291,66 @@ def render_live_data_page():
     st.session_state.setdefault("sensors", {})  # sensor_id -> dataframe
     st.session_state.setdefault("sensor_meta", {})  # sensor_id -> metadata dict
     st.session_state.setdefault("active_sensor_id", None)
+
+    def render_ingested_sensors_panel():
+        """Reusable panel for the Ingested Sensors table and selection."""
+        sensors_store = st.session_state.get("sensors", {})
+        sensor_meta = st.session_state.get("sensor_meta", {})
+        
+        # Consistent card styling
+        with st.container(border=True):
+            st.markdown("#### Ingested sensors")
+            st.caption("Overview of all data currently loaded into memory.")
+            
+            if sensors_store:
+                rows = []
+                for sid, df_val in sensors_store.items():
+                    meta = sensor_meta.get(sid, {})
+                    rows.append({
+                        "sensor_id": sid,
+                        "label": meta.get("label", sid),
+                        "source": meta.get("source", ""),
+                        "records": meta.get("records", len(df_val)),
+                        "ingested_at": meta.get("ingested_at"),
+                        "date_min": meta.get("date_min"),
+                        "date_max": meta.get("date_max"),
+                    })
+
+                table_df = pd.DataFrame(rows)
+                table_df = table_df.sort_values("ingested_at", ascending=False, na_position="last")
+                
+                st.dataframe(
+                    table_df,
+                    use_container_width=True,
+                    height=220,
+                    column_config={
+                        "sensor_id": st.column_config.TextColumn("ID", width="small"),
+                        "label": st.column_config.TextColumn("Label", width="medium"),
+                        "records": st.column_config.NumberColumn("Records", format="%d"),
+                        "date_min": st.column_config.DatetimeColumn("Start", format="D MMM, HH:mm"),
+                        "date_max": st.column_config.DatetimeColumn("End", format="D MMM, HH:mm"),
+                    }, 
+                    hide_index=True
+                )
+
+                st.divider()
+
+                c_sel, _ = st.columns([1, 1])
+                with c_sel:
+                    st.markdown("**Active analysis target**")
+                    chosen = st.selectbox(
+                        "Select sensor",
+                        options=list(sensors_store.keys()),
+                        index=list(sensors_store.keys()).index(st.session_state.get("active_sensor_id")) if st.session_state.get("active_sensor_id") in sensors_store else 0,
+                        label_visibility="collapsed",
+                        key="active_sensor_picker_panel_unique"
+                    )
+                    st.session_state["active_sensor_id"] = chosen
+                    st.caption(f"Currently analyzing: `{chosen}` vs EPW.")
+            else:
+                st.info("No ingests yet. Upload a file or fetch from an API to get started.")
+
+
 
     def _calc_abs_humidity(temp_c: pd.Series, rh_pct: pd.Series) -> pd.Series:
         """Compute absolute humidity (g/m³) from temperature (°C) and RH (%)."""
@@ -6270,48 +6606,10 @@ def render_live_data_page():
     epw_df = st.session_state.get("epw_df") or st.session_state.get("cdf")
 
     # ---------- Ingested sensors (unified view) ----------
-    st.markdown("#### Ingested sensors")
-    sensors_store = st.session_state.get("sensors", {})
-    sensor_meta = st.session_state.get("sensor_meta", {})
-    history = st.session_state.get("sensor_history", [])
-
-    if sensors_store:
-        rows = []
-        for sid, df_val in sensors_store.items():
-            meta = sensor_meta.get(sid, {})
-            rows.append({
-                "sensor_id": sid,
-                "label": meta.get("label", sid),
-                "source": meta.get("source", ""),
-                "records": meta.get("records", len(df_val)),
-                "ingested_at": meta.get("ingested_at"),
-                "date_min": meta.get("date_min"),
-                "date_max": meta.get("date_max"),
-            })
-
-        table_df = pd.DataFrame(rows)
-        table_df = table_df.sort_values("ingested_at", ascending=False, na_position="last")
-
-        def _alt_rows(df):
-            styles = pd.DataFrame("", index=df.index, columns=df.columns)
-            styles.iloc[::2, :] = "background-color: #f7f9fc"
-            return styles
-
-        styled = table_df.style.apply(_alt_rows, axis=None).set_properties(**{"text-align": "left"})
-        st.dataframe(styled, use_container_width=True, height=240, column_config={
-            "sensor_id": st.column_config.Column("sensor_id", width="small"),
-            "records": st.column_config.Column("records", width="small"),
-        })
-        with st.expander("Choose active sensor for Live vs EPW", expanded=False):
-            chosen = st.selectbox(
-                "Active sensor",
-                options=list(sensors_store.keys()),
-                index=list(sensors_store.keys()).index(st.session_state.get("active_sensor_id")) if st.session_state.get("active_sensor_id") in sensors_store else 0,
-            )
-            st.session_state["active_sensor_id"] = chosen
-            st.caption(f"Active sensor set to {chosen}. This drives the Live Data vs EPW analysis.")
-    else:
-        st.info("No ingests yet. Upload a file or fetch from an API to get started.")
+    # ---------- Ingested sensors (unified view) ----------
+    # Card-like container for the data table and selection
+    # ---------- Ingested sensors (unified view) ----------
+    render_ingested_sensors_panel()
 
     st.divider()
 
@@ -7400,7 +7698,8 @@ def render_sensor_comparison_page():
                 plot_df = plot_df_resampled
 
             fig_primary = go.Figure()
-            for sensor in selected_sensors:
+            for i, sensor in enumerate(selected_sensors):
+                style = SENSOR_STYLES[i % len(SENSOR_STYLES)]
                 sensor_data = plot_df[plot_df[sensor_col] == sensor]
                 if not sensor_data.empty and "_metric" in sensor_data.columns and "_ts" in sensor_data.columns:
                     fig_primary.add_trace(go.Scatter(
@@ -7408,6 +7707,13 @@ def render_sensor_comparison_page():
                         y=sensor_data["_metric"],
                         mode="lines",
                         name=sensor,
+                        line=dict(
+                            color=style["color"],
+                            width=2.3,
+                            dash=style["dash"],
+                        ),
+                        opacity=1.0,
+                        showlegend=True,
                         hovertemplate=f"{sensor}<br>%{{x}}<br>%{{y:.2f}}{unit_str}<extra></extra>"
                     ))
 
@@ -7454,10 +7760,17 @@ def render_sensor_comparison_page():
                 st.info("Metric is non-numeric; distribution histogram unavailable.")
             else:
                 if unique_numeric > 20 or pd.api.types.is_numeric_dtype(plot_df_dist["_metric"]):
-                    for sensor in selected_sensors:
+                    for i, sensor in enumerate(selected_sensors):
+                        style = SENSOR_STYLES[i % len(SENSOR_STYLES)]
                         sensor_data = plot_df_dist[plot_df_dist[sensor_col] == sensor]["_metric"].dropna()
                         if not sensor_data.empty:
-                            fig_dist.add_trace(go.Histogram(x=sensor_data, name=sensor, opacity=0.7, nbinsx=40))
+                            fig_dist.add_trace(go.Histogram(
+                                x=sensor_data, 
+                                name=sensor, 
+                                opacity=0.75, 
+                                nbinsx=40,
+                                marker_color=style["color"]
+                            ))
                     fig_dist.update_layout(title=f"{primary_metric.replace('_', ' ').title()} Distribution", xaxis_title=f"{primary_metric.replace('_', ' ').title()}{unit_str}", yaxis_title="Frequency", barmode="overlay", height=380)
                 else:
                     st.info("Metric appears categorical/low-cardinality; distribution histogram unavailable.")
@@ -7505,7 +7818,8 @@ def render_sensor_comparison_page():
                     plot_df = plot_df_resampled
 
                 fig_secondary = go.Figure()
-                for sensor in selected_sensors:
+                for i, sensor in enumerate(selected_sensors):
+                    style = SENSOR_STYLES[i % len(SENSOR_STYLES)]
                     sensor_data = plot_df[plot_df[sensor_col] == sensor]
                     if not sensor_data.empty and "_metric" in sensor_data.columns and "_ts" in sensor_data.columns:
                         fig_secondary.add_trace(go.Scatter(
@@ -7513,6 +7827,13 @@ def render_sensor_comparison_page():
                             y=sensor_data["_metric"],
                             mode="lines",
                             name=sensor,
+                            line=dict(
+                                color=style["color"],
+                                width=2.3,
+                                dash=style["dash"],
+                            ),
+                            opacity=1.0,
+                            showlegend=True,
                             hovertemplate=f"{sensor}<br>%{{x}}<br>%{{y:.2f}}{unit_str}<extra></extra>"
                         ))
 
