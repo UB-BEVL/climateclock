@@ -1508,50 +1508,120 @@ div[data-testid="stFileUploader"] section { border: 1px dashed rgba(96,165,250,0
 .station-country { font-size: 0.92rem; color: #e2e8f0; font-weight: 650; margin-bottom: 0.45rem; padding: 0.32rem 0.65rem; background: rgba(255, 255, 255, 0.03); border-radius: 10px; display: inline-block; border: 1px solid rgba(255, 255, 255, 0.08); }
 
 
+/* ---- PROFESSIONAL LANDING LAYOUT ---- */
+.block-container { padding-top: 0.75rem; }
+
 .app-header {
-    position: relative;
-    margin: 0 -0.25rem 1rem -0.25rem;
-    padding: 0.8rem 1.4rem;
-    height: 100px; /* Fixed height for stability */
-    border-radius: 16px;
-    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-    border: 1px solid rgba(255,255,255,0.05);
-    box-shadow: 0 18px 50px rgba(0,0,0,0.45);
-    display: grid;
-    grid-template-columns: 240px 1fr 240px; /* Fixed side widths */
+    margin: 0 -0.5rem 1.25rem -0.5rem;
+    padding: 1.5rem 3rem;             /* Dominant Masthead Padding */
+    background: #02192f;
+    border-bottom: 1px solid rgba(15,23,42,0.9);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+    display: flex;
     align-items: center;
-    gap: 1rem;
-    overflow: hidden;
+    justify-content: space-between;
 }
-.app-header::after { content: ""; position: absolute; inset: 0; background: linear-gradient(120deg, rgba(59,130,246,0.18), rgba(139,92,246,0.15), rgba(6,182,212,0.12)); opacity: 0.7; mix-blend-mode: screen; pointer-events: none; }
-.header-left { display: flex; align-items: center; gap: 0.85rem; z-index: 1; }
-.logo-glow { width: 80px; height: 80px; display: grid; place-items: center; border-radius: 18px; background: radial-gradient(circle at 50% 40%, rgba(59,130,246,0.2), rgba(14,165,233,0.12)); box-shadow: 0 0 0 1px rgba(255,255,255,0.05), var(--glow); flex-shrink: 0; }
-.logo-glow img { max-height: 64px; width: auto; filter: drop-shadow(0 0 16px rgba(59,130,246,0.5)); }
-.brand-text { display: flex; flex-direction: column; gap: 0.1rem; min-width: 140px; }
-.brand-title { font-size: 1.15rem; font-weight: 700; color: var(--text); letter-spacing: -0.01em; white-space: nowrap; }
-.brand-sub { font-size: 0.85rem; color: var(--muted); font-weight: 500; white-space: nowrap; }
-.header-center { text-align: center; z-index: 1; display: flex; flex-direction: column; justify-content: center; height: 100%; }
-.header-center .title { font-size: 1.8rem; font-weight: 800; color: var(--text); letter-spacing: -0.02em; margin-bottom: 0.1rem; white-space: nowrap; }
-.header-center .subtitle { font-size: 0.9rem; color: var(--muted); font-weight: 500; letter-spacing: 0.02em; white-space: nowrap; }
-.header-right { display: flex; align-items: center; justify-content: flex-end; gap: 0.65rem; z-index: 1; }
-.header-icons span { display: inline-flex; width: 36px; height: 36px; align-items: center; justify-content: center; border-radius: 10px; background: rgba(255,255,255,0.08); box-shadow: 0 10px 22px rgba(0,0,0,0.35); font-size: 1.1rem; color: var(--text); }
 
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 1.4rem;
+}
 
-.hero-glass { position: relative; background: var(--glass); border: 1px solid rgba(96,165,250,0.3); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-radius: 18px; padding: 1.4rem 1.5rem; box-shadow: 0 18px 48px rgba(0,0,0,0.45); overflow: hidden; }
-.hero-glass::before { content: ""; position: absolute; inset: -30%; background: conic-gradient(from 120deg, rgba(59,130,246,0.18), rgba(139,92,246,0.18), rgba(6,182,212,0.12), rgba(236,72,153,0.12)); filter: blur(70px); opacity: 0.7; animation: spinSlow 16s linear infinite; }
-.hero-content { position: relative; display: grid; grid-template-columns: 1fr auto; gap: 1.2rem; align-items: center; }
-.hero-text h1 { margin: 0; color: var(--text); font-size: clamp(1.55rem, 3vw, 2.05rem); letter-spacing: -0.02em; }
-.hero-text p { margin: 0.3rem 0 0.5rem 0; color: #d9e1ec; font-size: 1rem; }
-.cta-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
-.cta-btn { padding: 0.65rem 1.15rem; border-radius: 14px; font-weight: 700; border: 1px solid rgba(255,255,255,0.1); color: #0b1220; background: linear-gradient(135deg, var(--primary), var(--primary-2)); box-shadow: var(--glow); text-decoration: none; display: inline-flex; align-items: center; gap: 0.4rem; animation: pulseGlow 2.4s ease-in-out infinite; }
-.cta-btn.secondary { background: rgba(255,255,255,0.08); color: var(--text); border: 1px solid rgba(255,255,255,0.16); box-shadow: none; animation: none; }
-.cta-btn:hover { transform: translateY(-1px) scale(1.01); }
-.hero-icon { position: relative; width: 120px; height: 120px; border-radius: 26px; background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.25), rgba(255,255,255,0.05)); border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 14px 36px rgba(0,0,0,0.45); display: grid; place-items: center; overflow: hidden; }
-.hero-cloud { position: absolute; width: 80px; height: 46px; background: linear-gradient(135deg, rgba(255,255,255,0.9), rgba(226,232,240,0.8)); border-radius: 50px; top: 40%; left: 50%; transform: translate(-50%, -50%); box-shadow: 0 12px 28px rgba(0,0,0,0.28); }
-.hero-cloud::before, .hero-cloud::after { content: ""; position: absolute; background: inherit; border-radius: 50%; }
-.hero-cloud::before { width: 38px; height: 38px; top: -18px; left: 14px; }
-.hero-cloud::after { width: 32px; height: 32px; top: -10px; right: 10px; }
-.hero-rain { position: absolute; width: 2px; height: 14px; background: linear-gradient(180deg, #67e8f9, #22d3ee); border-radius: 999px; animation: rain 1.6s linear infinite; box-shadow: 12px 6px 0 #22d3ee, -10px 10px 0 #67e8f9, 6px 14px 0 #06b6d4; }
+.header-logo {
+    max-height: 56px;          /* Large, premium logo sizing */
+    width: auto;
+    border-radius: 999px;
+    box-shadow: 0 0 15px rgba(59,130,246,0.4);
+}
+
+.header-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.header-title {
+    font-size: 1.8rem;         /* Large, authoritative title */
+    font-weight: 800;
+    color: #f9fafb;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+}
+
+.header-location {
+    font-size: 1.0rem;         /* Clear subtitle */
+    color: #cbd5e1;
+    font-weight: 500;
+}
+
+.header-right {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+.header-ub {
+    max-height: 48px;          /* Balanced with main logo */
+    width: auto;
+    opacity: 0.98;
+}
+
+/* make sure old center/glow layout is turned off */
+.logo-glow,
+.header-center,
+.header-icons,
+.brand-text,
+.brand-title,
+.brand-sub,
+.header-sub {
+    display: none !important;
+}
+
+/* ---- HERO SECTION (COMPACT & FOCUSED) ---- */
+.hero-section {
+    max-width: 680px;          /* Highly focused width */
+    margin: 0 auto 2rem auto;
+}
+
+.hero-card {
+    background: #020617;
+    border-radius: 12px;
+    border: 1px solid rgba(51, 65, 85, 0.8);
+    padding: 1.0rem 1.5rem;    /* Tighter vertical padding */
+    box-shadow: 0 20px 50px rgba(0,0,0,0.5); /* Deep shadow for lift */
+}
+
+.hero-card h2 {
+    margin: 0 0 0.3rem 0;
+    font-size: 1.35rem;        /* Slightly smaller heading */
+    font-weight: 700;
+    color: #e5e7eb;
+}
+
+.hero-card p {
+    margin: 0 0 0.8rem 0;
+    font-size: 0.9rem;
+    color: #94a3b8;
+    line-height: 1.5;
+}
+
+.hero-btn {
+    padding: 0.45rem 1.4rem;   /* sleek button */
+    border-radius: 999px;
+    border: 1px solid rgba(59,130,246,0.6);
+    background: linear-gradient(135deg,#3b82f6,#06b6d4);
+    color: #020617;
+    font-weight: 700;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.hero-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 20px rgba(59,130,246,0.3);
+}
 
 .preview-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 0.8rem; }
 .preview-card { background: var(--panel); border: 1px solid rgba(255,255,255,0.05); border-radius: 14px; padding: 1rem; box-shadow: 0 14px 38px rgba(0,0,0,0.4); position: relative; overflow: hidden; transition: transform 0.2s ease, border-color 0.2s ease; }
@@ -1647,31 +1717,42 @@ LOGO_PRIMARY = _encode_image_to_base64(Path("assets/bevl_framework.png"))
 LOGO_SECONDARY = _encode_image_to_base64(Path("assets/ub_framework.png"))
 
 
+
+def get_location_label(default: str = "Location: N/A") -> str:
+    """Robustly retrieve a 'City, Country' string from session state header."""
+    header = st.session_state.get("header")
+    if not isinstance(header, dict):
+        return default
+
+    loc = header.get("location") or {}
+    city = loc.get("city") or loc.get("cityName") or header.get("city") or header.get("cityName")
+    country = loc.get("country") or header.get("country") or header.get("countryName")
+
+    if city or country:
+        parts = [str(p) for p in (city, country) if p]
+        return ", ".join(parts)
+    return default
+
+
 def render_header():
     logo_src = f"data:image/png;base64,{LOGO_PRIMARY}" if LOGO_PRIMARY else ""
-    alt_logo_src = f"data:image/png;base64,{LOGO_SECONDARY}" if LOGO_SECONDARY else ""
+    ub_src = f"data:image/png;base64,{LOGO_SECONDARY}" if LOGO_SECONDARY else ""
+    
+    loc_label = get_location_label()
+
     st.markdown(
         f"""
         <div class="app-header">
-            <div class="header-left">
-                <div class="logo-glow">
-                    {'<img src="' + logo_src + '" alt="BEVL logo" />' if logo_src else ''}
-                </div>
-                <div class="brand-text">
-                    <div class="brand-title">BEVL Lab</div>
-                    <div class="brand-sub">Professional Weather Intelligence</div>
-                </div>
+          <div class="header-left">
+            <img class="header-logo" src="{logo_src}" alt="BEVL Lab" />
+            <div class="header-text">
+              <div class="header-title">Climate Analysis Pro</div>
+              <div class="header-location">{loc_label}</div>
             </div>
-            <div class="header-center">
-                <div class="title">Climate Analysis Pro</div>
-                <div class="subtitle">Built Environment &amp; Virtual Lab · UB</div>
-            </div>
-            <div class="header-right">
-                <div class="header-icons">
-                    <span>☀️</span><span>☁️</span><span>🌧️</span>
-                </div>
-                {'<div class="logo-glow" style="width:56px;height:56px;border-radius:12px;"><img style="max-height:40px" src="' + alt_logo_src + '" alt="UB" /></div>' if alt_logo_src else ''}
-            </div>
+          </div>
+          <div class="header-right">
+            <img class="header-ub" src="{ub_src}" alt="UB Framework" />
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1683,33 +1764,24 @@ def render_header():
 def render_landing_hero():
     st.markdown(
         """
-        <div class="hero-glass">
-            <div class="hero-content">
-                <div class="hero-text">
-                    <h1>Select Weather File</h1>
-                    <p>Professional, university-backed climate intelligence for station selection, comfort diagnostics, and resilient design decisions.</p>
-                    <div class="cta-actions">
-                        <a class="cta-btn" href="#station-picker">🚀 Get Started</a>
-                    </div>
-                </div>
-                <div class="hero-icon">
-                    <div class="hero-cloud"></div>
-                    <div class="hero-rain"></div>
-                </div>
+        <div class="hero-row">
+          <div class="hero-card">
+            <div class="hero-text">
+              <h2>Select weather file</h2>
+              <p>
+                Upload or choose an EPW file to unlock climate diagnostics,
+                comfort metrics, and solar analysis for your location.
+              </p>
+              <button class="hero-btn">🚀 Get started</button>
             </div>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-SIDEBAR_HERO = (
-    "<div style='text-align: center; margin-bottom: 1.5rem; padding: 0.9rem 0.75rem;'>"
-    "<div style='font-size: 2.1rem; margin-bottom: 0.35rem;'>&#127780;</div>"
-    "<p style='font-size: 1rem; font-weight: 700; color:#e2e8f0; margin-bottom: 0.15rem; letter-spacing: -0.01em;'>Weather Workspace</p>"
-    "<p style='color: #c5cbd8; font-size: 0.9rem; font-weight: 500;'>Quick access tools</p>"
-    "</div>"
-)
+
 
 
 @st.fragment
@@ -1826,7 +1898,27 @@ def _sidebar_filters_fragment(epw_loaded: bool) -> None:
 
 def render_sidebar():
     with st.sidebar:
-        st.markdown(SIDEBAR_HERO, unsafe_allow_html=True)
+        # Dynamic header based on loaded location
+        header = st.session_state.get("header", {})
+        loc_city = header.get("city") or header.get("city_name") or ""
+        loc_country = header.get("country") or header.get("country_name") or ""
+        
+        if loc_city or loc_country:
+            parts = [p for p in [loc_city, loc_country] if p]
+            loc_label = ", ".join(parts)
+        else:
+            loc_label = "Weather Workspace"
+
+        st.markdown(
+            f"""
+            <div style='text-align: center; margin-bottom: 1.5rem; padding: 0.9rem 0.75rem;'>
+                <div style='font-size: 2.1rem; margin-bottom: 0.35rem;'>&#127780;</div>
+                <p style='font-size: 1rem; font-weight: 700; color:#e2e8f0; margin-bottom: 0.15rem; letter-spacing: -0.01em;'>{loc_label}</p>
+                <p style='color: #c5cbd8; font-size: 0.9rem; font-weight: 500;'>Quick access tools</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.divider()
 
         epw_loaded = bool(st.session_state.get("cdf") is not None and st.session_state.get("header"))
@@ -2442,36 +2534,6 @@ if raw_epw_bytes is None:
     pass
 
 
-
-def get_active_location_name() -> str:
-    """Resolve the active station location name from session state."""
-    ss = st.session_state
-    # 1. Try likely keys for station dicts (e.g. from map picker)
-    for key in ["selected_station", "selectedstation", "selstation"]:
-        sel = ss.get(key)
-        if isinstance(sel, dict):
-            for field in ["display_label", "displaylabel", "station_name", "name", "city_name", "cityname"]:
-                val = sel.get(field)
-                if val:
-                    return str(val)
-    
-    # 2. Try header metadata (EPW parse result)
-    header = ss.get("header", {})
-    if isinstance(header, dict):
-        for key in ["location_name", "city", "source"]:
-            val = header.get(key)
-            if val:
-                return str(val)
-    
-    # 3. Fallback string keys
-    for key in ["loading_station_name", "loadingstationname", "source_label", "sourcelabel"]:
-        val = ss.get(key)
-        if val:
-            return str(val).replace("Uploaded: ", "")
-    
-    return "Unknown Location"
-
-
 def show_epw_status():
     if st.session_state.pop("_just_loaded_epw", False):
         header = st.session_state.get("header")
@@ -2688,7 +2750,7 @@ def get_color_scale_for_metric(metric_name: str) -> Tuple[List[str], List[str]]:
     """Return (colors_list, labels_list) for a metric's discrete color scale."""
     metric_lower = metric_name.lower()
     
-    if any(x in metric_lower for x in ["temp", "dry_bulb"]):
+    if any(x in metric_lower for x in ["temp", "dry_bulb", "drybulb"]):
         colors = ["#3498db", "#2ecc71", "#f39c12", "#e74c3c", "#8b0000"]
         labels = ["<10°C", "10–20°C", "20–26°C", "26–35°C", ">35°C"]
     elif any(x in metric_lower for x in ["radiation", "solar", "ghi", "global"]):
@@ -2711,6 +2773,7 @@ def get_color_scale_for_metric(metric_name: str) -> Tuple[List[str], List[str]]:
 def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: dict) -> Optional[go.Figure]:
     """Build a multi-strip heatmap figure (subplots, one per metric).
     
+    # Force reload to fix cache (Legends Update)
     heatmap_dict: {"metric_name": (pivot_binned, info_dict), ...}
     """
     if not heatmap_dict or all("error" in v[1] for v in heatmap_dict.values()):
@@ -2722,15 +2785,18 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
         return None
     
     n_strips = len(valid_strips)
+    
+    # Use real dates for the X-axis (Year 2021 as standard non-leap year)
+    # pivot_binned has columns 1..365 (or 366). We map them to dates.
+    # We'll generate a date range for 365 days.
+    dates_2021 = pd.date_range(start="2021-01-01", periods=365, freq="D")
+    
     fig = make_subplots(
         rows=n_strips, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.06,
-        subplot_titles=[f"{name}" for name, (_, info) in valid_strips.items()],
+        vertical_spacing=0.03,
+        subplot_titles=[],  # We will add custom annotations below each plot
     )
-    
-    month_doy, month_letters = month_labels_at_midpoints(leap_year=False)
-    month_boundaries = month_boundaries_doy(leap_year=False)
     
     heatmap_indices = []
 
@@ -2738,10 +2804,156 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
         if pivot_binned.empty:
             continue
         
-        # Prefer labels/colors supplied in info (for editable thresholds); fallback to defaults
-        colors_default, labels_default = get_color_scale_for_metric(info["metric"])
-        labels = info.get("labels", labels_default)
-        colors = info.get("colors", colors_default[: len(labels)])
+        # Ensure pivot aligns with our 365-day date range
+        # If pivot has 366 columns (leap year), drop the last one or reindex?
+        # Standard EPW is usually 8760 hours (365 days).
+        # We will reindex to 1..365 to match our date range.
+        if pivot_binned.shape[1] > 365:
+            pivot_plot_slice = pivot_binned.iloc[:, :365]
+        else:
+            pivot_plot_slice = pivot_binned.reindex(columns=range(1, 366))
+            
+        # Define discrete color scales and bins matching the printed style reference
+        # keys: metric_name -> (bounds, colors, tick_labels)
+        discrete_scales = {
+            "Dry Bulb Temperature": (
+                [-100, -10, 0, 10, 20, 30, 100], 
+                ["#08306b", "#4f81bd", "#f7f7f7", "#f28e2b", "#b22222", "#800000"],
+                ["< -10°C", "-10–0°C", "0–10°C", "10–20°C", "20–30°C", ">30°C"]
+            ),
+            "Solar Radiation": (
+                [0, 1, 2, 3, 4], # Categories 0..4
+                ["#ffffff", "#fff7bc", "#fdd49e", "#fdae6b", "#d94801"],
+                ["<100", "100–300", "300–500", "500–700", ">700"]
+            ),
+            "Humidity": (
+                [0, 40, 60, 80, 100],
+                ["#f7fbff", "#6baed6", "#2171b5", "#08306b"],
+                ["<40%", "40–60%", "60–80%", ">80%"]
+            ),
+            "Wind Speed": (
+                [0, 1, 2], # Categories 0..2
+                ["#00441b", "#ffffbf", "#d73027"],
+                ["<1.5 m/s", "1.5–4.5 m/s", ">4.5 m/s"]
+            ),
+        }
+
+        # Determine colorscale and colorbar settings
+        heatmap_colorscale = None
+        zmin, zmax = None, None
+        colorbar_dict = None
+        show_scale = False
+
+        if strip_name in discrete_scales:
+            bounds, colors, ticks = discrete_scales[strip_name]
+            
+            # Special handling for Categorical Bins (Wind, Solar)
+            if strip_name in ["Wind Speed", "Solar Radiation"]:
+                d_min, d_max = bounds[0], bounds[-1]
+                zmin, zmax = d_min, d_max
+                
+                # Construct categorical colorscale that maps strictly
+                # Bin i (value i) gets colors[i]
+                scale = []
+                n = len(colors)
+                # For categories 0..(n-1), we align ticks at i + 0.5?
+                # Actually if z is 0,1,2..., we want 0->Color0, 1->Color1...
+                # Discrete scale:
+                for i, col in enumerate(colors):
+                    # Map range [i, i+1] to col? 
+                    # If z values are integers 0, 1, 2...
+                    # we can map [i, i+1]
+                    low = i / n
+                    high = (i + 1) / n
+                    # Actually standard way for integer categories 0..M-1:
+                    # zmin=0, zmax=M-1 (or M?)
+                    # Let's say zmin=0, zmax=N_cats-1.
+                    # Normalized: 0 -> 0.0, N-1 -> 1.0. 
+                    # Simpler: zmin=-0.5, zmax=N-0.5. 
+                    
+                    # Implementation matches user request pattern:
+                    # distinct blocks.
+                    scale.append([i/n, col])
+                    scale.append([(i+1)/n, col])
+                
+                heatmap_colorscale = scale
+                zmin = 0
+                zmax = n # Covers 0..n range? 
+                
+                # Tick placement: Center of each bin
+                # Bin 0 is [0, 1), center 0.5. 
+                tick_vals = [i + 0.5 for i in range(n)]
+                
+            else:
+                d_min = bounds[0]
+                d_max = bounds[-1]
+                zmin = d_min
+                zmax = d_max
+                
+                # Explicit override for Humidity to show full range
+                if strip_name == "Humidity":
+                    zmin = 0
+                    zmax = 100
+                    d_min, d_max = 0, 100
+
+                # Build the stepped scale
+                scale = []
+                n_colors = len(colors)
+                for i in range(n_colors):
+                    val_min = bounds[i]
+                    val_max = bounds[i+1]
+                    lower_frac = (val_min - d_min) / (d_max - d_min)
+                    upper_frac = (val_max - d_min) / (d_max - d_min)
+                    lower_frac = max(0.0, min(1.0, lower_frac))
+                    upper_frac = max(0.0, min(1.0, upper_frac))
+                    scale.append([lower_frac, colors[i]])
+                    scale.append([upper_frac, colors[i]])
+                
+                heatmap_colorscale = scale
+                
+                # Calculate tick values for the center of each bin
+                tick_vals = []
+                for i in range(n_colors):
+                   v1 = bounds[i]
+                   v2 = bounds[i+1]
+                   tick_vals.append((v1 + v2)/2)
+               
+            # Vertical Legend Position (Right Side)
+            # Calculate approx center of row
+            # Row 1 is at top. Y domain is [1.0 - 1/N, 1.0].
+            # Center is 1.0 - 0.5/N.
+            # Row r center: 1.0 - (r-0.5)/N
+            # Adjusting for spacing (0.03 vertical spacing):
+            # Each plot height h = (1 - (N-1)*space) / N
+            # Top of row r: 1.0 - (r-1)*(h+space)
+            # Center: Top - h/2
+            
+            space = 0.03
+            h = (1.0 - (n_strips - 1) * space) / n_strips
+            y_top = 1.0 - (row - 1) * (h + space)
+            y_center = y_top - h / 2
+            
+            colorbar_dict = dict(
+                orientation="v",
+                x=1.01, # Right of plot
+                y=y_center,
+                yanchor="middle",
+                xanchor="left",
+                len=h, # Match strip height
+                thickness=15,
+                tickmode="array",
+                tickvals=tick_vals,
+                ticktext=ticks,
+                tickfont=dict(size=10),
+                title=None
+            )
+            show_scale = True
+
+        else:
+            # Fallback for Wind Direction or others: discrete interpolation
+            colors_default, labels_default = get_color_scale_for_metric(info["metric"])
+            colors = info.get("colors", colors_default[: len(info.get("labels", labels_default))])
+            heatmap_colorscale = list(zip([i / (len(colors) - 1) for i in range(len(colors))], colors))
 
         # Gentle DOY smoothing to reduce barcode noise (visual-only)
         if info["metric"] == "Wind Direction":
@@ -2755,122 +2967,121 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
                     out.iloc[:, i] = window.iloc[:, 0]
                 return out
 
-            pivot_plot = _rolling_mode(pd.DataFrame(pivot_binned).copy(), w=7)
+            pivot_plot = _rolling_mode(pd.DataFrame(pivot_plot_slice).copy(), w=7)
         else:
-            pivot_plot = pd.DataFrame(pivot_binned).copy().rolling(window=5, axis=1, center=True, min_periods=1).mean()
-        
+            pivot_plot = pd.DataFrame(pivot_plot_slice).copy().rolling(window=5, axis=1, center=True, min_periods=1).mean()
+
         hover_labels = info.get("hover_labels")
+        # Align hover labels to 365 days if necessary
+        if hover_labels is not None:
+             if hasattr(hover_labels, "shape") and hover_labels.shape[1] > 365:
+                 hover_labels = hover_labels[:, :365]
+        
         customdata = hover_labels if hover_labels is not None else None
         hovertemplate = (
-            "DoY: %{x}<br>HoD: %{y}<br>Value: %{z:.2f}<br>Band: %{customdata}<extra></extra>"
+            "Date / Time: %{x|%m/%d/%Y %H:%M}<br>Value: %{z:.2f}<br>Band: %{customdata}<extra></extra>"
             if customdata is not None
-            else "DoY: %{x}<br>HoD: %{y}<br>Value: %{z:.2f}<extra></extra>"
+            else "Date / Time: %{x|%m/%d/%Y %H:%M}<br>Value: %{z:.2f}<extra></extra>"
         )
 
-        # Colorbar ticks aligned to bands (or custom for wind direction)
         trace_colorbar = None
         trace_showscale = False
 
-        # position colorbar per subplot to avoid overlap
-        axis_key = "yaxis" if row == 1 else f"yaxis{row}"
-        try:
-            domain = fig.layout[axis_key].domain
-        except Exception:
-            domain = None
-        if domain:
-            y_center = (domain[0] + domain[1]) / 2.0
-
         trace = go.Heatmap(
             z=pivot_plot.values,
-            x=pivot_binned.columns,  # DOY 1..366
-            y=pivot_binned.index,     # HOD 0..23
-            colorscale=list(zip([i / (len(colors) - 1) for i in range(len(colors))], colors)),
-            showscale=trace_showscale,
-            colorbar=trace_colorbar,
+            x=dates_2021,       # Real DatetimeIndex
+            y=pivot_plot.index, # HOD 0..23
+            colorscale=heatmap_colorscale,
+            showscale=show_scale,
+            colorbar=colorbar_dict,
+            zmin=zmin,
+            zmax=zmax,
             customdata=customdata,
             hovertemplate=hovertemplate,
             showlegend=False,
-            zsmooth=False if info["metric"] == "Wind Direction" else None,
+            zsmooth=False if info["metric"] == "Wind Direction" else "best",
         )
         fig.add_trace(trace, row=row, col=1)
-        heatmap_indices.append((len(fig.data) - 1, trace_showscale))
+        heatmap_indices.append((len(fig.data) - 1, show_scale))
         
         # Configure y-axis (HOD)
+        # Title "Time of day" ONLY on Row 1
+        y_title = "Time of day" if row == 1 else None
+        
         fig.update_yaxes(
-            title_text="Time of Day",
+            title_text=y_title,
+            title_font=dict(size=10),
             tickmode="array",
-            tickvals=[0, 12, 23],
-            ticktext=["12:00am", "noon", "11:59pm"],
+            tickvals=[0, 6, 12, 18, 23],
+            ticktext=["00:00", "06:00", "12:00", "18:00", "23:00"],
             gridcolor="rgba(255,255,255,0.05)",
             gridwidth=0.5,
+            tickfont=dict(size=9),
             row=row, col=1,
         )
-        # Add vertical month boundaries (per-row so lines align with each subplot)
-        for doy_boundary in month_boundaries[1:-1]:  # Skip year start/end
-            fig.add_vline(x=doy_boundary, line_dash="solid", line_color="rgba(255, 255, 255, 0.3)", line_width=1, row=row, col=1)
+        
+        # Add Title Annotation BELOW the heatmap
+        fig.add_annotation(
+            xref=f"x{row if row > 1 else ''} domain",
+            yref=f"y{row if row > 1 else ''} domain",
+            x=0.5, 
+            y=-0.20, # Position below, adjusted for tighter spacing
+            text=strip_name,
+            showarrow=False,
+            font=dict(size=11, color="#e2e8f0", weight="bold"),
+            yshift=0
+        )
+
+        # Configure x-axis for this row - HIDE TICKS primarily
+        # We will add top labels via annotation instead
+        fig.update_xaxes(
+            showticklabels=False, 
+            row=row, col=1,
+        )
+
+    # Add Month Initials ABOVE the top plot (Shared for all)
+    # y=1.04 places them just above the title/grid area
+    month_starts = pd.date_range("2021-01-01", "2021-12-01", freq="MS")
+    month_initials = list("JFMAMJJASOND")
     
-    # Configure bottom x-axis to show month letters only on the shared axis
+    for date_val, label in zip(month_starts, month_initials):
+        fig.add_annotation(
+            x=date_val,
+            y=1.04, 
+            xref="x", 
+            yref="paper",
+            text=label,
+            showarrow=False,
+            font=dict(size=10, color="black"), 
+            xanchor="center",
+            yanchor="bottom"
+        )
+
+    # Configure bottom x-axis - NO TITLE per request
     fig.update_xaxes(
-        title_text="Month",
-        tickmode="array",
-        tickvals=month_doy,
-        ticktext=month_letters,
+        title_text="",
+        title_font=dict(size=10),
         row=n_strips, col=1,
-        tickfont=dict(size=11),
     )
-
-    # Ensure no heatmap shows a colorbar (discrete legends only)
-    for idx, _ in heatmap_indices:
-        if hasattr(fig.data[idx], "showscale"):
-            fig.data[idx].showscale = False
-
-    # Add per-strip discrete legend swatches as shapes + annotations placed in paper coordinates
-    # Reserve space on the right by increasing right margin
-    # Tight legend band immediately right of each subplot
-    legend_x0 = 1.02
-    legend_x1 = 1.04
-    legend_label_x = 1.045
-    fig.update_layout(margin=dict(l=80, r=160, t=80, b=60))
-
-    # For each strip, draw legend boxes at appropriate paper y positions
-    for idx, (strip_name, (pivot_binned, info)) in enumerate(valid_strips.items(), start=1):
-        colors, labels = get_color_scale_for_metric(info["metric"])
-        if info.get("labels"):
-            labels = info["labels"]
-        if info.get("colors"):
-            colors = info["colors"]
-        # Determine y-domain for this subplot
-        axis_key = "yaxis" if idx == 1 else f"yaxis{idx}"
-        try:
-            domain = fig.layout[axis_key].domain
-        except Exception:
-            domain = None
-        if not domain:
-            continue
-        y_low, y_high = domain[0], domain[1]
-        center = (y_low + y_high) / 2.0
-        n_labels = len(labels)
-        height_total = (y_high - y_low) * 0.78
-        height_per = min(0.028, height_total / max(1, n_labels))
-        # stack labels vertically centered at `center`
-        for i, (col_hex, lbl) in enumerate(zip(colors, labels)):
-            y0 = center + ( (n_labels - 1) / 2.0 - i) * height_per - (height_per / 2.0)
-            y1 = y0 + height_per * 0.9
-            # Add rectangle shape
-            fig.add_shape(type="rect", xref="paper", x0=legend_x0, x1=legend_x1, yref="paper", y0=y0, y1=y1, fillcolor=col_hex, line=dict(width=0))
-            # Add label annotation (tight alignment beside swatch)
-            fig.add_annotation(x=legend_label_x, y=(y0 + y1) / 2.0, xref="paper", yref="paper",
-                       text=lbl, showarrow=False, align="left", font=dict(size=10), xanchor="left", yanchor="middle")
 
     fig.update_layout(
         autosize=False,
         width=1200,
-        height=220 * n_strips,
-        showlegend=False,
-        title_text="Annual Diurnal Resource Heatmaps",
+        height=240 * n_strips + 100, 
+        showlegend=False, # Hide global legend
+        title_text=f"{header.get('city', 'Location')} – Annual Diurnal Resource Heatmaps",
         title_x=0.5,
         font=dict(size=10),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        # Margins: T=90 (month labels), R=120 (side keys), L=70 (y-axis), B=40 (minimal bottom)
+        margin=dict(l=70, r=120, t=90, b=40),
     )
+    
+    # Add "Time of Day" common label on the left?
+    # Actually user requested title ONLY on row 1 y-axis, which is done above.
+    # This extra annotation is likely redundant or conflicting.
+    # fig.add_annotation(...) -> REMOVED to avoid duplication.
     
     return fig
 
@@ -3383,6 +3594,33 @@ def render_dashboard_page():
             st.divider()
             
             # Dynamic header with location
+            def get_active_location_name() -> str:
+                ss = st.session_state
+                # 1. Try likely keys for station dicts (e.g. from map picker)
+                for key in ["selected_station", "selectedstation", "selstation"]:
+                    sel = ss.get(key)
+                    if isinstance(sel, dict):
+                        for field in ["display_label", "displaylabel", "station_name", "name", "city_name", "cityname"]:
+                            val = sel.get(field)
+                            if val:
+                                return str(val)
+                
+                # 2. Try header metadata (EPW parse result)
+                header = ss.get("header", {})
+                if isinstance(header, dict):
+                    for key in ["location_name", "city", "source"]:
+                        val = header.get(key)
+                        if val:
+                            return str(val)
+                
+                # 3. Fallback string keys
+                for key in ["loading_station_name", "loadingstationname", "source_label", "sourcelabel"]:
+                    val = ss.get(key)
+                    if val:
+                        return str(val).replace("Uploaded: ", "")
+                
+                return "Unknown Location"
+
             location_label = get_active_location_name()
             
             st.markdown(f"<h3>{location_label} – Annual Diurnal Resource Heatmaps</h3>", unsafe_allow_html=True)
@@ -3488,9 +3726,34 @@ def render_dashboard_page():
                     return pivot_raw, info
 
                 heatmap_dict = {}
-                solar_col = get_metric_column(cdf, ["ghi", "global_horiz", "global_horizontal", "solar", "radiation"])
+                
+                # Add Dry Bulb Temperature first
+                db_col = get_metric_column(cdf, ["dry_bulb_temperature", "drybulb", "temp", "db"])
+                if db_col:
+                    # Note: We pass [] for thresholds to let defaults or custom thresholds handling kick in
+                    # But _build_pivot_with_thresholds expects a list. 
+                    # If thresholds_state has 'drybulb', use it, else empty.
+                    # We will assume "Dry Bulb Temperature" uses the color scale "drybulb" or "thermal" which is standard.
+                    # We pass agg="mean".
+                    db_thresholds = [10.0, 20.0, 26.0, 35.0]
+                    pivot_binned, info = _build_pivot_with_thresholds(cdf, db_col, "Dry Bulb Temperature", db_thresholds, "°C", "drybulb", agg="mean")
+                    if not pivot_binned.empty:
+                        heatmap_dict["Dry Bulb Temperature"] = (pivot_binned, info)
+
+                solar_col = get_metric_column(cdf, ["glohorrad", "global_horizontal_radiation", "solar"])
                 if solar_col:
-                    pivot_binned, info = _build_pivot_with_thresholds(cdf, solar_col, "Solar Radiation", thresholds_state["solar"], "", "solar", agg="mean")
+                    # Bin Solar into categories 0..4 for discrete coloring
+                    # 0:<100, 1:100-300, 2:300-500, 3:500-700, 4:>700
+                    # Ensure we handle values >= 0
+                    s_series = cdf[solar_col].clip(lower=0)
+                    sb = [0.0, 100.0, 300.0, 500.0, 700.0, s_series.max() + 1.0]
+                    # If max < 700, ensure bins cover it
+                    if sb[-1] <= 700.0: sb[-1] = 9999.0
+                    
+                    cdf["solar_cat"] = pd.cut(s_series, bins=sb, labels=[0, 1, 2, 3, 4], include_lowest=True, right=False).astype(float)
+                    
+                    # Pass "solar_cat" for the heatmap values, but "Solar Radiation" title
+                    pivot_binned, info = _build_pivot_with_thresholds(cdf, "solar_cat", "Solar Radiation", thresholds_state["solar"], " W/m²", "solar", agg="mean")
                     if not pivot_binned.empty:
                         heatmap_dict["Solar Radiation"] = (pivot_binned, info)
 
@@ -3500,9 +3763,16 @@ def render_dashboard_page():
                     if not pivot_binned.empty:
                         heatmap_dict["Humidity"] = (pivot_binned, info)
 
-                wind_col = get_metric_column(cdf, ["wind_speed", "windspd", "wspd", "wind"])
+                wind_col = get_metric_column(cdf, ["windspd", "wind_speed", "wspd"])
                 if wind_col:
-                    pivot_binned, info = _build_pivot_with_thresholds(cdf, wind_col, "Wind Speed", thresholds_state["wind"], " m/s", "wind", agg="median")
+                    # Bin wind speed into categories 0, 1, 2 for proper discrete coloring
+                    # <1.5 (0), 1.5-4.5 (1), >4.5 (2)
+                    wb = [0.0, 1.5, 4.5, cdf[wind_col].max() + 1.0]
+                    if wb[-1] <= 4.5: wb[-1] = 999.0
+                    
+                    cdf["wind_cat"] = pd.cut(cdf[wind_col], bins=wb, labels=[0, 1, 2], include_lowest=True, right=False).astype(float)
+                    
+                    pivot_binned, info = _build_pivot_with_thresholds(cdf, "wind_cat", "Wind Speed", thresholds_state["wind"], " m/s", "wind", agg="median")
                     if not pivot_binned.empty:
                         heatmap_dict["Wind Speed"] = (pivot_binned, info)
 
@@ -3559,7 +3829,7 @@ def render_dashboard_page():
 
                             dir_colors = ["#4c6fff", "#3fb3ff", "#36d1a8", "#8bd36b", "#f6c445", "#f08c42", "#e15b9a", "#9d6bff"]
                             # map codes back to compass labels for hover
-                            label_grid = pivot_dir.applymap(lambda v: sector_names[int(v)] if pd.notna(v) else np.nan)
+                            label_grid = pivot_dir.applymap(lambda v: sector_names[int(v)] if pd.notna(v) else np.nan).values
 
                             info_dir = {
                                 "metric": "Wind Direction",
@@ -3578,31 +3848,11 @@ def render_dashboard_page():
                 else:
                     fig = build_diurnal_heatmap_figure(heatmap_dict, cdf, header)
                     if fig:
-                        # Full-year ticks
-                        month_doy, month_letters = month_labels_at_midpoints(leap_year=False)
-                        fig.update_xaxes(tickmode="array", tickvals=month_doy, ticktext=month_letters)
-                        fig.update_xaxes(title_text=None)
-                        try:
-                            fig.update_yaxes(title_text=None)
-                        except Exception:
-                            pass
-                        fig.add_annotation(x=-0.06, y=0.5, xref='paper', yref='paper', text='Time of Day', showarrow=False, textangle=-90, font=dict(size=11))
-
-                        # Ensure proper left margin for "Time of Day" label
-                        safe_name = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
-                        
-                        fig.update_layout(
-                            title=f"{location_label} – Annual Diurnal Resource Heatmaps",
-                            margin=dict(l=90, r=10, t=60, b=20),
-                            yaxis=dict(title_standoff=15),
-                        )
-                        # Specific fix for left-most subplots (usually column 1)
-                        fig.update_yaxes(title_standoff=15)
-
                         st.plotly_chart(fig, use_container_width=False, config={"responsive": False})
 
                         # Downloads reflecting current thresholds
-                        clean_loc = safe_name # reuse safe_name
+                        city_clean = header.get("city", "Station").replace(" ", "_").replace(",", "").replace("__", "_")
+                        clean_loc = city_clean
                         c1d, c2d = st.columns(2)
                         with c1d:
                             try:
@@ -4114,13 +4364,8 @@ def render_trends_page():
     )
 
     # Reduce excess padding so the two panels read as a single, compact stack
-    location_name = get_active_location_name()
-    safe_name = location_name.replace(" ", "_").replace(",", "").replace("__", "_")
-
     fig.update_layout(
-        title=f"{location_name} – Temperature & Humidity",
-        title_x=0.5,
-        margin=dict(l=80, r=40, t=80, b=40),
+        margin=dict(l=70, r=30, t=45, b=40),
         plot_bgcolor="rgba(12, 17, 26, 1)",
         paper_bgcolor="rgba(12, 17, 26, 1)",
         legend=dict(font=dict(color="#e5e7eb", size=12)),
@@ -4170,8 +4415,8 @@ def render_trends_page():
     with d1:
         try:
             # Generate PNG (wrapping in try/except to avoid crashes on some hosts)
-            png_bytes = fig.to_image(format="png", width=1600, height=700, scale=2)
-            st.download_button(f"📥 Download Trends (PNG)", png_bytes, f"{safe_name}_temperature_humidity.png", "image/png")
+            png_bytes = fig.to_image(format="png", width=1400, height=800, scale=2)
+            st.download_button("📥 Download Trends (PNG)", png_bytes, "trends_chart.png", "image/png")
         except Exception:
             pass
     with d2:
@@ -4376,13 +4621,6 @@ def render_solar_page():
         "before taking shading or PV decisions. The plots highlight seasonal envelopes so you can "
         "see when the sun is high, low, or missing entirely."
     )
-
-    # Ensure Session State Data (Hoisted to prevent NameError)
-    cdf = st.session_state.get("cdf")
-    header = st.session_state.get("header")
-    if cdf is None or header is None:
-        st.info("No EPW data loaded. Please upload a file in the Sidebar.")
-        return
 
 # sunpath.py
 # A compact, production-minded sun-path plotter (2D angular + optional 3D)
@@ -4641,8 +4879,6 @@ def render_solar_page():
         show_analemmas: bool = True,
         hours_for_analemma=range(6, 19),
         analemma_step_days: int = 7,
-        show_labels: bool = False,
-        marker_step: int = 3,
     ) -> go.Figure:
         from datetime import timedelta
 
@@ -4700,7 +4936,7 @@ def render_solar_page():
             x=[az_unit(a)[0] * 1.07 for _, a in cardinals],
             y=[az_unit(a)[1] * 1.07 for _, a in cardinals],
             text=[t for t, _ in cardinals], mode="text", showlegend=False, hoverinfo="skip",
-            textfont=dict(size=20, color="#e5e7eb", family="Arial Black")
+            textfont=dict(size=16, color="#e5e7eb", family="Arial Black")
         ))
 
         # Altitude ring labels (placed toward southern rim for readability)
@@ -4747,27 +4983,6 @@ def render_solar_page():
         xs_sel, ys_sel, az_sel, el_sel, idx_sel = sunpath_for_day(date)
         if xs_sel.size > 0:
             fig.add_trace(go.Scatter(x=xs_sel, y=ys_sel, mode="lines", line=dict(color="#22d3ee", width=2.4, dash="dot"), name=f"{date:%b %d} Path", showlegend=True, hoverinfo="skip"))
-            
-            # Add markers every N hours
-            # Extract indices where minute==0 and hour % marker_step == 0
-            mask_indices = [i for i, t in enumerate(idx_sel) if t.minute == 0 and t.hour % marker_step == 0]
-            if mask_indices:
-                xm = xs_sel[mask_indices]
-                ym = ys_sel[mask_indices]
-                tm = idx_sel[mask_indices]
-                lbls = [t.strftime("%H:%M") for t in tm]
-                
-                fig.add_trace(go.Scatter(
-                    x=xm, y=ym,
-                    mode="markers+text" if show_labels else "markers",
-                    text=lbls if show_labels else None,
-                    textposition="top center",
-                    marker=dict(size=8, color="#22d3ee", line=dict(width=1, color="#fff")),
-                    textfont=dict(color="#e5e7eb", size=11),
-                    name="Hour Markers",
-                    showlegend=False,
-                    hoverinfo="skip"
-                ))
 
         # Current sun marker: pick nearest to 'now' in site tz (if within same day samples)
         now_local = pd.Timestamp.now(tz=site.tz)
@@ -4852,20 +5067,20 @@ def render_solar_page():
                    font=dict(size=12, color="#e5e7eb"), bordercolor="#334155", borderwidth=1, bgcolor="rgba(15,23,42,0.85)", borderpad=6)
 
         fig.update_layout(
-            xaxis=dict(scaleanchor="y", range=[-1.15, 1.15], visible=False),
-            yaxis=dict(range=[-1.15, 1.15], visible=False),
-            margin=dict(l=20, r=20, t=60, b=40),
-            height=750,
-            title=dict(text=f"Sun Path Diagram • {date:%b %d, %Y}", x=0.5, font=dict(size=18, color="#e5e7eb")),
+            xaxis=dict(scaleanchor="y", range=[-1.12, 1.12], visible=False),
+            yaxis=dict(range=[-1.12, 1.12], visible=False),
+            margin=dict(l=20, r=180, t=56, b=20),
+            height=700,
+            title=f"Sun Path Diagram • {date:%b %d, %Y}",
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
-                y=-0.1,
-                xanchor="center",
-                x=0.5,
-                bgcolor="rgba(0,0,0,0)",
+                y=1.02,
+                xanchor="left",
+                x=0,
+                bgcolor="rgba(0,0,0,0.55)",
                 bordercolor="#444",
-                borderwidth=0,
+                borderwidth=1,
                 font=dict(color="#e5e7eb")
             ),
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#e5e7eb"),
@@ -5374,19 +5589,35 @@ def render_solar_page():
 
     # ---------- CLI / Demo ----------
 
-    # ===== SUN PATH IMPLEMENTATION =====
-    
-    # Data validated at top of function
+    def main():
+        p = argparse.ArgumentParser()
+        p.add_argument("--lat", type=float, required=True)
+        p.add_argument("--lon", type=float, required=True)
+        p.add_argument("--tz", type=str, required=True)
+        p.add_argument("--date", type=str, default="2025-09-23")
+        p.add_argument("--projection", type=str, default="stereographic", choices=["stereographic", "orthographic"])
+        p.add_argument("--show3d", action="store_true")
+        args = p.parse_args()
 
+        site = Site(args.lat, args.lon, args.tz)
+        date = pd.Timestamp(args.date, tz=site.tz)
+
+        opt2d = Options2D(projection=args.projection, show_annual_grid=True, show_hour_labels=True)
+        fig2d, _ = draw_sunpath_2d(site, date, opt2d)
+
+        opt3d = Options3D(show_3d=args.show3d, show_rays=True,
+                        massing=[(-0.2, -0.1, 0.2, 0.3, 0.0, 0.25)])
+        if opt3d.show_3d:
+            fig3d, _ = draw_sunpath_3d(site, date, opt3d, rays_point=(0.0, 0.0, 0.0))
+
+        plt.show()
+
+            # ===== SUN PATH (render above cloud coverage) =====
     from datetime import timezone, timedelta
 
-    # Timezone & Location
-    # Redefine locally to ensure scope availability (belt & suspenders)
-    cdf = st.session_state.get("cdf")
-    header = st.session_state.get("header")
-    
-    loc = header.get("location", {})
-    tz_hours = float(loc.get("timezone") or 0.0)
+    # Build timezone from EPW header offset, then a Site from the same header
+    loc = header["location"]
+    tz_hours = float(loc.get("timezone") or 0.0)            # e.g., -5 for Buffalo
     tzinfo = timezone(timedelta(hours=tz_hours))
 
     site = Site(
@@ -5399,90 +5630,71 @@ def render_solar_page():
 
         # ===== SUN PATH (interactive) =====
 
+    c1, c2, c3 = st.columns([1,1,1])
+    # Sun-path date input removed per UX request; use today's date in site timezone
+    sel_date = pd.Timestamp.now(tz=tzinfo).date()
+    proj = c2.selectbox("2D projection", ["stereographic", "orthographic"], index=0)
+    show3d = c3.checkbox("Show 3D dome & rays", value=False)
 
-    c1, c2, c3 = st.columns([1.4, 1.1, 0.9])
-    with c1:
-        color_mode = st.selectbox(
-            "Color sun points by",
-            ["Dry Bulb Temperature (°C)", "Solar Radiation", "None"],
-            index=0,
-            key="solar_color_mode",
-        )
-    with c2:
-        projection = st.selectbox(
-            "2D projection",
-            ["stereographic", "azimuthal", "orthographic"],
-            index=0,
-            key="solar_projection",
-        )
-    with c3:
-        show_dome = st.checkbox("Show 3D dome & rays", value=False, key="solar_show_dome")
-
-    c4, c5 = st.columns([1.4, 0.8])
-    with c4:
-        marker_step = st.slider(
-            "Show sun markers every N hours",
-            min_value=1,
-            max_value=4,
-            value=3,
-            step=1,
-            key="solar_marker_step",
-        )
-    with c5:
-        show_labels = st.checkbox(
-            "Show labels on sun markers",
-            value=False,
-            key="solar_show_labels",
-        )
-
-    # Prepare EPW-derived dataframe with relevant variables
+    # Prepare EPW-derived dataframe with relevant variables if present
     epw_df = pd.DataFrame(index=cdf.index)
     temp_col = get_metric_column(cdf, ["drybulb", "temp_air", "temperature", "tdb"])
-    if temp_col: epw_df["temp_air"] = cdf[temp_col]
+    if temp_col:
+        epw_df["temp_air"] = cdf[temp_col]
     solar_col = get_metric_column(cdf, ["glohorrad", "ghi", "global_horiz", "global_horizontal", "solar", "radiation"])
-    if solar_col: epw_df["glohorrad"] = cdf[solar_col]
-    
-    # Map selection to internal color_var
-    if color_mode == "Dry Bulb Temperature (°C)":
-        color_var = "temperature"
-    elif color_mode == "Solar Radiation":
-        color_var = "solar"
-    else:
-        color_var = "temperature" # fallback/none
+    if solar_col:
+        epw_df["glohorrad"] = cdf[solar_col]
+    rh_col = get_metric_column(cdf, ["relhum", "relative_humidity", "rh"])
+    if rh_col:
+        epw_df["relhum"] = cdf[rh_col]
+    wind_col = get_metric_column(cdf, ["windspd", "wind_speed", "wspd", "wind"])
+    if wind_col:
+        epw_df["windspd"] = cdf[wind_col]
 
-    # Aliases for 3D chart compatibility
-    hour_stride = marker_step
-    label_every = marker_step
+    # Ensure tz-awareness consistent with site tz, then convert to UTC for clean joins
+    if epw_df.index.tz is None:
+        epw_df.index = epw_df.index.tz_localize(tzinfo)
+    epw_df = epw_df.tz_convert("UTC").sort_index()
+    epw_df = epw_df[~epw_df.index.duplicated(keep="first")]
 
-    # Sun-path date
-    sel_date = pd.Timestamp.now(tz=tzinfo).date() # default simple
+    # 3D-specific controls
+    avail_options = []
+    option_map = {}
+    if "temp_air" in epw_df.columns:
+        avail_options.append("Dry Bulb Temperature (°C)")
+        option_map["Dry Bulb Temperature (°C)"] = "temperature"
+    if "glohorrad" in epw_df.columns:
+        avail_options.append("Solar Radiation (W/m²)")
+        option_map["Solar Radiation (W/m²)"] = "solar"
+    if "relhum" in epw_df.columns:
+        avail_options.append("Relative Humidity (%)")
+        option_map["Relative Humidity (%)"] = "humidity"
+    if "windspd" in epw_df.columns:
+        avail_options.append("Wind Speed (m/s)")
+        option_map["Wind Speed (m/s)"] = "wind"
+    if not avail_options:
+        avail_options = ["Dry Bulb Temperature (°C)"]
+        option_map["Dry Bulb Temperature (°C)"] = "temperature"
+
+    c4, c5 = st.columns([1,1])
+    color_choice_label = c4.selectbox("Color sun points by", options=avail_options, index=0)
+    hour_stride = c5.slider("Show sun every N hours", min_value=1, max_value=4, value=1, step=1)
+    color_var = option_map.get(color_choice_label, "temperature")
+
+    show_labels = st.checkbox("Show labels on sun markers", value=True)
+    marker_every = st.slider("Show sun markers every N hours", min_value=1, max_value=4, value=1, step=1)
+    label_every = marker_every
+
+
+
+
     sel_ts = pd.Timestamp(sel_date, tz=tzinfo)
     display_date = sel_ts.strftime("%b %d, %Y")
 
-    # Ensure tz-awareness consistent
-    if epw_df.index.tz is None:
-        epw_df.index = epw_df.index.tz_localize(tzinfo)
-    
-    # 2D Plot
-    fig = sunpath_plotly_2d(site, sel_ts, projection, show_labels=show_labels, marker_step=marker_step)
+    fig2d = sunpath_plotly_2d(site, sel_ts, proj)
+    st.plotly_chart(fig2d, use_container_width=True, config={"displayModeBar": True})
 
-    # Layout Improvement with Global helper
-    active_location_name = get_active_location_name()
-    fig.update_layout(
-        title=f"{active_location_name} – Sun Path Diagram",
-        title_x=0.5,
-        legend=dict(
-            orientation="h",
-            x=0.5,
-            xanchor="center",
-            y=-0.1,
-            yanchor="top",
-        ),
-    )
-    
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
-
-    if show_dome:
+    if show3d:
         st.subheader(f"Sun Path (3D) — {display_date}")
         view_state = st.session_state.get("sunpath3d_view", "default")
         v1, v2, v3, v4 = st.columns(4)
@@ -5516,7 +5728,7 @@ def render_solar_page():
             hour_stride=hour_stride,
             show_labels=show_labels,
             label_every=label_every,
-            marker_every=marker_step,
+            marker_every=marker_every,
             camera_eye=camera_eye,
         )
         # Coerce common non-figure returns and guard against bad types before plotting.
@@ -5895,7 +6107,6 @@ def render_psychrometrics_page():
     st.caption("Clean grid with absolute humidity (g/kg), RH isolines, saturation curve, and hourly EPW scatter.")
 
     # ------- Controls -------
-    # Row 1: Toggles
     cA, cB = st.columns([1.2, 1])
     auto_zoom = cA.checkbox("Auto zoom to EPW range", value=True, help="Fit axes to EPW hourly temperature and absolute humidity range.")
     show_enthalpy = cB.checkbox("Show enthalpy & v lines", value=True)
@@ -5948,23 +6159,7 @@ def render_psychrometrics_page():
     else:
         P_kPa = 101.325
 
-    # Row 2: Month Filter
-    import pandas as pd
-    month_options = ["All"] + [pd.Timestamp(2001, m, 1).strftime("%b") for m in range(1, 13)]
-    selected_month = st.select_slider(
-        "Filter hourly points by month",
-        options=month_options,
-        value="All",
-        key="psychro_month_filter",
-    )
-
     dfp = cdf[["drybulb", "relhum"]].dropna().copy()
-    dfp["month"] = dfp.index.month
-
-    if selected_month != "All":
-        month_num = month_options.index(selected_month)  # Jan=1, etc.
-        dfp = dfp[dfp["month"] == month_num]
-
     if dfp.empty:
         st.info("No points to plot.")
         st.stop()
@@ -6052,32 +6247,19 @@ def render_psychrometrics_page():
     fig_psy.add_trace(go.Scatter(
         x=T_axis, y=y_sat_gpkg, mode="lines",
         line=dict(width=2.5, color="rgba(120,120,120,1.0)"),
-        showlegend=False,
         name="Saturation (100% RH)", hovertemplate="Tdb %{x:.1f}°C<br>Abs %{y:.2f} g/kg<extra></extra>"
     ))
 
-    # RH isolines (dashed gray) + Inline Labels
+    # RH isolines (dashed gray)
     for rh in rh_list:
         fig_psy.add_trace(go.Scatter(
             x=T_axis, y=rh_curves_gpkg[rh], mode="lines",
             line=dict(width=1.2, dash="dot", color="rgba(120,120,120,0.8)"),
-            name=f"{rh}% RH", showlegend=False,
+            name=f"{rh}% RH", showlegend=(rh in (20,40,60,80)),
             hovertemplate=f"{rh}% RH<br>Tdb %{{x:.1f}}°C<br>Abs %{{y:.2f}} g/kg<extra></extra>"
         ))
-        # Add inline label for filtered RH lines (20, 40, 60, 80)
-        if rh in [20, 40, 60, 80]:
-            # Simple heuristic: pick a T near the nicer part of the curve (e.g., T=25 or T=35)
-            # Find y at T=30
-            y_lbl = np.interp(30.0, T_axis, rh_curves_gpkg[rh])
-            if Y_MIN <= y_lbl <= Y_MAX and 30.0 <= X_MAX:
-                fig_psy.add_annotation(
-                    x=30.0, y=y_lbl, text=f"{rh}%",
-                    showarrow=False,
-                    font=dict(size=10, color="rgba(200,200,200,0.6)"),
-                    bgcolor="rgba(15,23,42,0.4)", # slight bg for readability
-                )
 
-    # Optional: enthalpy & specific volume helpers + Labels
+    # Optional: enthalpy & specific volume helpers
     if show_enthalpy:
         for h in enthalpy_levels:
             w_line = w_from_enthalpy(T_axis, h)
@@ -6085,35 +6267,25 @@ def render_psychrometrics_page():
             fig_psy.add_trace(go.Scatter(
                 x=T_axis, y=y_line, mode="lines",
                 line=dict(width=1.25, dash="dash", color="rgba(255,165,0,0.85)"),
-                name=(f"h={h} kJ/kg"), showlegend=False, hoverinfo="skip"
+                name=(f"h={h} kJ/kg"), hoverinfo="skip"
             ))
-            # Label
-            y_lbl_h = np.interp(35.0, T_axis, y_line)
-            if Y_MIN <= y_lbl_h <= Y_MAX:
-                fig_psy.add_annotation(
-                    x=35.0, y=y_lbl_h, text=f"h={h}",
-                    showarrow=False,
-                    font=dict(size=10, color="rgba(255,165,0,0.85)"),
-                    align="left"
-                )
-
         for v in v_levels:
             w_line = w_from_specific_volume(T_axis, v, P_kPa)
             y_line = abs_hum_gpkg_from_w(w_line)
             fig_psy.add_trace(go.Scatter(
                 x=T_axis, y=y_line, mode="lines",
                 line=dict(width=1.25, dash="dot", color="rgba(90,140,255,0.85)"),
-                name=(f"v={v:.2f} m3/kg"), showlegend=False, hoverinfo="skip"
+                name=(f"v={v:.2f} m3/kg"), hoverinfo="skip"
             ))
-            # Label
-            y_lbl_v = np.interp(20.0, T_axis, y_line)
-            if Y_MIN <= y_lbl_v <= Y_MAX:
-                fig_psy.add_annotation(
-                    x=20.0, y=y_lbl_v, text=f"v={v}",
-                    showarrow=False,
-                    font=dict(size=10, color="rgba(90,140,255,0.85)"),
-                    align="left"
-                )
+
+    # RH % labels along the right margin (like PVSyst look)
+    for rh in rh_list:
+        x_lab = X_MAX - 0.2
+        y_curve = np.interp(x_lab, T_axis, rh_curves_gpkg[rh])
+        if Y_MIN <= y_curve <= Y_MAX:
+            fig_psy.add_annotation(x=X_MAX, y=y_curve, text=f"{rh}%",
+                                xanchor="left", showarrow=False,
+                                font=dict(size=11, color="rgba(120,120,120,0.9)"))
 
     # Scatter points (hourly conditions)
     custom = np.c_[RH_pts, Pv_pts, h_pts, v_pts, dp_pts, tw_pts]
@@ -6121,7 +6293,6 @@ def render_psychrometrics_page():
         x=T_pts, y=Y_pts_gpkg, mode="markers",
         marker=dict(size=4, opacity=0.35, color="royalblue"),
         name="Hourly conditions",
-        showlegend=False,
         customdata=custom,
         hovertemplate=(
             "<b>Hourly</b><br>"
@@ -6193,28 +6364,23 @@ def render_psychrometrics_page():
             tr.marker.opacity = 0.45
 
 
-    # Dynamic Header Logic
-    loc_name = get_active_location_name()
-    safe_name = loc_name.replace(" ", "_").replace(",", "").replace("/", "_")
-
     fig_psy.update_layout(
-        margin=dict(l=90, r=60, t=70, b=80),
+        margin=dict(l=90, r=280, t=70, b=80),  # extra right for the legend
         height=680,
+        legend=dict(
+            orientation="v",
+            x=1.18, y=1.0,
+            xanchor="left", yanchor="top",
+            bgcolor="rgba(0,0,0,0)",
+            bordercolor="rgba(255,255,255,0.20)",
+            borderwidth=0.8,
+            itemclick=False,
+            itemdoubleclick=False
+        ),
         hovermode="closest",
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        title=dict(text=f"{loc_name} – Psychrometric Chart", x=0.5, xanchor="center", yanchor="top", pad=dict(t=10, b=10)),
-        showlegend=False,
-        # Add Right Axis for RH
-        yaxis2=dict(
-            overlaying="y",
-            side="right",
-            title=dict(text="Relative Humidity (%)", font=dict(size=11)),
-            tickfont=dict(size=10),
-            tickvals=[], 
-            showgrid=False,
-            zeroline=False,
-        ),
+        title=dict(text="Psychrometric Chart", x=0.01, xanchor="left", yanchor="top", pad=dict(t=10, b=10)),
     )
     fig_psy.add_annotation(
         xref="paper", yref="paper", x=0.0, y=1.12,
@@ -6236,12 +6402,7 @@ def render_psychrometrics_page():
         try:
             # Explicitly safe dimensions to prevent memory crash
             png_bytes = fig_psy.to_image(format="png", width=1200, height=900, scale=2)
-            st.download_button(
-                label="Download chart (PNG)",
-                data=png_bytes,
-                file_name=f"{safe_name}_psychrometric_chart.png",
-                mime="image/png",
-            )
+            st.download_button("📥 Download Chart (PNG)", png_bytes, "psychrometric_chart.png", "image/png", key="dl_psy_png")
         except Exception:
             pass
     with d2:

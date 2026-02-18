@@ -10,3 +10,4 @@ pvlib
 requests
 openpyxl
 kaleido
+rapidfuzz
