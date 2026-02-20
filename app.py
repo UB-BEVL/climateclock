@@ -4898,6 +4898,11 @@ def render_solar_page():
         show_analemmas: bool = True,
         hours_for_analemma=range(6, 19),
         analemma_step_days: int = 7,
+        epw: pd.DataFrame | None = None,
+        color_var: str = "temperature",
+        show_labels: bool = True,
+        label_every: int = 1,
+        marker_every: int = 1,
     ) -> go.Figure:
         from datetime import timedelta
 
@@ -4925,13 +4930,13 @@ def render_solar_page():
         shapes = []
 
         # Rim
-        shapes.append(dict(type="circle", xref="x", yref="y", x0=-1, y0=-1, x1=1, y1=1, line=dict(width=1.2, color="rgba(255,255,255,0.25)")))
+        shapes.append(dict(type="circle", xref="x", yref="y", x0=-1, y0=-1, x1=1, y1=1, line=dict(width=1.2, color="rgba(255,255,255,0.4)"), fillcolor="rgba(30, 41, 59, 0.4)"))
 
         # Altitude concentric rings (10..80)
         for alt in range(10, 90, 10):
             x0, y0 = project_angular(np.array([0.0]), np.array([alt]), projection)
             r = float(np.hypot(x0, y0))
-            shapes.append(dict(type="circle", xref="x", yref="y", x0=-r, y0=-r, x1=r, y1=r, line=dict(width=0.7, color="rgba(255,255,255,0.18)", dash="dot")))
+            shapes.append(dict(type="circle", xref="x", yref="y", x0=-r, y0=-r, x1=r, y1=r, line=dict(width=0.7, color="rgba(255,255,255,0.25)", dash="dot")))
 
         # Azimuth ticks (every 10°; major every 90°)
         for az in range(0, 360, 10):
@@ -4939,7 +4944,7 @@ def render_solar_page():
             inner = 0.98
             outer = 1.03 if az % 90 == 0 else 1.01
             lw = 2 if az % 90 == 0 else 1
-            shapes.append(dict(type="line", x0=ux * inner, y0=uy * inner, x1=ux * outer, y1=uy * outer, line=dict(width=lw, color="rgba(255,255,255,0.35)")))
+            shapes.append(dict(type="line", x0=ux * inner, y0=uy * inner, x1=ux * outer, y1=uy * outer, line=dict(width=lw, color="rgba(255,255,255,0.5)")))
 
         # Hour radial lines (6..18), light dash
         for h in range(6, 19):
@@ -4986,22 +4991,98 @@ def render_solar_page():
             fig.add_trace(go.Scatter(x=hr_x, y=hr_y, text=hr_text, mode="text", showlegend=False, hoverinfo="skip",
                                      textfont=dict(size=11, color="#fbbf24")))
 
-        # Daily seasonal arcs (Dec/Mar/Jun/Sep) and selected day
-        def add_day_trace(day, color="#E67E22", width=2, dash="solid", name=None, opacity=1.0):
-            xs, ys, _, _, idx = sunpath_for_day(day)
-            if xs.size == 0:
-                return
-            fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", line=dict(color=color, width=width, dash=dash), name=name, opacity=opacity, showlegend=True, hoverinfo="skip"))
+        if show_analemmas:
+            # Generate analemma (figure 8) points by taking 1 sample per week at each hour
+            year = date.year
+            analemma_dates = pd.date_range(start=f"{year}-01-01", end=f"{year}-12-31", freq=f"{analemma_step_days}D", tz=site.tz)
+            
+            an_sp_all = pvlib.solarposition.get_solarposition(analemma_dates, site.lat, site.lon, altitude=site.elev_m)
+            
+            # Since an analemma links the same clock hour across days, we need full days of hours
+            # To be efficient, we compute exactly the requested hours for all analemma_dates
+            idx_list = []
+            for d in analemma_dates:
+                for h in hours_for_analemma:
+                    idx_list.append(d.replace(hour=h, minute=0, second=0))
+            idx_analemma = pd.DatetimeIndex(idx_list).tz_localize(None).tz_localize(site.tz) if idx_list[0].tz is None else pd.DatetimeIndex(idx_list)
+            sp_an = pvlib.solarposition.get_solarposition(idx_analemma, site.lat, site.lon, altitude=site.elev_m)
+            sp_an = sp_an[sp_an["elevation"] > 0]
+            
+            # Draw an analemma line for each hour
+            for h in hours_for_analemma:
+                mask = sp_an.index.hour == h
+                hr_data = sp_an[mask].sort_index()
+                if hr_data.empty: continue
+                # Close the loop
+                hr_data = pd.concat([hr_data, hr_data.iloc[[0]]])
+                hx, hy = project_angular(hr_data["azimuth"].values, hr_data["elevation"].values, projection)
+                fig.add_trace(go.Scatter(
+                    x=hx, y=hy, mode="lines", 
+                    line=dict(color="rgba(100,116,139,0.3)", width=1.5), 
+                    showlegend=False, hoverinfo="skip"
+                ))
 
-        year = date.year
-        add_day_trace(pd.Timestamp(year=year, month=6, day=21, tz=site.tz), color="#facc15", width=2, name="Jun 21 (Summer)")
-        add_day_trace(pd.Timestamp(year=year, month=12, day=21, tz=site.tz), color="#ef4444", width=2, name="Dec 21 (Winter)")
-        add_day_trace(pd.Timestamp(year=year, month=3, day=21, tz=site.tz), color="#fb923c", width=2, name="Mar/Sept (Equinox)")
-
-        # Selected date (red dotted)
+        # Selected date: compute positions and set up data-driven colors
         xs_sel, ys_sel, az_sel, el_sel, idx_sel = sunpath_for_day(date)
-        if xs_sel.size > 0:
-            fig.add_trace(go.Scatter(x=xs_sel, y=ys_sel, mode="lines", line=dict(color="#22d3ee", width=2.4, dash="dot"), name=f"{date:%b %d} Path", showlegend=True, hoverinfo="skip"))
+        df_sel = solar_positions(site, date)
+        if not df_sel.empty:
+            df_sel = _with_solar_time(df_sel, site)
+            df_sel = df_sel.iloc[::max(1, int(1))]  # default 10min -> hourly (already hourly from solar_positions)
+            
+            # Determine colors
+            color_series = None
+            color_title = None
+            cmin = None
+            cmax = None
+            colorscale = "Cividis"
+            if epw is not None:
+                if color_var == "temperature":
+                    color_series = _nearest_epw_by_solar_time(epw, df_sel["solar_time"], ["temp_air","DryBulb","Dry_Bulb","drybulb","Temperature"])
+                    color_title = "Dry Bulb (°C)"
+                    colorscale = "RdYlBu_r"
+                elif color_var == "solar":
+                    color_series = _nearest_epw_by_solar_time(epw, df_sel["solar_time"], ["glohorrad","ghi","global_horiz"])
+                    color_title = "Solar Radiation"
+                    colorscale = "Inferno"
+                elif color_var == "humidity":
+                    color_series = _nearest_epw_by_solar_time(epw, df_sel["solar_time"], ["relhum","relative_humidity","rh"])
+                    color_title = "Humidity"
+                    colorscale = "Blues"
+                
+            if color_series is not None:
+                df_sel["color_val"] = pd.to_numeric(color_series, errors="coerce")
+                finite_vals = df_sel["color_val"].replace([np.inf, -np.inf], np.nan).dropna()
+                if not finite_vals.empty:
+                    low, high = np.percentile(finite_vals, [5, 95])
+                    cmin, cmax = low, max(high, low + 1e-6)
+
+            xs_hr, ys_hr = project_angular(df_sel["azimuth"].values, df_sel["elevation"].values, projection)
+            
+            # Plot the selected day path (line behind points)
+            fig.add_trace(go.Scatter(x=xs_hr, y=ys_hr, mode="lines", line=dict(color="rgba(255,255,255,0.4)", width=2, dash="dot"), name=f"{date:%b %d} Path", showlegend=True, hoverinfo="skip"))
+            
+            # Plot the data-driven points
+            colors = df_sel["color_val"].to_numpy() if "color_val" in df_sel.columns else None
+            
+            fig.add_trace(go.Scatter(
+                x=xs_hr, y=ys_hr,
+                mode="markers+text" if show_labels else "markers",
+                text=[t.strftime("%H:%M") for t in pd.to_datetime(df_sel["solar_time"]).dt.tz_convert(site.tz)] if show_labels else None,
+                textposition="top center",
+                textfont=dict(size=11, color="rgba(240,240,240,0.92)"),
+                marker=dict(
+                    size=10,
+                    color=colors if colors is not None else "#fbbf24",
+                    colorscale=colorscale, cmin=cmin, cmax=cmax,
+                    showscale=bool(colors is not None),
+                    colorbar=(dict(title=color_title or "Value", thickness=12, len=0.55, y=0.5, x=1.03) if colors is not None else None),
+                    line=dict(width=1, color="rgba(255,255,255,0.8)")
+                ),
+                name="Hourly markers",
+                showlegend=False,
+                hovertemplate="Time: %{text}<br>Az: %{customdata[0]:.1f}°<br>Alt: %{customdata[1]:.1f}°<extra></extra>",
+                customdata=np.c_[df_sel["azimuth"], df_sel["elevation"]]
+            ))
 
         # Current sun marker: pick nearest to 'now' in site tz (if within same day samples)
         now_local = pd.Timestamp.now(tz=site.tz)
@@ -5049,24 +5130,26 @@ def render_solar_page():
                 # radial line
                 fig.add_shape(type="line", x0=0, y0=0, x1=sun_marker_x, y1=sun_marker_y, line=dict(color="#ff4d4d", width=2))
 
-        # Solar info panel
-        info_lines = []
-        if azimuth is not None:
-            info_lines.append(f"Solar Time: {solar_time}")
-            info_lines.append(f"Azimuth: {azimuth:.1f}°")
-            info_lines.append(f"Altitude: {altitude:.1f}°")
-        else:
-            info_lines.append("No sun above horizon on this date/site")
+        info_dict = {
+            "solar_time": solar_time,
+            "azimuth": azimuth,
+            "altitude": altitude,
+            "sunrise": None,
+            "sunset": None,
+            "civil": None,
+            "nautical": None,
+            "astronomical": None,
+            "lat": site.lat,
+            "lon": site.lon
+        }
 
         # compute rise/set/twilight from full-day samples if available
         if len(idx_sel) > 0:
             sp_full = pvlib.solarposition.get_solarposition(idx_sel, site.lat, site.lon, altitude=site.elev_m)
             positives = sp_full[sp_full["elevation"] > 0]
             if not positives.empty:
-                sunrise = positives.index[0].strftime("%H:%M")
-                sunset = positives.index[-1].strftime("%H:%M")
-                info_lines.append(f"Sunrise: {sunrise}")
-                info_lines.append(f"Sunset: {sunset}")
+                info_dict["sunrise"] = positives.index[0].strftime("%H:%M")
+                info_dict["sunset"] = positives.index[-1].strftime("%H:%M")
 
             def tw(elev):
                 mask = sp_full[sp_full["elevation"] > elev]
@@ -5075,22 +5158,15 @@ def render_solar_page():
                 return mask.index[0].strftime("%H:%M"), mask.index[-1].strftime("%H:%M")
 
             civil = tw(-6); naut = tw(-12); astro = tw(-18)
-            info_lines.append(f"Civil: {civil[0]}–{civil[1]}")
-            info_lines.append(f"Nautical: {naut[0]}–{naut[1]}")
-            info_lines.append(f"Astronomical: {astro[0]}–{astro[1]}")
-
-        info_lines.append(f"Lat: {site.lat:.4f}")
-        info_lines.append(f"Lon: {site.lon:.4f}")
-        info_text = "<br>".join(info_lines)
-        fig.add_annotation(text=info_text, x=1.02, y=0.5, xref="paper", yref="paper", showarrow=False, align="left",
-                   font=dict(size=12, color="#e5e7eb"), bordercolor="#334155", borderwidth=1, bgcolor="rgba(15,23,42,0.85)", borderpad=6)
+            info_dict["civil"] = f"{civil[0]}–{civil[1]}"
+            info_dict["nautical"] = f"{naut[0]}–{naut[1]}"
+            info_dict["astronomical"] = f"{astro[0]}–{astro[1]}"
 
         fig.update_layout(
             xaxis=dict(scaleanchor="y", range=[-1.12, 1.12], visible=False),
             yaxis=dict(range=[-1.12, 1.12], visible=False),
-            margin=dict(l=20, r=180, t=56, b=20),
+            margin=dict(l=20, r=20, t=10, b=20),
             height=700,
-            title=f"Sun Path Diagram • {date:%b %d, %Y}",
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
@@ -5106,7 +5182,7 @@ def render_solar_page():
             uirevision="sunpath_2d_arch"
         )
 
-        return fig
+        return fig, info_dict
 
 
 
@@ -5126,34 +5202,28 @@ def render_solar_page():
         # Full celestial sphere + sun paths for seasonal dates and the selected date.
         fig = go.Figure()
 
-        # --- Ground disk + light dome surface ---
-        grid_xy = np.linspace(-1.05, 1.05, 40)
-        gx, gy = np.meshgrid(grid_xy, grid_xy)
-        gz = np.zeros_like(gx)
-        fig.add_trace(go.Surface(
-            x=gx, y=gy, z=gz,
-            showscale=False,
-            colorscale=[[0, "#1f2937"], [1, "#111827"]],
-            opacity=0.08,
-            hoverinfo="skip",
-            name=None,
-            showlegend=False,
-        ))
+        # --- Ground disk / Compass Base ---
+        # Generate a faint flat Mesh3d disk for the compass base (prevents funneling artifacts)
+        base_theta = np.linspace(0, 2 * np.pi, 60, endpoint=False)
+        base_x = 1.05 * np.sin(base_theta)
+        base_y = 1.05 * np.cos(base_theta)
+        base_x = np.append(base_x, 0) # Center point
+        base_y = np.append(base_y, 0)
+        base_z = np.zeros_like(base_x) - 0.005 # slightly below 0
+        
+        i_idx, j_idx, k_idx = [], [], []
+        center_idx = len(base_x) - 1
+        for i in range(len(base_theta)):
+            i_idx.append(i)
+            j_idx.append((i + 1) % len(base_theta))
+            k_idx.append(center_idx)
 
-        theta = np.linspace(0, 2 * np.pi, 64)
-        phi = np.linspace(0, np.pi, 32)
-        th, ph = np.meshgrid(theta, phi)
-        x_s = np.sin(ph) * np.cos(th)
-        y_s = np.sin(ph) * np.sin(th)
-        z_s = np.cos(ph)
-        fig.add_trace(go.Surface(
-            x=x_s, y=y_s, z=z_s,
-            opacity=0.04,
-            colorscale=[[0, "#334155"], [1, "#0f172a"]],
-            showscale=False,
-            lighting=dict(ambient=0.8, diffuse=0.2, specular=0),
+        fig.add_trace(go.Mesh3d(
+            x=base_x, y=base_y, z=base_z,
+            i=i_idx, j=j_idx, k=k_idx,
+            color="rgba(255, 255, 255, 0.5)",
+            lighting=dict(ambient=1, diffuse=0, specular=0),
             hoverinfo="skip",
-            name=None,
             showlegend=False,
         ))
 
@@ -5168,106 +5238,154 @@ def render_solar_page():
             z = np.sin(alt_r)
             return x, y, z
 
-        # Horizon ring
+        # Horizon ring (thick wireframe base)
         hx, hy, hz = _ring_points(0)
         fig.add_trace(go.Scatter3d(
-            x=hx, y=hy, z=hz,
-            mode="lines",
-            line=dict(color="rgba(255,255,255,0.2)", width=2.2),
-            name=None,
-            showlegend=False,
-            hoverinfo="skip",
+            x=hx, y=hy, z=hz, mode="lines",
+            line=dict(color="rgba(255, 255, 255, 0.35)", width=2),
+            showlegend=False, hoverinfo="skip",
         ))
+        
+        # Compass Tick marks every 10 degrees on the horizon
+        tick_x, tick_y, tick_z = [], [], []
+        for az_deg in range(0, 360, 10):
+            if az_deg % 90 == 0: continue # Skip cardinals
+            az_r = np.deg2rad(az_deg)
+            tick_x.extend([1.0 * np.sin(az_r), 1.03 * np.sin(az_r), None])
+            tick_y.extend([1.0 * np.cos(az_r), 1.03 * np.cos(az_r), None])
+            tick_z.extend([0, 0, None])
+            
+        fig.add_trace(go.Scatter3d(
+            x=tick_x, y=tick_y, z=tick_z, mode="lines",
+            line=dict(color="rgba(255, 255, 255, 0.2)", width=1.5),
+            showlegend=False, hoverinfo="skip",
+        ))
+        
         # Altitude rings every 15° with labels placed at az=180° (south)
         for alt_deg in range(15, 90, 15):
             rx, ry, rz = _ring_points(alt_deg)
             fig.add_trace(go.Scatter3d(
-                x=rx, y=ry, z=rz,
-                mode="lines",
-                line=dict(color="rgba(255,255,255,0.12)", width=1.1),
-                name=None,
-                showlegend=False,
-                hoverinfo="skip",
+                x=rx, y=ry, z=rz, mode="lines",
+                line=dict(color="rgba(255, 255, 255, 0.08)", width=1),
+                showlegend=False, hoverinfo="skip",
             ))
             alt_r = np.deg2rad(alt_deg)
             az_r = np.deg2rad(180)
-            lx = 1.02 * np.cos(alt_r) * np.sin(az_r)
-            ly = 1.02 * np.cos(alt_r) * np.cos(az_r)
-            lz = np.sin(alt_r)
             fig.add_trace(go.Scatter3d(
-                x=[lx], y=[ly], z=[lz],
-                mode="text",
-                text=[f"{alt_deg}°"],
-                textposition="middle center",
-                textfont=dict(size=10, color="rgba(230,230,230,0.65)"),
-                name=None,
-                showlegend=False,
-                hoverinfo="skip",
+                x=[1.02 * np.cos(alt_r) * np.sin(az_r)], y=[1.02 * np.cos(alt_r) * np.cos(az_r)], z=[np.sin(alt_r)],
+                mode="text", text=[f"{alt_deg}°"], textposition="middle left",
+                textfont=dict(size=10, color="rgba(255, 255, 255, 0.5)"),
+                showlegend=False, hoverinfo="skip",
             ))
 
-        # Azimuth spokes every 30° (cardinals emphasized)
+        # Azimuth meridians (Sky Vault wireframe arcs)
         for az_deg in range(0, 360, 30):
             az_r = np.deg2rad(az_deg)
-            x0 = 0; y0 = 0; z0 = 0
-            x1 = np.sin(az_r); y1 = np.cos(az_r); z1 = 0
+            alts = np.linspace(0, np.pi/2, 40)
+            x = np.cos(alts) * np.sin(az_r)
+            y = np.cos(alts) * np.cos(az_r)
+            z = np.sin(alts)
             is_cardinal = az_deg % 90 == 0
+            
+            # Ground spoke
             fig.add_trace(go.Scatter3d(
-                x=[x0, x1], y=[y0, y1], z=[z0, z1],
-                mode="lines",
-                line=dict(color="rgba(255,255,255,{:.2f})".format(0.22 if is_cardinal else 0.1), width=2.2 if is_cardinal else 1.2),
-                name=None,
-                showlegend=False,
-                hoverinfo="skip",
+                x=[0, x[0]], y=[0, y[0]], z=[0, 0], mode="lines",
+                line=dict(color="rgba(255,255,255,0.15)" if is_cardinal else "rgba(255,255,255,0.06)", 
+                          width=1.5 if is_cardinal else 1),
+                showlegend=False, hoverinfo="skip",
+            ))
+            # Sky Vault arc
+            fig.add_trace(go.Scatter3d(
+                x=x, y=y, z=z, mode="lines",
+                line=dict(color="rgba(255,255,255,0.12)" if is_cardinal else "rgba(255,255,255,0.05)", 
+                          width=1.5 if is_cardinal else 1),
+                showlegend=False, hoverinfo="skip",
             ))
 
         # Cardinal labels on horizon
         cardinals = {
-            "N": (0, 1.08, 0),   # az=0 -> y positive
-            "E": (1.08, 0, 0),   # az=90 -> x positive
-            "S": (0, -1.08, 0),  # az=180 -> y negative
-            "W": (-1.08, 0, 0),  # az=270 -> x negative
+            "N": (0, 1.12, 0), "E": (1.12, 0, 0), "S": (0, -1.12, 0), "W": (-1.12, 0, 0)
         }
         fig.add_trace(go.Scatter3d(
             x=[v[0] for v in cardinals.values()],
             y=[v[1] for v in cardinals.values()],
             z=[v[2] for v in cardinals.values()],
-            mode="text",
-            text=list(cardinals.keys()),
-            textposition="middle center",
-            textfont=dict(color="rgba(230,230,230,0.8)", size=13),
-            name=None,
-            showlegend=False,
-            hoverinfo="skip",
+            mode="text", text=list(cardinals.keys()), textposition="middle center",
+            textfont=dict(color="#facc15", size=20, family="Arial Black"),
+            showlegend=False, hoverinfo="skip",
         ))
 
         def _sunpath_for(ts: pd.Timestamp, color: str, label: str):
             df = solar_positions(site, ts)
-            if df.empty:
-                return
-            az = np.deg2rad(df["azimuth"].values)
-            alt = np.deg2rad(df["elevation"].values)
-            x = np.cos(alt) * np.sin(az)
-            y = np.cos(alt) * np.cos(az)
-            z = np.sin(alt)
+            if df.empty: return
+            az, alt = np.deg2rad(df["azimuth"].values), np.deg2rad(df["elevation"].values)
+            x, y, z = np.cos(alt) * np.sin(az), np.cos(alt) * np.cos(az), np.sin(alt)
             fig.add_trace(go.Scatter3d(
-                x=x, y=y, z=z,
-                mode="lines",
-                line=dict(width=2, color=color),
-                name=label,
+                x=x, y=y, z=z, mode="lines",
+                line=dict(width=1.5, color=color), name=label,
                 hovertemplate="%{customdata[0]:.1f}° az<br>%{customdata[1]:.1f}° alt<extra></extra>",
                 customdata=np.c_[df["azimuth"].values, df["elevation"].values],
             ))
 
-        # seasonal arcs (full 24h)
+        # Volumetric Sky Vault Surface (Andrew Marsh style)
+        year = date.year
+        surf_dates = pd.date_range(start=f"{year}-12-21", end=f"{year+1}-06-21", periods=15, tz=site.tz)
+        hours = np.linspace(5, 19, 30)
+        X_surf, Y_surf, Z_surf = [], [], []
+        for d in surf_dates:
+            dt_list = [pd.Timestamp(f"{d.strftime('%Y-%m-%d')} {int(h):02d}:{int((h%1)*60):02d}:00", tz=site.tz) for h in hours]
+            sp_surf = pvlib.solarposition.get_solarposition(pd.DatetimeIndex(dt_list), site.lat, site.lon, altitude=site.elev_m)
+            az_surf = np.deg2rad(sp_surf["azimuth"].values)
+            alt_surf = np.deg2rad(sp_surf["elevation"].values)
+            alt_surf = np.clip(alt_surf, 0, None) # clip at horizon
+            X_surf.append(np.cos(alt_surf) * np.sin(az_surf))
+            Y_surf.append(np.cos(alt_surf) * np.cos(az_surf))
+            Z_surf.append(np.sin(alt_surf))
+        fig.add_trace(go.Surface(
+            x=np.array(X_surf), y=np.array(Y_surf), z=np.array(Z_surf),
+            colorscale=[[0, "rgba(235, 245, 190, 0.45)"], [1, "rgba(235, 245, 190, 0.45)"]],
+            showscale=False, hoverinfo="skip"
+        ))
+
+        # seasonal arcs (solid red/orange Andrew Marsh style)
         season_days = [
-            (12, 21, "#2D7DD2", "Dec 21"),
-            (3, 21, "#00B0F0", "Mar 21"),
-            (6, 21, "#FF6B3D", "Jun 21"),
-            (9, 21, "#FFA14A", "Sep 21"),
+            (12, 21, "#e63946", "Winter Solstice"),
+            (3, 21, "#e63946", "Equinox"),
+            (6, 21, "#e63946", "Summer Solstice"),
         ]
         for m, d, col, label in season_days:
             ts = pd.Timestamp(year=date.year, month=m, day=d, tz=site.tz)
             _sunpath_for(ts, col, label)
+
+        # Analemmas (Figure 8s)
+        analemma_dates = pd.date_range(start=f"{year}-01-01", end=f"{year}-12-31", freq="7D", tz=site.tz)
+        
+        hours_for_analemma = range(6, 19)
+        idx_list = []
+        for d in analemma_dates:
+            for h in hours_for_analemma:
+                idx_list.append(d.replace(hour=h, minute=0, second=0))
+        idx_analemma = pd.DatetimeIndex(idx_list).tz_localize(None).tz_localize(site.tz) if idx_list[0].tz is None else pd.DatetimeIndex(idx_list)
+        sp_an = pvlib.solarposition.get_solarposition(idx_analemma, site.lat, site.lon, altitude=site.elev_m)
+        sp_an = sp_an[sp_an["elevation"] > 0]
+        
+        for h in hours_for_analemma:
+            mask = sp_an.index.hour == h
+            hr_data = sp_an[mask].sort_index()
+            if hr_data.empty: continue
+            hr_data = pd.concat([hr_data, hr_data.iloc[[0]]])
+            
+            az_an = np.deg2rad(hr_data["azimuth"].values)
+            alt_an = np.deg2rad(hr_data["elevation"].values)
+            x_an = np.cos(alt_an) * np.sin(az_an)
+            y_an = np.cos(alt_an) * np.cos(az_an)
+            z_an = np.sin(alt_an)
+            
+            fig.add_trace(go.Scatter3d(
+                x=x_an, y=y_an, z=z_an, mode="lines", 
+                line=dict(color="#2962ff", width=1.5), 
+                showlegend=False, hoverinfo="skip"
+            ))
 
         # selected day: hourly positions (solar time labels + data-driven colors)
         df = solar_positions(site, date)
@@ -5340,12 +5458,26 @@ def render_solar_page():
             fig.add_trace(go.Scatter3d(
                 x=sx, y=sy, z=sz,
                 mode="lines",
-                line=dict(width=4, color="#fbbf24"),
+                line=dict(width=3, color="#e63946"),
                 name="Selected day",
                 hoverinfo="skip",
                 customdata=path_customdata,
                 showlegend=True,
             ))
+            
+            # Sun Vector Arrow (pointing to noon or first point)
+            if len(df) > 0:
+                noon_idx = len(df)//2
+                vx, vy, vz = sx[noon_idx], sy[noon_idx], sz[noon_idx]
+                fig.add_trace(go.Scatter3d(
+                    x=[0, vx], y=[0, vy], z=[0, vz], mode="lines",
+                    line=dict(color="#2962ff", width=3.5), showlegend=False, hoverinfo="skip"
+                ))
+                fig.add_trace(go.Cone(
+                    x=[vx], y=[vy], z=[vz], u=[vx], v=[vy], w=[vz],
+                    sizemode="absolute", sizeref=0.08, anchor="tip",
+                    colorscale=[[0, "#2962ff"], [1, "#2962ff"]], showscale=False, hoverinfo="skip"
+                ))
 
             every = max(1, int(label_every))
             text_labels = []
@@ -5360,18 +5492,17 @@ def render_solar_page():
                 mode="markers+text" if show_labels else "markers",
                 text=text_labels,
                 textposition="top center",
-                textfont=dict(size=11, color="rgba(240,240,240,0.92)"),
+                textfont=dict(size=11, color="rgba(255, 255, 255, 0.95)", family="Arial Black"),
                 marker=dict(
-                    size=9,
+                    size=5,
                     color=colors if colors is not None else "#fbbf24",
-                    colorscale=colorscale or "Cividis",
+                    colorscale=colorscale or "Turbo",
                     cmin=cmin,
                     cmax=cmax,
                     showscale=bool(colors is not None),
-                    colorbar=(dict(title=color_title or "Value", thickness=12, len=0.55, x=1.03) if colors is not None else None),
-                    line=dict(width=1.8, color="rgba(255,255,255,0.95)"),
+                    colorbar=(dict(title=color_title or "Value", thickness=10, len=0.5, x=1.03) if colors is not None else None),
                     symbol="circle",
-                    opacity=0.96,
+                    opacity=0.9,
                 ),
                 name="Hour markers",
                 hovertemplate="Local %{customdata[1]}<br>Az %{customdata[2]:.1f}° · Alt %{customdata[3]:.1f}°<br>%{customdata[4]}<extra></extra>",
@@ -5400,22 +5531,22 @@ def render_solar_page():
                 font=dict(color="#e5e7eb", size=12)
             ),
             scene=dict(
-                xaxis=dict(range=[-1.1, 1.1], visible=False),
-                yaxis=dict(range=[-1.1, 1.1], visible=False),
+                xaxis=dict(range=[-1.2, 1.2], visible=True, showbackground=False, showgrid=True, gridcolor="#475569", zeroline=True, zerolinecolor="#94a3b8", title="", tickfont=dict(color="#94a3b8")),
+                yaxis=dict(range=[-1.2, 1.2], visible=True, showbackground=False, showgrid=True, gridcolor="#475569", zeroline=True, zerolinecolor="#94a3b8", title="", tickfont=dict(color="#94a3b8")),
                 zaxis=dict(range=[0.0, 1.05], visible=False),
                 aspectmode="manual",
                 aspectratio=dict(x=1, y=1, z=0.6),
                 bgcolor="#0d1117",
             ),
             scene_camera=dict(
-                eye=camera_eye if camera_eye is not None else dict(x=1.6, y=1.6, z=1.1),
+                eye=camera_eye if camera_eye is not None else dict(x=1.2, y=1.8, z=0.8),
                 up=dict(x=0, y=0, z=1)
             ),
             plot_bgcolor="#0d1117",
             paper_bgcolor="#0d1117",
             font=dict(color="#e5e7eb"),
-            dragmode="orbit",
-            scene_dragmode="orbit",
+            dragmode="turntable",
+            scene_dragmode="turntable",
             uirevision="sunpath3d"
         )
 
@@ -5653,14 +5784,6 @@ def render_solar_page():
     )
 
 
-        # ===== SUN PATH (interactive) =====
-
-    c1, c2, c3 = st.columns([1,1,1])
-    # Sun-path date input removed per UX request; use today's date in site timezone
-    sel_date = pd.Timestamp.now(tz=tzinfo).date()
-    proj = c2.selectbox("2D projection", ["stereographic", "orthographic"], index=0)
-    show3d = c3.checkbox("Show 3D dome & rays", value=False)
-
     location_label = get_clean_city_name()
     st.markdown(f"<h3>{location_label} – Solar Analysis</h3>", unsafe_allow_html=True)
     st.caption(
@@ -5668,6 +5791,10 @@ def render_solar_page():
         "before taking shading or PV decisions. The plots highlight seasonal envelopes so you can "
         "see when the sun is high, low, or missing entirely."
     )
+
+    # ===== SUN PATH (interactive) =====
+    # Sun-path date input removed per UX request; use today's date in site timezone
+    sel_date = pd.Timestamp.now(tz=tzinfo).date()
 
     # Prepare EPW-derived dataframe with relevant variables if present
     epw_df = pd.DataFrame(index=cdf.index)
@@ -5690,7 +5817,7 @@ def render_solar_page():
     epw_df = epw_df.tz_convert("UTC").sort_index()
     epw_df = epw_df[~epw_df.index.duplicated(keep="first")]
 
-    # 3D-specific controls
+    # Available options for coloring
     avail_options = []
     option_map = {}
     if "temp_air" in epw_df.columns:
@@ -5709,38 +5836,57 @@ def render_solar_page():
         avail_options = ["Dry Bulb Temperature (°C)"]
         option_map["Dry Bulb Temperature (°C)"] = "temperature"
 
-    c4, c5 = st.columns([1,1])
-    color_choice_label = c4.selectbox("Color sun points by", options=avail_options, index=0)
-    hour_stride = c5.slider("Show sun every N hours", min_value=1, max_value=4, value=1, step=1)
-    color_var = option_map.get(color_choice_label, "temperature")
-
-    show_labels = st.checkbox("Show labels on sun markers", value=True)
-    marker_every = st.slider("Show sun markers every N hours", min_value=1, max_value=4, value=1, step=1)
-    label_every = marker_every
-
-
-
+    with st.expander("⚙️ Sun Path Display Settings", expanded=True):
+        sc1, sc2, sc3 = st.columns([1.2, 1.2, 1])
+        proj = sc1.selectbox("2D projection", ["stereographic", "orthographic"], index=0)
+        color_choice_label = sc2.selectbox("Color sun points by", options=avail_options, index=0)
+        color_var = option_map.get(color_choice_label, "temperature")
+        sc3.markdown("<br>", unsafe_allow_html=True)
+        show3d = sc3.checkbox("Show 3D dome & rays", value=False)
+        
+        sc4, sc5, sc6 = st.columns([1.2, 1.2, 1])
+        hour_stride = sc4.slider("Show sun every N hours", min_value=1, max_value=4, value=1, step=1)
+        marker_every = sc5.slider("Show markers every N hours", min_value=1, max_value=4, value=1, step=1)
+        label_every = marker_every
+        sc6.markdown("<br>", unsafe_allow_html=True)
+        show_labels = sc6.checkbox("Show labels on markers", value=True)
+        
+        st.markdown("**3D Camera View**")
+        view_state_raw = st.radio("3D Camera View", ["Default", "Top", "South", "East"], horizontal=True, label_visibility="collapsed")
+        view_mapping = {"Default": "default", "Top": "top", "South": "south", "East": "east"}
+        view_state = view_mapping.get(view_state_raw, "default")
 
     sel_ts = pd.Timestamp(sel_date, tz=tzinfo)
     display_date = sel_ts.strftime("%b %d, %Y")
+    
+    st.markdown(f"#### Sun Path Diagram • {display_date}")
+    display_date = sel_ts.strftime("%b %d, %Y")
 
-    fig2d = sunpath_plotly_2d(site, sel_ts, proj)
+    fig2d, info_dict = sunpath_plotly_2d(
+        site, sel_ts, proj,
+        epw=epw_df,
+        color_var=color_var,
+        show_labels=show_labels,
+        label_every=label_every,
+        marker_every=marker_every
+    )
     cname = get_clean_city_name().replace(" ", "_")
     st.plotly_chart(fig2d, use_container_width=True, config={"displayModeBar": True, "toImageButtonOptions": {"filename": f"{cname}_sunpath_2d", "format": "png", "scale": 2}})
 
+    # --- Render Solar Info Panel ---
+    if info_dict.get("azimuth") is not None:
+        st.markdown("##### Solar Metrics")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Azimuth & Altitude", f"{info_dict['azimuth']:.1f}° / {info_dict['altitude']:.1f}°", f"Solar Time: {info_dict['solar_time']}")
+        m2.metric("Sunrise / Sunset", f"{info_dict.get('sunrise', '--')}", f"{info_dict.get('sunset', '--')}")
+        m3.metric("Civil Twilight", f"{info_dict.get('civil', '--')}")
+        m4.metric("Coordinates", f"{info_dict['lat']:.2f}, {info_dict['lon']:.2f}")
+    else:
+        st.info("No sun above horizon on this date at this location.")
+    st.markdown("---")
+
     if show3d:
         st.subheader(f"Sun Path (3D) — {display_date}")
-        view_state = st.session_state.get("sunpath3d_view", "default")
-        v1, v2, v3, v4 = st.columns(4)
-        if v1.button("Reset view"):
-            view_state = "default"
-        if v2.button("Top"):
-            view_state = "top"
-        if v3.button("South-facing"):
-            view_state = "south"
-        if v4.button("East-facing"):
-            view_state = "east"
-        st.session_state["sunpath3d_view"] = view_state
 
         def _camera_eye_for(view: str) -> Dict[str, float]:
             base = {
