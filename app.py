@@ -4108,9 +4108,9 @@ def render_trends_page():
     T_mean_raw,  _, _ = resample_mean_range(T_hourly, agg, smooth_override=1)
     RH_mean_raw, _, _ = resample_mean_range(RH_hourly, agg, smooth_override=1)
 
-    # -------- Hover customdata for temperature (max, min, raw_mean) --------
-    # Reverting to show only Daily Avg (raw) to ensure consistency and avoid confusion with smoothed trend values
-    temp_hover_cdata = np.c_[T_max.values, T_min.values, T_mean_raw.values]
+    # -------- Hover customdata for temperature (max, min, raw_mean, smoothed_mean) --------
+    # Provide BOTH raw and smoothed means so the user sees the trend value (curve) AND the day's actual average
+    temp_hover_cdata = np.c_[T_max.values, T_min.values, T_mean_raw.values, T_mean.values]
 
     # comfort (calculate on daily; project to the plotting index)
     Tcomf_d, T80_lo_d, T80_hi_d, T90_lo_d, T90_hi_d = ashrae_adaptive_daily(T_hourly)
@@ -4149,12 +4149,12 @@ def render_trends_page():
     xlab_RH = _xlabels_from_index(RH_mean.index, agg)
 
     # Hover customdata for mean lines: [min, mean_raw, max, xlabel, mean_smooth]
-    # Hover customdata for mean lines: [min, mean_raw, max, xlabel]
-    def _hover_customdata(s_min, s_mean_raw, s_max, xlabels):
-        return np.column_stack([s_min.values, s_mean_raw.values, s_max.values, xlabels])
+    # Hover customdata for mean lines: [min, mean_raw, max, xlabel, mean_smooth]
+    def _hover_customdata(s_min, s_mean_raw, s_max, xlabels, s_mean_smooth):
+        return np.column_stack([s_min.values, s_mean_raw.values, s_max.values, xlabels, s_mean_smooth.values])
 
-    cd_T  = _hover_customdata(T_min,  T_mean_raw,  T_max,  xlab_T)
-    cd_RH = _hover_customdata(RH_min, RH_mean_raw, RH_max, xlab_RH)
+    cd_T  = _hover_customdata(T_min,  T_mean_raw,  T_max,  xlab_T,  T_mean)
+    cd_RH = _hover_customdata(RH_min, RH_mean_raw, RH_max, xlab_RH, RH_mean)
 
     # Month ticks & fixed window (Jan..Dec of display year 2001)
     month_ticks = pd.date_range(pd.Timestamp(2001, 1, 1), pd.Timestamp(2001, 12, 1), freq="MS")
@@ -4237,7 +4237,7 @@ def render_trends_page():
         name="Average Dry bulb temperature",
         line=dict(width=2.8, color="#ff5c52"),
         customdata=cd_T,
-        hovertemplate="<b>%{customdata[3]}</b><br>Daily Avg: %{customdata[1]:.2f} °C<br>Max: %{customdata[2]:.2f} °C<br>Min: %{customdata[0]:.2f} °C<extra></extra>"
+        hovertemplate="<b>%{customdata[3]}</b><br>Daily Mean: %{customdata[1]:.2f} °C<br>Smoothed: %{customdata[4]:.2f} °C<br>Max: %{customdata[2]:.2f} °C<br>Min: %{customdata[0]:.2f} °C<extra></extra>"
     ), row=1, col=1)
 
     
@@ -4295,7 +4295,7 @@ def render_trends_page():
         name="Average Relative humidity",
         line=dict(width=2.8, color="#7cc7ff"),
         customdata=cd_RH,
-        hovertemplate="<b>%{customdata[3]}</b><br>Daily Avg: %{customdata[1]:.2f} %<br>Max: %{customdata[2]:.2f} %<br>Min: %{customdata[0]:.2f} %<extra></extra>"
+        hovertemplate="<b>%{customdata[3]}</b><br>Daily Mean: %{customdata[1]:.2f} %<br>Smoothed: %{customdata[4]:.2f} %<br>Max: %{customdata[2]:.2f} %<br>Min: %{customdata[0]:.2f} %<extra></extra>"
     ), row=2, col=1)
 
     # Range-slider preview: include both humidity and temperature with distinct styling
