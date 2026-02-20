@@ -3620,10 +3620,7 @@ def render_dashboard_page():
             st.divider()
             
             # Dynamic header with location
-            location_label = get_clean_city_name()
-            
-            st.markdown(f"<h3>{location_label} – Annual Diurnal Resource Heatmaps</h3>", unsafe_allow_html=True)
-            st.caption("Adjust legend thresholds to explore how different performance ranges appear across the year.")
+
 
             import json
 
@@ -3690,6 +3687,9 @@ def render_dashboard_page():
             if invalid_thresholds:
                 st.info("Adjust thresholds to continue.")
             else:
+                location_label = get_clean_city_name()
+                st.markdown(f"<h3>{location_label} – Annual Diurnal Resource Heatmaps</h3>", unsafe_allow_html=True)
+                st.caption("Adjust legend thresholds to explore how different performance ranges appear across the year.")
                 # Continuous heatmap helper: aggregate first (mean/median), keep thresholds for hover/legend only
                 def _build_pivot_with_thresholds(df: pd.DataFrame, col: str, metric_label: str, thresholds: list[float], units_suffix: str, palette_metric: str, agg: str = "mean", raw_col: str = None):
                     series = pd.to_numeric(df[col], errors="coerce")
@@ -3943,9 +3943,6 @@ def render_trends_page():
     # We kept the body indentation (4 spaces), so this function wrapper fits perfectly.
     # if True: # removed to fix indentation error
 
-    location_label = get_clean_city_name()
-    st.markdown(f"<h3>{location_label} – Temperature & Humidity</h3>", unsafe_allow_html=True)
-    st.caption("Clean reference plots with comfort ribbons and a single linked time window. Use this space to compare how temperature and humidity evolve at hourly, daily, or monthly scales.")
     # -------------------- Controls --------------------
     c1, c2, c3 = st.columns([1.2, 1, 1.2])
     agg = c1.selectbox("Aggregation", ["Hourly", "Daily", "Monthly"], index=1)
@@ -3955,13 +3952,17 @@ def render_trends_page():
     temp_band = c4.selectbox("Temperature comfort band", ["None", "ASHRAE 80%", "ASHRAE 80% + 90%"], index=1)
     show_temp_range = c5.checkbox("Show temperature range", True)
 
+    location_label = get_clean_city_name()
+    st.markdown(f"<h3>{location_label} – Temperature & Humidity</h3>", unsafe_allow_html=True)
+    st.caption("Clean reference plots with comfort ribbons and a single linked time window. Use this space to compare how temperature and humidity evolve at hourly, daily, or monthly scales.")
+
 
     # -------------------- Helpers --------------------
     import numpy as np
     import pandas as pd
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
-    def resample_mean_range(series: pd.Series, g: str):
+    def resample_mean_range(series: pd.Series, g: str, smooth_override: int = None):
         """Return mean, min, max resampled series for Hourly/Daily/Monthly, on a dense index."""
         if g == "Hourly":
             rule = "1H"
@@ -3974,7 +3975,6 @@ def render_trends_page():
         s_min  = series.resample(rule).min()
         s_max  = series.resample(rule).max()
         # --- NEW: build a complete time index and reindex everything onto it
-        # --- build a complete time index and reindex everything onto it
         if rule == "MS":
             # MonthBegin is non-fixed → compute month starts explicitly
             smin = series.index.min()
@@ -3995,8 +3995,20 @@ def render_trends_page():
         # range: forward/back fill (interpolating a min/max does not make sense visually)
         s_min  = s_min.ffill().bfill()
         s_max  = s_max.ffill().bfill()
-        if smooth_n and smooth_n > 1:
-            s_mean = s_mean.rolling(smooth_n, min_periods=1, center=True).mean()
+        
+        # Determine effective smoothing
+        # If Monthly, force 1 (raw arithmetic mean).
+        # Else if override provided, use it.
+        # Else use slider value.
+        if g == "Monthly":
+            eff_smooth = 1
+        elif smooth_override is not None:
+            eff_smooth = smooth_override
+        else:
+            eff_smooth = smooth_n
+
+        if eff_smooth and eff_smooth > 1:
+            s_mean = s_mean.rolling(eff_smooth, min_periods=1, center=True).mean()
         return s_mean, s_min, s_max
 
     def ashrae_adaptive_daily(drybulb_hourly: pd.Series):
@@ -4009,7 +4021,8 @@ def render_trends_page():
             idx = daily.index
             z = pd.Series(index=idx, dtype=float)
             return z, z, z, z, z  # Trm, 80lo, 80hi, 90lo, 90hi
-        Trm = daily.ewm(alpha=0.2, adjust=False).mean()
+        # Shift by 1 so today's comfort limit depends on *previous* days' history
+        Trm = daily.ewm(alpha=0.2, adjust=False).mean().shift(1).bfill()
         Tcomf = (0.31 * Trm + 17.8).clip(-30, 60)
         lo80, hi80 = Tcomf - 2.5, Tcomf + 2.5
         lo90, hi90 = Tcomf - 3.5, Tcomf + 3.5
@@ -4087,10 +4100,17 @@ def render_trends_page():
     RH_hourly = cdf_can["relhum"].dropna()
 
     # mean + range per aggregation
+    # Plotting lines rely on smoothed data (default behavior of resample_mean_range)
     T_mean,  T_min,  T_max  = resample_mean_range(T_hourly, agg)
     RH_mean, RH_min, RH_max = resample_mean_range(RH_hourly, agg)
-    # -------- Hover customdata for temperature (max, min, mean) --------
-    temp_hover_cdata = np.c_[T_max.values, T_min.values, T_mean.values]
+
+    # Calculate RAW (unsmoothed) means for the tooltip
+    T_mean_raw,  _, _ = resample_mean_range(T_hourly, agg, smooth_override=1)
+    RH_mean_raw, _, _ = resample_mean_range(RH_hourly, agg, smooth_override=1)
+
+    # -------- Hover customdata for temperature (max, min, raw_mean) --------
+    # Reverting to show only Daily Avg (raw) to ensure consistency and avoid confusion with smoothed trend values
+    temp_hover_cdata = np.c_[T_max.values, T_min.values, T_mean_raw.values]
 
     # comfort (calculate on daily; project to the plotting index)
     Tcomf_d, T80_lo_d, T80_hi_d, T90_lo_d, T90_hi_d = ashrae_adaptive_daily(T_hourly)
@@ -4128,12 +4148,13 @@ def render_trends_page():
     xlab_T  = _xlabels_from_index(T_mean.index,  agg)
     xlab_RH = _xlabels_from_index(RH_mean.index, agg)
 
-    # Hover customdata for mean lines: [min, mean, max, xlabel]
-    def _hover_customdata(s_min, s_mean, s_max, xlabels):
-        return np.column_stack([s_min.values, s_mean.values, s_max.values, xlabels])
+    # Hover customdata for mean lines: [min, mean_raw, max, xlabel, mean_smooth]
+    # Hover customdata for mean lines: [min, mean_raw, max, xlabel]
+    def _hover_customdata(s_min, s_mean_raw, s_max, xlabels):
+        return np.column_stack([s_min.values, s_mean_raw.values, s_max.values, xlabels])
 
-    cd_T  = _hover_customdata(T_min,  T_mean,  T_max,  xlab_T)
-    cd_RH = _hover_customdata(RH_min, RH_mean, RH_max, xlab_RH)
+    cd_T  = _hover_customdata(T_min,  T_mean_raw,  T_max,  xlab_T)
+    cd_RH = _hover_customdata(RH_min, RH_mean_raw, RH_max, xlab_RH)
 
     # Month ticks & fixed window (Jan..Dec of display year 2001)
     month_ticks = pd.date_range(pd.Timestamp(2001, 1, 1), pd.Timestamp(2001, 12, 1), freq="MS")
@@ -4216,7 +4237,7 @@ def render_trends_page():
         name="Average Dry bulb temperature",
         line=dict(width=2.8, color="#ff5c52"),
         customdata=cd_T,
-        hovertemplate="<b>%{customdata[3]}</b><br>Avg: %{customdata[1]:.2f} °C<br>Max: %{customdata[2]:.2f} °C<br>Min: %{customdata[0]:.2f} °C<extra></extra>"
+        hovertemplate="<b>%{customdata[3]}</b><br>Daily Avg: %{customdata[1]:.2f} °C<br>Max: %{customdata[2]:.2f} °C<br>Min: %{customdata[0]:.2f} °C<extra></extra>"
     ), row=1, col=1)
 
     
@@ -4274,7 +4295,7 @@ def render_trends_page():
         name="Average Relative humidity",
         line=dict(width=2.8, color="#7cc7ff"),
         customdata=cd_RH,
-        hovertemplate="<b>%{customdata[3]}</b><br>Avg: %{customdata[1]:.2f} %<br>Max: %{customdata[2]:.2f} %<br>Min: %{customdata[0]:.2f} %<extra></extra>"
+        hovertemplate="<b>%{customdata[3]}</b><br>Daily Avg: %{customdata[1]:.2f} %<br>Max: %{customdata[2]:.2f} %<br>Min: %{customdata[0]:.2f} %<extra></extra>"
     ), row=2, col=1)
 
     # Range-slider preview: include both humidity and temperature with distinct styling
@@ -4463,9 +4484,7 @@ def render_humidity_page():
 
     # ==================== HUMIDITY BAR CHART ====================
     if True: # effective_page check handled in main
-        st.markdown("---")
-        location_label = get_clean_city_name()
-        st.markdown(f"<h4>{location_label} – Humidity (Bar Chart)</h4>", unsafe_allow_html=True)
+
         if "relhum" not in cdf:
             st.info("This EPW has no Relative Humidity column.")
         else:
@@ -4473,6 +4492,10 @@ def render_humidity_page():
             c1, c2 = st.columns([1.2, 1])
             st.caption("Monthly view only to keep the chart readable.")
             stat = c2.selectbox("Statistic", ["Mean", "Median"], index=0, key=f"rh_stat_{effective_page}")
+            
+            st.markdown("---")
+            location_label = get_clean_city_name()
+            st.markdown(f"<h4>{location_label} – Humidity (Bar Chart)</h4>", unsafe_allow_html=True)
             rh = cdf[["relhum"]].dropna().copy()
             rh["month"] = rh.index.month
             monthly = rh.groupby("month")["relhum"]
@@ -4650,13 +4673,7 @@ def render_solar_page():
     effective_page = st.session_state.get("nav_page")
     # Solar page logic handled self-contained data loading if needed, or uses session state
     
-    location_label = get_clean_city_name()
-    st.markdown(f"<h3>{location_label} – Solar Analysis</h3>", unsafe_allow_html=True)
-    st.caption(
-        "Trace the sun’s path, check solar-time positions, and pair those tracks with EPW temperatures "
-        "before taking shading or PV decisions. The plots highlight seasonal envelopes so you can "
-        "see when the sun is high, low, or missing entirely."
-    )
+
 
 # sunpath.py
 # A compact, production-minded sun-path plotter (2D angular + optional 3D)
@@ -5672,6 +5689,14 @@ def render_solar_page():
     proj = c2.selectbox("2D projection", ["stereographic", "orthographic"], index=0)
     show3d = c3.checkbox("Show 3D dome & rays", value=False)
 
+    location_label = get_clean_city_name()
+    st.markdown(f"<h3>{location_label} – Solar Analysis</h3>", unsafe_allow_html=True)
+    st.caption(
+        "Trace the sun’s path, check solar-time positions, and pair those tracks with EPW temperatures "
+        "before taking shading or PV decisions. The plots highlight seasonal envelopes so you can "
+        "see when the sun is high, low, or missing entirely."
+    )
+
     # Prepare EPW-derived dataframe with relevant variables if present
     epw_df = pd.DataFrame(index=cdf.index)
     temp_col = get_metric_column(cdf, ["drybulb", "temp_air", "temperature", "tdb"])
@@ -6134,6 +6159,11 @@ def render_psychrometrics_page():
     cdf = st.session_state.get("cdf")
     # if cdf is None: return # handled by check inside or main
     
+    # ------- Controls -------
+    cA, cB = st.columns([1.2, 1])
+    auto_zoom = cA.checkbox("Auto zoom to EPW range", value=True, help="Fit axes to EPW hourly temperature and absolute humidity range.")
+    show_enthalpy = cB.checkbox("Show enthalpy & v lines", value=True)
+
     location_label = get_clean_city_name()
     st.markdown(f"<h3>{location_label} – Psychrometrics</h3>", unsafe_allow_html=True)
     st.caption(
@@ -6144,11 +6174,6 @@ def render_psychrometrics_page():
 
     st.subheader("Psychrometric Chart")
     st.caption("Clean grid with absolute humidity (g/kg), RH isolines, saturation curve, and hourly EPW scatter.")
-
-    # ------- Controls -------
-    cA, cB = st.columns([1.2, 1])
-    auto_zoom = cA.checkbox("Auto zoom to EPW range", value=True, help="Fit axes to EPW hourly temperature and absolute humidity range.")
-    show_enthalpy = cB.checkbox("Show enthalpy & v lines", value=True)
 
     # ------- Thermo helpers (SI) -------
     def p_ws_kPa(TC: np.ndarray) -> np.ndarray:
@@ -6469,11 +6494,7 @@ def render_live_data_page():
     # I'll check if I need to define epw_df = cdf.
     epw_df = cdf 
     
-    location_label = get_clean_city_name()
-    st.markdown(f"<h3>{location_label} – Local Sensors vs Climate Baseline (EPW)</h3>", unsafe_allow_html=True)
-    st.caption(
-        "Compare on-site sensor readings to a long-term climate baseline (EnergyPlus Weather 'typical year'). Comparisons are statistical, not timestamp-based."
-    )
+
 
     # Brute-force distinguishable styles for multi-sensor plots
     SENSOR_STYLES = [
@@ -6815,6 +6836,12 @@ def render_live_data_page():
     render_ingested_sensors_panel()
 
     st.divider()
+
+    location_label = get_clean_city_name()
+    st.markdown(f"<h3>{location_label} – Local Sensors vs Climate Baseline (EPW)</h3>", unsafe_allow_html=True)
+    st.caption(
+        "Compare on-site sensor readings to a long-term climate baseline (EnergyPlus Weather 'typical year'). Comparisons are statistical, not timestamp-based."
+    )
 
     # ---------- Observed Site Conditions (sensor-only) ----------
     st.markdown("#### Observed Site Conditions")
