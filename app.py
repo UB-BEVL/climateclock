@@ -3878,7 +3878,7 @@ def render_dashboard_page():
                         st.plotly_chart(fig, use_container_width=False, config={"responsive": False})
 
                         # Downloads reflecting current thresholds
-                        city_clean = header.get("city", "Station").replace(" ", "_").replace(",", "").replace("__", "_")
+                        city_clean = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
                         clean_loc = city_clean
                         c1d, c2d = st.columns(2)
                         with c1d:
@@ -3887,7 +3887,7 @@ def render_dashboard_page():
                                 st.download_button(label="📥 Download heatmaps as PNG", data=png_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.png", mime="image/png")
                             except Exception:
                                 html_bytes = fig.to_html(include_plotlyjs='cdn').encode('utf-8')
-                                st.download_button(label="📥 Download heatmaps (HTML)", data=html_bytes, file_name="diurnal_heatmaps.html", mime="text/html")
+                                st.download_button(label="📥 Download heatmaps (HTML)", data=html_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.html", mime="text/html")
 
                         with c2d:
                             try:
@@ -3924,7 +3924,7 @@ def render_dashboard_page():
                                 else:
                                     long_df = pd.DataFrame(long_records)
                                     csv_bytes = long_df.to_csv(index=False).encode('utf-8')
-                                    st.download_button(label="📥 Download heatmap data (CSV)", data=csv_bytes, file_name="diurnal_heatmaps_data.csv", mime="text/csv")
+                                    st.download_button(label="📥 Download heatmap data (CSV)", data=csv_bytes, file_name=f"{clean_loc}_diurnal_heatmaps_data.csv", mime="text/csv")
                             except Exception as e:
                                 st.caption(f"CSV export failed: {str(e)[:80]}")
                     else:
@@ -4440,17 +4440,18 @@ def render_trends_page():
 
     # Download buttons for Trends
     d1, d2 = st.columns(2)
+    clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
     with d1:
         try:
             # Generate PNG (wrapping in try/except to avoid crashes on some hosts)
             png_bytes = fig.to_image(format="png", width=1400, height=800, scale=2)
-            st.download_button("📥 Download Trends (PNG)", png_bytes, "trends_chart.png", "image/png")
+            st.download_button("📥 Download Trends (PNG)", png_bytes, f"{clean_loc}_trends_chart.png", "image/png")
         except Exception:
             pass
     with d2:
         try:
             html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")
-            st.download_button("📥 Download Trends (HTML)", html_bytes, "trends_chart.html", "text/html")
+            st.download_button("📥 Download Trends (HTML)", html_bytes, f"{clean_loc}_trends_chart.html", "text/html")
         except Exception:
             pass
 
@@ -4496,16 +4497,17 @@ def render_humidity_page():
             
             # Download buttons for Humidity Bar
             d1, d2 = st.columns(2)
+            clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
             with d1:
                 try:
                     png_bytes = fig_rh.to_image(format="png", width=1200, height=600, scale=2)
-                    st.download_button("📥 Download Humidity (PNG)", png_bytes, "humidity_chart.png", "image/png", key="dl_hum_png")
+                    st.download_button("📥 Download Humidity (PNG)", png_bytes, f"{clean_loc}_humidity_chart.png", "image/png", key="dl_hum_png")
                 except Exception:
                     pass
             with d2:
                 try:
                     html_bytes = fig_rh.to_html(include_plotlyjs="cdn").encode("utf-8")
-                    st.download_button("📥 Download Humidity (HTML)", html_bytes, "humidity_chart.html", "text/html", key="dl_hum_html")
+                    st.download_button("📥 Download Humidity (HTML)", html_bytes, f"{clean_loc}_humidity_chart.html", "text/html", key="dl_hum_html")
                 except Exception:
                     pass
 
@@ -4610,10 +4612,11 @@ def render_temperature_page():
             legend=dict(orientation="h", x=0, xanchor="left", y=1.08, yanchor="bottom"),
             margin=dict(t=105, b=70, l=50, r=30),
         )
-        st.plotly_chart(fig_sc, use_container_width=True)
+        cname = get_clean_city_name().replace(" ", "_")
+        st.plotly_chart(fig_sc, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_temperature_scatter", "format": "png", "scale": 2}, "displayModeBar": True})
 
 
-def render_heatmap_page():
+def render_heatmap_page_deprecated():
     cdf = st.session_state.get("cdf")
     effective_page = st.session_state.get("nav_page")
     col = "drybulb"
@@ -5725,7 +5728,8 @@ def render_solar_page():
     display_date = sel_ts.strftime("%b %d, %Y")
 
     fig2d = sunpath_plotly_2d(site, sel_ts, proj)
-    st.plotly_chart(fig2d, use_container_width=True, config={"displayModeBar": True})
+    cname = get_clean_city_name().replace(" ", "_")
+    st.plotly_chart(fig2d, use_container_width=True, config={"displayModeBar": True, "toImageButtonOptions": {"filename": f"{cname}_sunpath_2d", "format": "png", "scale": 2}})
 
     if show3d:
         st.subheader(f"Sun Path (3D) — {display_date}")
@@ -5775,6 +5779,7 @@ def render_solar_page():
                     "scrollZoom": True,
                     "displayModeBar": True,
                     "displaylogo": False,
+                    "toImageButtonOptions": {"filename": f"{cname}_sunpath_3d", "format": "png", "scale": 2},
                 },
             )
             st.caption("Sun position colored by selected environmental variable.")
@@ -5993,7 +5998,7 @@ def render_solar_page():
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)"
     )
-    st.plotly_chart(fig_cart, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig_cart, use_container_width=True, config={"displayModeBar": True, "toImageButtonOptions": {"filename": f"{cname}_sunpath_cartesian", "format": "png", "scale": 2}})
 
 
 
@@ -6421,12 +6426,14 @@ def render_psychrometrics_page():
         text="Based on EPW hourly data range.", showarrow=False,
         font=dict(size=11, color="rgba(120,120,120,0.9)")
     )
+    clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
     st.plotly_chart(
         fig_psy,
         use_container_width=True,
         config={
             "displaylogo": False,
             "modeBarButtonsToRemove": ["select2d", "lasso2d"],
+            "toImageButtonOptions": {"filename": f"{clean_loc}_psychrometric_chart", "format": "png", "scale": 2}
         },
     )
 
@@ -6436,13 +6443,13 @@ def render_psychrometrics_page():
         try:
             # Explicitly safe dimensions to prevent memory crash
             png_bytes = fig_psy.to_image(format="png", width=1200, height=900, scale=2)
-            st.download_button("📥 Download Chart (PNG)", png_bytes, "psychrometric_chart.png", "image/png", key="dl_psy_png")
+            st.download_button("📥 Download Chart (PNG)", png_bytes, f"{clean_loc}_psychrometric_chart.png", "image/png", key="dl_psy_png")
         except Exception:
             pass
     with d2:
         try:
             html_bytes = fig_psy.to_html(include_plotlyjs="cdn").encode("utf-8")
-            st.download_button("📥 Download Chart (HTML)", html_bytes, "psychrometric_chart.html", "text/html", key="dl_psy_html")
+            st.download_button("📥 Download Chart (HTML)", html_bytes, f"{clean_loc}_psychrometric_chart.html", "text/html", key="dl_psy_html")
         except Exception:
             pass
 
@@ -6868,7 +6875,8 @@ def render_live_data_page():
             go.Bar(x=["Min", "Mean", "Max"], y=[temp_stats[k] for k in ["min", "mean", "max"]], marker_color="#1f78b4")
         ])
         fig_temp_bar.update_layout(title="Observed sensor temperature (entire period)", yaxis_title="Temperature (°C)", height=280, margin=dict(l=10,r=10,t=32,b=16))
-        st.plotly_chart(fig_temp_bar, use_container_width=True)
+        cname = get_clean_city_name().replace(" ", "_")
+        st.plotly_chart(fig_temp_bar, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_sensor_temp_bar", "format": "png", "scale": 2}, "displayModeBar": True})
         st.caption("Sensor temperatures over the selected period. Shows the observed range and average conditions on site.")
 
         if rh_stats:
@@ -6876,7 +6884,7 @@ def render_live_data_page():
                 go.Bar(x=["Min", "Mean", "Max"], y=[rh_stats[k] for k in ["min", "mean", "max"]], marker_color="#4c78a8")
             ])
             fig_rh_bar.update_layout(title="Observed sensor humidity (entire period)", yaxis_title="Relative Humidity (%)", height=280, margin=dict(l=10,r=10,t=32,b=16))
-            st.plotly_chart(fig_rh_bar, use_container_width=True)
+            st.plotly_chart(fig_rh_bar, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_sensor_rh_bar", "format": "png", "scale": 2}, "displayModeBar": True})
             st.caption("Sensor humidity over the selected period.")
 
     st.divider()
@@ -6947,7 +6955,7 @@ def render_live_data_page():
                 height=340,
                 margin=dict(l=10, r=10, t=46, b=20),
             )
-            st.plotly_chart(fig_hour, use_container_width=True)
+            st.plotly_chart(fig_hour, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_hourly_bias", "format": "png", "scale": 2}, "displayModeBar": True})
             st.caption("Positive values mean the site is warmer than the climate baseline at that hour; nighttime bias suggests urban heat island effects.")
 
             # Monthly bias bar
@@ -6961,7 +6969,7 @@ def render_live_data_page():
                 height=340,
                 margin=dict(l=10, r=10, t=46, b=36),
             )
-            st.plotly_chart(fig_month, use_container_width=True)
+            st.plotly_chart(fig_month, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_monthly_bias", "format": "png", "scale": 2}, "displayModeBar": True})
             st.caption("Positive = warmer than the typical climate month; Negative = cooler. Monthly bias is shown only where sensor data exists; blank months mean no observations, not zero bias.")
 
             # Overheating comparison
@@ -6978,7 +6986,8 @@ def render_live_data_page():
                 legend=dict(orientation="h"),
                 margin=dict(l=10, r=10, t=50, b=30)
             )
-            st.plotly_chart(fig_hot, use_container_width=True)
+            cname = get_clean_city_name().replace(" ", "_")
+            st.plotly_chart(fig_hot, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_overheating_comparison", "format": "png", "scale": 2}, "displayModeBar": True})
             st.caption("Higher values mean more hours above 30°C. Overheating elevates heat stress risk.")
 
             # Comfort comparison
@@ -6995,7 +7004,7 @@ def render_live_data_page():
                 legend=dict(orientation="h"),
                 margin=dict(l=10, r=10, t=50, b=30)
             )
-            st.plotly_chart(fig_comfort, use_container_width=True)
+            st.plotly_chart(fig_comfort, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_comfort_comparison", "format": "png", "scale": 2}, "displayModeBar": True})
             st.caption("Comfort band (18–26°C) is a typical indoor comfort target. Higher share indicates more comfortable conditions.")
 
     st.divider()
@@ -7231,7 +7240,8 @@ def render_live_data_page():
                         title=None,
                     ),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                cname = get_clean_city_name().replace(" ", "_")
+                st.plotly_chart(fig, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_{title.replace(' ', '_')}_calendar", "format": "png", "scale": 2}, "displayModeBar": True})
                 st.caption("🛈 Sensor shown as hourly resampled + 1h centered rolling mean. EPW is typical-year baseline.")
                 return True
 
@@ -7315,7 +7325,8 @@ def render_live_data_page():
                     ),
                 )
                 _add_season_shading(fig)
-                st.plotly_chart(fig, use_container_width=True)
+                cname = get_clean_city_name().replace(" ", "_")
+                st.plotly_chart(fig, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_{title.replace(' ', '_')}_climatology", "format": "png", "scale": 2}, "displayModeBar": True})
                 st.caption("🛈 Sensor shown as hourly resampled + 1h centered rolling mean. EPW is typical-year baseline.")
 
             st.markdown("### 🌡️ Dry-Bulb Temperature")
@@ -7398,7 +7409,8 @@ def render_live_data_page():
                     legend=dict(orientation="h"),
                     margin=dict(l=10, r=10, t=40, b=20)
                 )
-                st.plotly_chart(fig_hot, use_container_width=True)
+                cname = get_clean_city_name().replace(" ", "_")
+                st.plotly_chart(fig_hot, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_overheating_detailed", "format": "png", "scale": 2}, "displayModeBar": True})
                 st.caption("Detailed thresholds let you inspect moderate heat (>26°C) versus high heat (>30°C) without crowding the main view.")
 
     st.divider()
