@@ -1733,6 +1733,41 @@ def get_location_label(default: str = "Location: N/A") -> str:
     return default
 
 
+def get_clean_city_name() -> str:
+    """Retrieve just the city name for graph headers (e.g. 'San Francisco')."""
+    ss = st.session_state
+    
+    # 1. Try selected station dict (most explicit)
+    sel = ss.get("selected_station") or ss.get("sel_station")
+    if isinstance(sel, dict):
+        city = sel.get("city_name") or sel.get("cityname") or sel.get("city")
+        if city: 
+            return str(city).strip()
+        
+        # Fallback: parsing standardized name format "USA_CA_San.Francisco..."
+        name = sel.get("name", "")
+        if name and "_" in name:
+            parts = name.split("_")
+            # Heuristic: 2nd or 3rd part often City. 
+            # If ISO_City.WMO -> "USA_SanFrancisco.724940"
+            pass
+
+    # 2. Try header metadata (EPW)
+    header = ss.get("header", {})
+    if isinstance(header, dict):
+        loc = header.get("location", {})
+        city = loc.get("city") or loc.get("cityName") or header.get("city")
+        if city: 
+            return str(city).strip()
+
+    # 3. Fallback to extracting from formatted label
+    full_label = get_location_label("Unknown Location")
+    if "," in full_label:
+        return full_label.split(",")[0].strip()
+    
+    return full_label
+
+
 def render_header():
     logo_src = f"data:image/png;base64,{LOGO_PRIMARY}" if LOGO_PRIMARY else ""
     ub_src = f"data:image/png;base64,{LOGO_SECONDARY}" if LOGO_SECONDARY else ""
@@ -2791,7 +2826,7 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
     fig = make_subplots(
         rows=n_strips, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.03,
+        vertical_spacing=0.04,
         subplot_titles=[],  # We will add custom annotations below each plot
     )
     
@@ -2802,9 +2837,6 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
             continue
         
         # Ensure pivot aligns with our 365-day date range
-        # If pivot has 366 columns (leap year), drop the last one or reindex?
-        # Standard EPW is usually 8760 hours (365 days).
-        # We will reindex to 1..365 to match our date range.
         if pivot_binned.shape[1] > 365:
             pivot_plot_slice = pivot_binned.iloc[:, :365]
         else:
@@ -2812,27 +2844,42 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
             
         # Define discrete color scales and bins matching the printed style reference
         # keys: metric_name -> (bounds, colors, tick_labels)
+        # Colors approximated from the user provided image
         discrete_scales = {
             "Dry Bulb Temperature": (
-                [-100, -10, 0, 10, 20, 30, 100], 
-                ["#08306b", "#4f81bd", "#f7f7f7", "#f28e2b", "#b22222", "#800000"],
-                ["< -10°C", "-10–0°C", "0–10°C", "10–20°C", "20–30°C", ">30°C"]
+                [-100, 10, 20, 26.6, 35, 100], 
+                # Blue -> Light Blue -> White -> Orange -> Red
+                ["#6baed6", "#bdd7e7", "#ffffff", "#fd8d3c", "#e31a1c"], 
+                ["<10°C", "<20°C", "Comf. Zone", ">26.6°C", ">35°C"]
             ),
             "Solar Radiation": (
-                [0, 1, 2, 3, 4], # Categories 0..4
-                ["#ffffff", "#fff7bc", "#fdd49e", "#fdae6b", "#d94801"],
-                ["<100", "100–300", "300–500", "500–700", ">700"]
+                [0, 100, 300, 500, 700, 9999], 
+                # Very Light Orange -> Light Orange -> Orange -> Dark Orange -> Brown
+                ["#feedde", "#fdbe85", "#fd8d3c", "#e6550d", "#a63603"],
+                ["<100 w/m²", "100-300 w/m²", "300-500 w/m²", "500-700 w/m²", ">700 w/m²"]
             ),
-            "Humidity": (
-                [0, 40, 60, 80, 100],
-                ["#f7fbff", "#6baed6", "#2171b5", "#08306b"],
-                ["<40%", "40–60%", "60–80%", ">80%"]
+            # Approximate Absolute Humidity: Grey -> White -> Blue
+            "Absolute Humidity": ( 
+                [0, 5, 12, 100], # Guessing thresholds based on "occasional low moisture" & "standard"
+                ["#cccccc", "#ffffff", "#6baed6"], 
+                ["<?g/kg", "Comf. Zone", ">?g/kg"] 
+            ),
+            "Humidity": ( # Relative Humidity
+                [0, 30, 70, 100], 
+                # Orange -> White -> Blue
+                ["#fd8d3c", "#ffffff", "#6baed6"], 
+                ["<30%", "Comf. Zone", ">70%"]
             ),
             "Wind Speed": (
-                [0, 1, 2], # Categories 0..2
-                ["#00441b", "#ffffbf", "#d73027"],
-                ["<1.5 m/s", "1.5–4.5 m/s", ">4.5 m/s"]
+                [0, 1.5, 4.5, 999], 
+                ["#ffffff", "#ffffff", "#74c476"], 
+                ["<1.5 m/s", "1.5-4.5 m/s", ">4.5 m/s"] 
             ),
+            "Wind Direction": (
+                list(range(9)), # 0..8 bounds for 8 categories
+                ["#4c6fff", "#3fb3ff", "#36d1a8", "#8bd36b", "#f6c445", "#f08c42", "#e15b9a", "#9d6bff"],
+                ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+            )
         }
 
         # Determine colorscale and colorbar settings
@@ -2844,41 +2891,24 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
         if strip_name in discrete_scales:
             bounds, colors, ticks = discrete_scales[strip_name]
             
-            # Special handling for Categorical Bins (Wind, Solar)
-            if strip_name in ["Wind Speed", "Solar Radiation"]:
-                d_min, d_max = bounds[0], bounds[-1]
-                zmin, zmax = d_min, d_max
-                
-                # Construct categorical colorscale that maps strictly
-                # Bin i (value i) gets colors[i]
-                scale = []
+            # Special handling for Categorical Bins (Wind Speed, Solar, Wind Direction, Dry Bulb)
+            if strip_name in ["Wind Speed", "Solar Radiation", "Wind Direction", "Dry Bulb Temperature"]:
+                # Categorical Logic
                 n = len(colors)
-                # For categories 0..(n-1), we align ticks at i + 0.5?
-                # Actually if z is 0,1,2..., we want 0->Color0, 1->Color1...
-                # Discrete scale:
+                zmin = 0
+                zmax = n 
+                
+                # Construct categorical colorscale
+                scale = []
                 for i, col in enumerate(colors):
-                    # Map range [i, i+1] to col? 
-                    # If z values are integers 0, 1, 2...
-                    # we can map [i, i+1]
                     low = i / n
                     high = (i + 1) / n
-                    # Actually standard way for integer categories 0..M-1:
-                    # zmin=0, zmax=M-1 (or M?)
-                    # Let's say zmin=0, zmax=N_cats-1.
-                    # Normalized: 0 -> 0.0, N-1 -> 1.0. 
-                    # Simpler: zmin=-0.5, zmax=N-0.5. 
-                    
-                    # Implementation matches user request pattern:
-                    # distinct blocks.
-                    scale.append([i/n, col])
-                    scale.append([(i+1)/n, col])
+                    scale.append([low, col])
+                    scale.append([high, col])
                 
                 heatmap_colorscale = scale
-                zmin = 0
-                zmax = n # Covers 0..n range? 
                 
                 # Tick placement: Center of each bin
-                # Bin 0 is [0, 1), center 0.5. 
                 tick_vals = [i + 0.5 for i in range(n)]
                 
             else:
@@ -2887,18 +2917,19 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
                 zmin = d_min
                 zmax = d_max
                 
-                # Explicit override for Humidity to show full range
                 if strip_name == "Humidity":
-                    zmin = 0
-                    zmax = 100
+                    zmin, zmax = 0, 100
                     d_min, d_max = 0, 100
 
                 # Build the stepped scale
                 scale = []
                 n_colors = len(colors)
+                # Ensure bounds length matches n_colors + 1
+                safe_bounds = bounds if len(bounds) == n_colors + 1 else np.linspace(d_min, d_max, n_colors+1)
+                
                 for i in range(n_colors):
-                    val_min = bounds[i]
-                    val_max = bounds[i+1]
+                    val_min = safe_bounds[i]
+                    val_max = safe_bounds[i+1]
                     lower_frac = (val_min - d_min) / (d_max - d_min)
                     upper_frac = (val_max - d_min) / (d_max - d_min)
                     lower_frac = max(0.0, min(1.0, lower_frac))
@@ -2908,41 +2939,34 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
                 
                 heatmap_colorscale = scale
                 
-                # Calculate tick values for the center of each bin
                 tick_vals = []
                 for i in range(n_colors):
-                   v1 = bounds[i]
-                   v2 = bounds[i+1]
+                   v1 = safe_bounds[i]
+                   v2 = safe_bounds[i+1]
                    tick_vals.append((v1 + v2)/2)
-               
-            # Vertical Legend Position (Right Side)
-            # Calculate approx center of row
-            # Row 1 is at top. Y domain is [1.0 - 1/N, 1.0].
-            # Center is 1.0 - 0.5/N.
-            # Row r center: 1.0 - (r-0.5)/N
-            # Adjusting for spacing (0.03 vertical spacing):
-            # Each plot height h = (1 - (N-1)*space) / N
-            # Top of row r: 1.0 - (r-1)*(h+space)
-            # Center: Top - h/2
-            
-            space = 0.03
+           
+            # Vertical Legend Position
+            space = 0.04
             h = (1.0 - (n_strips - 1) * space) / n_strips
             y_top = 1.0 - (row - 1) * (h + space)
             y_center = y_top - h / 2
             
+            # Adjust title for Wind Direction
+            cb_title = None
+
             colorbar_dict = dict(
                 orientation="v",
-                x=1.01, # Right of plot
+                x=1.01,
                 y=y_center,
                 yanchor="middle",
                 xanchor="left",
-                len=h, # Match strip height
-                thickness=15,
+                len=h,
+                thickness=25,
                 tickmode="array",
                 tickvals=tick_vals,
                 ticktext=ticks,
-                tickfont=dict(size=10),
-                title=None
+                tickfont=dict(size=9),
+                title=cb_title
             )
             show_scale = True
 
@@ -2951,42 +2975,45 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
             colors_default, labels_default = get_color_scale_for_metric(info["metric"])
             colors = info.get("colors", colors_default[: len(info.get("labels", labels_default))])
             heatmap_colorscale = list(zip([i / (len(colors) - 1) for i in range(len(colors))], colors))
+            
+            # Special Compass Legend for Wind Direction
+            if strip_name == "Wind Direction":
+                 # Use a cyclic colorscale (HSV)
+                 heatmap_colorscale = "HSV"
+                 zmin, zmax = 0, 360 # Explicit degrees
+                 # We need a separate legend for this maybe? 
+                 # For now, standard colorbar 0-360
+                 colorbar_dict = dict(
+                    orientation="v", x=1.01, y=y_center, yanchor="middle", len=h, thickness=15,
+                    tickmode="array", tickvals=[0, 90, 180, 270, 360], ticktext=["N", "E", "S", "W", "N"]
+                 )
+                 show_scale = True
 
-        # Gentle DOY smoothing to reduce barcode noise (visual-only)
+        # Gentle DOY smoothing 
         if info["metric"] == "Wind Direction":
-            def _rolling_mode(mat: pd.DataFrame, w: int = 7) -> pd.DataFrame:
-                out = mat.copy()
-                half = w // 2
-                for i in range(mat.shape[1]):
-                    lo = max(0, i - half)
-                    hi = min(mat.shape[1], i + half + 1)
-                    window = mat.iloc[:, lo:hi].mode(axis=1)
-                    out.iloc[:, i] = window.iloc[:, 0]
-                return out
-
-            pivot_plot = _rolling_mode(pd.DataFrame(pivot_plot_slice).copy(), w=7)
+             pivot_plot = pd.DataFrame(pivot_plot_slice).copy() # Already smoothed sectors 0-7
         else:
             pivot_plot = pd.DataFrame(pivot_plot_slice).copy().rolling(window=5, axis=1, center=True, min_periods=1).mean()
 
         hover_labels = info.get("hover_labels")
-        # Align hover labels to 365 days if necessary
         if hover_labels is not None:
              if hasattr(hover_labels, "shape") and hover_labels.shape[1] > 365:
                  hover_labels = hover_labels[:, :365]
         
         customdata = hover_labels if hover_labels is not None else None
+        
+        # Updated Hover Template: Remove Year
         hovertemplate = (
-            "Date / Time: %{x|%m/%d/%Y %H:%M}<br>Value: %{z:.2f}<br>Band: %{customdata}<extra></extra>"
+            "<b>%{x|%b %d} %{y}:00</b><br>" +
+            "Value: %{z:.2f}<br>" +
+            "Band: %{customdata}<extra></extra>"
             if customdata is not None
-            else "Date / Time: %{x|%m/%d/%Y %H:%M}<br>Value: %{z:.2f}<extra></extra>"
+            else "<b>%{x|%b %d} %{y}:00</b><br>Value: %{z:.2f}<extra></extra>"
         )
-
-        trace_colorbar = None
-        trace_showscale = False
 
         trace = go.Heatmap(
             z=pivot_plot.values,
-            x=dates_2021,       # Real DatetimeIndex
+            x=dates_2021,       # Real DatetimeIndex for positioning
             y=pivot_plot.index, # HOD 0..23
             colorscale=heatmap_colorscale,
             showscale=show_scale,
@@ -2996,89 +3023,91 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
             customdata=customdata,
             hovertemplate=hovertemplate,
             showlegend=False,
-            zsmooth=False if info["metric"] == "Wind Direction" else "best",
+            zsmooth=False, # Disable smoothing for crisp blocks
         )
         fig.add_trace(trace, row=row, col=1)
         heatmap_indices.append((len(fig.data) - 1, show_scale))
         
         # Configure y-axis (HOD)
-        # Title "Time of day" ONLY on Row 1
-        y_title = "Time of day" if row == 1 else None
-        
+        # 12am, Noon, 11pm
         fig.update_yaxes(
-            title_text=y_title,
-            title_font=dict(size=10),
             tickmode="array",
-            tickvals=[0, 6, 12, 18, 23],
-            ticktext=["00:00", "06:00", "12:00", "18:00", "23:00"],
-            gridcolor="rgba(255,255,255,0.05)",
+            tickvals=[0, 12, 23],
+            ticktext=["12:00am", "noon", "11:59pm"],
+            gridcolor="rgba(128,128,128,0.1)",
             gridwidth=0.5,
-            tickfont=dict(size=9),
+            tickfont=dict(size=9, color="#666666"),
             row=row, col=1,
+            autorange="reversed" # 0 at top (12am), 23 at bottom (11pm) matches image? 
+            # Image shows 12:00am at top, noon middle, 11:59pm bottom. 
+            # Plotly default: 0 at bottom. So "reversed" makes 0 top.
         )
         
         # Add Title Annotation BELOW the heatmap
         fig.add_annotation(
             xref=f"x{row if row > 1 else ''} domain",
             yref=f"y{row if row > 1 else ''} domain",
-            x=0.5, 
-            y=-0.20, # Position below, adjusted for tighter spacing
-            text=strip_name,
+            x=0.0, 
+            y=-0.15, # Position below, moved left
+            text=strip_name.upper() + ": description placeholder", # You can update descriptions later
             showarrow=False,
-            font=dict(size=11, color="#e2e8f0", weight="bold"),
+            font=dict(size=10, color="#333333", weight="bold"),
+            xanchor="left",
             yshift=0
         )
 
         # Configure x-axis for this row - HIDE TICKS primarily
-        # We will add top labels via annotation instead
         fig.update_xaxes(
             showticklabels=False, 
+            showgrid=False,
+            zeroline=False,
             row=row, col=1,
         )
+        
+        # Add Vertical Month Lines
+        month_starts = pd.date_range("2021-01-01", "2021-12-01", freq="MS")
+        for date_val in month_starts:
+            fig.add_vline(
+                x=date_val.timestamp() * 1000, # Plotly needs ms for date axes sometimes, or just date string
+                line_width=1, 
+                line_dash="solid", 
+                line_color="#333333", 
+                opacity=0.3,
+                row=row, col=1
+            )
 
     # Add Month Initials ABOVE the top plot (Shared for all)
-    # y=1.04 places them just above the title/grid area
     month_starts = pd.date_range("2021-01-01", "2021-12-01", freq="MS")
     month_initials = list("JFMAMJJASOND")
     
-    for date_val, label in zip(month_starts, month_initials):
+    # Calculate mid-points for labels? Or just start? Image shows letter centered in month.
+    # Approximate centers: +15 days
+    month_centers = month_starts + pd.Timedelta(days=15)
+
+    for date_val, label in zip(month_centers, month_initials):
         fig.add_annotation(
             x=date_val,
-            y=1.04, 
+            y=1.02, 
             xref="x", 
             yref="paper",
             text=label,
             showarrow=False,
-            font=dict(size=10, color="black"), 
+            font=dict(size=12, color="black", weight="bold"), 
             xanchor="center",
             yanchor="bottom"
         )
 
-    # Configure bottom x-axis - NO TITLE per request
-    fig.update_xaxes(
-        title_text="",
-        title_font=dict(size=10),
-        row=n_strips, col=1,
-    )
-
     fig.update_layout(
         autosize=False,
         width=1200,
-        height=240 * n_strips + 100, 
-        showlegend=False, # Hide global legend
-        title_text=f"{header.get('city', 'Location')} – Annual Diurnal Resource Heatmaps",
-        title_x=0.5,
-        font=dict(size=10),
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        # Margins: T=90 (month labels), R=120 (side keys), L=70 (y-axis), B=40 (minimal bottom)
-        margin=dict(l=70, r=120, t=90, b=40),
+        height=200 * n_strips + 80, 
+        showlegend=False,
+        title_text=None, # Clean look
+        font=dict(size=10, family="Arial"),
+        plot_bgcolor="rgba(0,0,0,0)",  # Transparent
+        paper_bgcolor="rgba(0,0,0,0)", # Transparent
+        margin=dict(l=50, r=150, t=60, b=40),
     )
-    
-    # Add "Time of Day" common label on the left?
-    # Actually user requested title ONLY on row 1 y-axis, which is done above.
-    # This extra annotation is likely redundant or conflicting.
-    # fig.add_annotation(...) -> REMOVED to avoid duplication.
     
     return fig
 
@@ -3591,34 +3620,7 @@ def render_dashboard_page():
             st.divider()
             
             # Dynamic header with location
-            def get_active_location_name() -> str:
-                ss = st.session_state
-                # 1. Try likely keys for station dicts (e.g. from map picker)
-                for key in ["selected_station", "selectedstation", "selstation"]:
-                    sel = ss.get(key)
-                    if isinstance(sel, dict):
-                        for field in ["display_label", "displaylabel", "station_name", "name", "city_name", "cityname"]:
-                            val = sel.get(field)
-                            if val:
-                                return str(val)
-                
-                # 2. Try header metadata (EPW parse result)
-                header = ss.get("header", {})
-                if isinstance(header, dict):
-                    for key in ["location_name", "city", "source"]:
-                        val = header.get(key)
-                        if val:
-                            return str(val)
-                
-                # 3. Fallback string keys
-                for key in ["loading_station_name", "loadingstationname", "source_label", "sourcelabel"]:
-                    val = ss.get(key)
-                    if val:
-                        return str(val).replace("Uploaded: ", "")
-                
-                return "Unknown Location"
-
-            location_label = get_active_location_name()
+            location_label = get_clean_city_name()
             
             st.markdown(f"<h3>{location_label} – Annual Diurnal Resource Heatmaps</h3>", unsafe_allow_html=True)
             st.caption("Adjust legend thresholds to explore how different performance ranges appear across the year.")
@@ -3689,24 +3691,38 @@ def render_dashboard_page():
                 st.info("Adjust thresholds to continue.")
             else:
                 # Continuous heatmap helper: aggregate first (mean/median), keep thresholds for hover/legend only
-                def _build_pivot_with_thresholds(df: pd.DataFrame, col: str, metric_label: str, thresholds: list[float], units_suffix: str, palette_metric: str, agg: str = "mean"):
+                def _build_pivot_with_thresholds(df: pd.DataFrame, col: str, metric_label: str, thresholds: list[float], units_suffix: str, palette_metric: str, agg: str = "mean", raw_col: str = None):
                     series = pd.to_numeric(df[col], errors="coerce")
                     series = series.dropna()
                     if series.empty:
                         return pd.DataFrame(), {"error": f"No valid data for {metric_label}"}
 
                     work = pd.DataFrame({"val": series})
+                    if raw_col:
+                        work["raw"] = pd.to_numeric(df[raw_col], errors="coerce")
+                    else:
+                        work["raw"] = work["val"]
+                        
                     work["hod"] = work.index.hour
                     work["doy"] = work.index.dayofyear
 
                     aggfunc = np.median if agg == "median" else "mean"
                     pivot_raw = work.pivot_table(index="hod", columns="doy", values="val", aggfunc=aggfunc)
                     pivot_raw = pivot_raw.reindex(index=range(24), columns=range(1, 367))
+                    
+                    # For labels, we use the RAW values to bin against thresholds
+                    # We need to aggregate raw values same way to match the grid cells?
+                    # Or do we bin the aggregated raw values? 
+                    # If we bin the raw values, we get mode? 
+                    # Simpler: Aggregate the RAW values too, then bin.
+                    pivot_val_for_labels = work.pivot_table(index="hod", columns="doy", values="raw", aggfunc=aggfunc)
+                    pivot_val_for_labels = pivot_val_for_labels.reindex(index=range(24), columns=range(1, 367))
 
                     # Thresholds for interpretation (hover/legend), not for coloring
                     bins = [-np.inf] + thresholds + [np.inf]
                     labels = _labels_from_thresholds(thresholds, units_suffix)
-                    cat = pd.cut(pivot_raw.values.flatten(), bins=bins, labels=labels, right=False)
+                    
+                    cat = pd.cut(pivot_val_for_labels.values.flatten(), bins=bins, labels=labels, right=False)
                     label_grid = pd.Series(cat).astype(object).values.reshape(pivot_raw.shape)
 
                     colors_default, _ = get_color_scale_for_metric(palette_metric)
@@ -3732,8 +3748,17 @@ def render_dashboard_page():
                     # If thresholds_state has 'drybulb', use it, else empty.
                     # We will assume "Dry Bulb Temperature" uses the color scale "drybulb" or "thermal" which is standard.
                     # We pass agg="mean".
-                    db_thresholds = [10.0, 20.0, 26.0, 35.0]
-                    pivot_binned, info = _build_pivot_with_thresholds(cdf, db_col, "Dry Bulb Temperature", db_thresholds, "°C", "drybulb", agg="mean")
+                    db_thresholds = [10.0, 20.0, 26.6, 35.0]
+                    
+                    # Prepare categorical bins for heatmap values (0, 1, 2...)
+                    # Correct bin edges: -100, 10, 20, 26.6, 35, 100
+                    db_bins = [-100, 10.0, 20.0, 26.6, 35.0, 100.0] 
+                    db_series = cdf[db_col]
+                    cdf["db_cat"] = pd.cut(db_series, bins=db_bins, labels=[0, 1, 2, 3, 4], include_lowest=True, right=False).astype(float)
+
+                    pivot_binned, info = _build_pivot_with_thresholds(
+                        cdf, "db_cat", "Dry Bulb Temperature", db_thresholds, "°C", "drybulb", agg="mean", raw_col=db_col
+                    )
                     if not pivot_binned.empty:
                         heatmap_dict["Dry Bulb Temperature"] = (pivot_binned, info)
 
@@ -3749,8 +3774,10 @@ def render_dashboard_page():
                     
                     cdf["solar_cat"] = pd.cut(s_series, bins=sb, labels=[0, 1, 2, 3, 4], include_lowest=True, right=False).astype(float)
                     
-                    # Pass "solar_cat" for the heatmap values, but "Solar Radiation" title
-                    pivot_binned, info = _build_pivot_with_thresholds(cdf, "solar_cat", "Solar Radiation", thresholds_state["solar"], " W/m²", "solar", agg="mean")
+                    # Pass "solar_cat" for the heatmap values, but RAW solar_col for labels
+                    pivot_binned, info = _build_pivot_with_thresholds(
+                        cdf, "solar_cat", "Solar Radiation", thresholds_state["solar"], " W/m²", "solar", agg="mean", raw_col=solar_col
+                    )
                     if not pivot_binned.empty:
                         heatmap_dict["Solar Radiation"] = (pivot_binned, info)
 
@@ -3769,7 +3796,10 @@ def render_dashboard_page():
                     
                     cdf["wind_cat"] = pd.cut(cdf[wind_col], bins=wb, labels=[0, 1, 2], include_lowest=True, right=False).astype(float)
                     
-                    pivot_binned, info = _build_pivot_with_thresholds(cdf, "wind_cat", "Wind Speed", thresholds_state["wind"], " m/s", "wind", agg="median")
+                    # Pass "wind_cat" for heatmap, RAW wind_col for labels
+                    pivot_binned, info = _build_pivot_with_thresholds(
+                        cdf, "wind_cat", "Wind Speed", thresholds_state["wind"], " m/s", "wind", agg="median", raw_col=wind_col
+                    )
                     if not pivot_binned.empty:
                         heatmap_dict["Wind Speed"] = (pivot_binned, info)
 
@@ -3913,7 +3943,8 @@ def render_trends_page():
     # We kept the body indentation (4 spaces), so this function wrapper fits perfectly.
     # if True: # removed to fix indentation error
 
-    st.markdown("### Temperature & Humidity")
+    location_label = get_clean_city_name()
+    st.markdown(f"<h3>{location_label} – Temperature & Humidity</h3>", unsafe_allow_html=True)
     st.caption("Clean reference plots with comfort ribbons and a single linked time window. Use this space to compare how temperature and humidity evolve at hourly, daily, or monthly scales.")
     # -------------------- Controls --------------------
     c1, c2, c3 = st.columns([1.2, 1, 1.2])
@@ -4432,7 +4463,8 @@ def render_humidity_page():
     # ==================== HUMIDITY BAR CHART ====================
     if True: # effective_page check handled in main
         st.markdown("---")
-        st.markdown("#### Humidity — bar chart")
+        location_label = get_clean_city_name()
+        st.markdown(f"<h4>{location_label} – Humidity (Bar Chart)</h4>", unsafe_allow_html=True)
         if "relhum" not in cdf:
             st.info("This EPW has no Relative Humidity column.")
         else:
@@ -4490,7 +4522,8 @@ def render_temperature_page():
         label_y    = "Dry-bulb temperature (°C)" if col == "drybulb" else "Relative Humidity (%)"
         line_color = "crimson" if col == "drybulb" else "dodgerblue"
         st.markdown("---")
-        st.markdown("#### Daily scatter (hourly points, faceted by month)")
+        location_label = get_clean_city_name()
+        st.markdown(f"<h4>{location_label} – Daily scatter (hourly points, faceted by month)</h4>", unsafe_allow_html=True)
         st.caption(
             "Each panel bundles all hours for a given month so you can spot diurnal swings, "
             "shoulder-season variability, and whether the adaptive comfort envelope is mostly "
@@ -4589,7 +4622,9 @@ def render_heatmap_page():
     if True: # effective_page check handled in main
         # ==================== HEATMAP ====================
         st.markdown("---")
-        st.markdown("#### Annual heatmap (Day × Hour)")
+        # Dynamic header with location
+        location_label = get_clean_city_name()
+        st.markdown(f"<h4>{location_label} – Annual Heatmap (Day × Hour)</h4>", unsafe_allow_html=True)
         st.caption(
             "Rows track calendar days and columns track hours, so warm streaks, cold snaps, and "
             "overnight recovery patterns appear instantly. Use it to quickly locate persistent "
@@ -4612,7 +4647,8 @@ def render_solar_page():
     effective_page = st.session_state.get("nav_page")
     # Solar page logic handled self-contained data loading if needed, or uses session state
     
-    st.markdown("### ☀️ Solar Analysis")
+    location_label = get_clean_city_name()
+    st.markdown(f"<h3>{location_label} – Solar Analysis</h3>", unsafe_allow_html=True)
     st.caption(
         "Trace the sun’s path, check solar-time positions, and pair those tracks with EPW temperatures "
         "before taking shading or PV decisions. The plots highlight seasonal envelopes so you can "
@@ -6093,7 +6129,8 @@ def render_psychrometrics_page():
     cdf = st.session_state.get("cdf")
     # if cdf is None: return # handled by check inside or main
     
-    st.markdown("### 📈 Psychrometrics")
+    location_label = get_clean_city_name()
+    st.markdown(f"<h3>{location_label} – Psychrometrics</h3>", unsafe_allow_html=True)
     st.caption(
         "Plot hourly temperature/ humidity points on the classic psychrometric grid to see "
         "when air falls inside comfort envelopes, where latent loads spike, and how far "
@@ -6425,7 +6462,8 @@ def render_live_data_page():
     # I'll check if I need to define epw_df = cdf.
     epw_df = cdf 
     
-    st.markdown("### Local Sensors vs Climate Baseline (EPW)")
+    location_label = get_clean_city_name()
+    st.markdown(f"<h3>{location_label} – Local Sensors vs Climate Baseline (EPW)</h3>", unsafe_allow_html=True)
     st.caption(
         "Compare on-site sensor readings to a long-term climate baseline (EnergyPlus Weather 'typical year'). Comparisons are statistical, not timestamp-based."
     )
