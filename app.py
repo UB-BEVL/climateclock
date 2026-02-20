@@ -4581,6 +4581,7 @@ def _render_daily_scatter(cdf, col, title_suffix, y_label, line_color, key_suffi
             st.download_button(f"📥 Download {title_suffix} (HTML)", fig_sc.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{cname}_{col}_scatter.html", "text/html", key=f"dl_{col}_scat_html_{key_suffix}")
         except Exception: pass
 
+
 def _render_heatmap(cdf, col, title_suffix, y_label, color_scale):
     st.markdown("---")
     location_label = get_clean_city_name()
