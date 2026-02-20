@@ -24,8 +24,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 import pvlib
 # local modules
 from metrics import comfort_energy as ce
-import debug_fc as fc
-import debug_fepw as fepw
+
 # Patch platform processor to avoid Windows WMI KeyError during h5py/pvlib import
 import platform as _platform
 _orig_proc_get = getattr(getattr(_platform, "_Processor", None), "get", None)
@@ -2123,7 +2122,6 @@ def _interactive_map_fragment() -> None:
     # Keep map dots exactly as rendered by _build_station_map_figure().
     with st.container(border=True):
         st.markdown("### 🗺️ Interactive Map")
-        st.caption("Click a station dot to load instantly.")
         st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
 
     map_height = 700
@@ -2141,6 +2139,8 @@ def _interactive_map_fragment() -> None:
             override_width=None,
             key="station_map",
         )
+        
+
 
     if selected_points and len(selected_points) > 0:
         point = selected_points[0]
@@ -2241,15 +2241,19 @@ def _station_search_fragment() -> None:
 @CACHE(show_spinner=False, ttl=86400)
 def _prepare_station_picker_dataframe(stations_in: pd.DataFrame) -> pd.DataFrame:
     """Prepare station dataframe for the picker/map (cached to avoid rerun lag)."""
-    stations = stations_in.dropna(subset=["lat", "lon"]).copy()
-    stations["country_disp"] = stations.get("country", pd.Series(dtype=str)).fillna("—")
-    stations["elev_disp"] = pd.to_numeric(stations["elevation_m"], errors="coerce").round(0).astype("Int64")
-    stations["tz_disp"] = stations["timezone"].astype(str).replace({"nan": "—"})
-    stations["period_disp"] = stations.get("period", pd.Series(dtype=str)).fillna("—")
-    stations["heating_disp"] = stations["heating_db"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
-    stations["cooling_disp"] = stations["cooling_db"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
-    stations["source_url"] = stations.get("zip_url", pd.Series(dtype=str)).fillna("")
+    stations = stations_in.copy()
+    # -------------------------------------------------------------------------
+    # Helper: Normalize columns
+    # -------------------------------------------------------------------------
+    if "lat" not in stations.columns or "lon" not in stations.columns:
+        return stations
 
+    # Convert lat/lon
+    stations["lat"] = pd.to_numeric(stations["lat"], errors="coerce")
+    stations["lon"] = pd.to_numeric(stations["lon"], errors="coerce")
+    stations = stations.dropna(subset=["lat", "lon"])
+    
+    # Helpers for display
     def _country_name_from_iso3(code: str) -> str:
         code = (code or "").strip()
         if not code:
@@ -2263,88 +2267,90 @@ def _prepare_station_picker_dataframe(stations_in: pd.DataFrame) -> pd.DataFrame
             pass
         return code.upper()
 
-    def _parse_from_raw(row: pd.Series) -> pd.Series:
-        raw_id = str(row.get("raw_id") or "").strip()
-        if not raw_id:
-            zip_url = str(row.get("zip_url") or "").strip()
-            raw_id = Path(zip_url).stem if zip_url else ""
+    stations["country_disp"] = stations.get("country", pd.Series(dtype=str)).fillna("—")
+    stations["elev_disp"] = pd.to_numeric(stations["elevation_m"], errors="coerce").round(0).astype("Int64")
+    stations["tz_disp"] = stations["timezone"].astype(str).replace({"nan": "—"})
+    stations["period_disp"] = stations.get("period", pd.Series(dtype=str)).fillna("—")
+    stations["heating_disp"] = stations["heating_db"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
+    stations["cooling_disp"] = stations["cooling_db"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
+    stations["source_url"] = stations.get("zip_url", pd.Series(dtype=str)).fillna("")
 
-        base = raw_id
-        source_token = str(row.get("source") or "").strip()
-        if "_" in raw_id:
-            base, maybe_src = raw_id.rsplit("_", 1)
-            if maybe_src and not source_token:
-                source_token = maybe_src
+    # --- VECTORIZED PARSING (Optimized) ---
+    # Parse metadata from 'name' column if available (e.g. DZA_Algiers.603900_IWEC)
+    if "name" in stations.columns:
+        # Regex to capture: ISO, City (raw), WMO, Source (optional)
+        # Assumes format: ISO_CityName.WMO_Source
+        pattern = r"^(?P<iso_p>[A-Z]{3,})_(?P<city_p>[^.]+)\.(?P<wmo_p>\d+)(?:[._](?P<src_p>.+))?$"
+        active_names = stations["name"].astype(str)
+        extracted = active_names.str.extract(pattern)
+        
+        # Fill missing standard columns with parsed values where valid
+        if "iso_p" in extracted.columns:
+            if "country_iso3" not in stations.columns: stations["country_iso3"] = np.nan
+            stations["country_iso3"] = stations["country_iso3"].fillna(extracted["iso_p"])
+            
+            if "city_name" not in stations.columns: stations["city_name"] = np.nan
+            stations["city_name"] = stations["city_name"].fillna(extracted["city_p"])
+            
+            if "station_id" not in stations.columns: stations["station_id"] = np.nan
+            stations["station_id"] = stations["station_id"].fillna(extracted["wmo_p"])
+            
+            if "source" not in stations.columns: stations["source"] = np.nan
+            stations["source"] = stations["source"].fillna(extracted["src_p"])
 
-        country_iso3 = str(row.get("country_iso3") or "").strip().upper()
-        state_code = str(row.get("state_code") or "").strip()
-        city_raw = str(row.get("city_raw") or "").strip()
-        station_id = str(row.get("station_id") or "").strip()
-        period = str(row.get("period") or "").strip()
-
-        if base:
-            parts = base.split("_", 2)
-            if len(parts) >= 1 and not country_iso3:
-                country_iso3 = parts[0].upper()
-            if len(parts) >= 2 and not state_code:
-                state_code = parts[1]
-            if len(parts) == 3 and not city_raw:
-                city_raw = parts[2].split(".", 1)[0]
-
-            tail = base.rsplit(".", 1)
-            if len(tail) == 2:
-                station_id = station_id or tail[1]
-
-        city_name = city_raw.replace("-", " ").replace(".", " ")
-        city_name = re.sub(r"\s+", " ", city_name).strip().title()
-
-        country_name = str(row.get("country_name") or row.get("country") or "").strip()
-        if not country_name and country_iso3:
-            country_name = _country_name_from_iso3(country_iso3)
-
-        row["raw_id"] = raw_id
-        row["country_iso3"] = country_iso3
-        row["state_code"] = state_code
-        row["city_raw"] = city_raw
-        row["city_name"] = city_name
-        row["station_id"] = station_id
-        row["source"] = source_token
-        row["period"] = period
-        row["country_name"] = country_name
-        return row
-
-    stations = stations.apply(_parse_from_raw, axis=1)
-
-    # Clean label pieces to avoid 'nan'
-    for col in ["country_name", "state_code", "source", "period", "city_name"]:
+    # Ensure columns exist and are string
+    for col in ["country_name", "state_code", "source", "period", "city_name", "country_iso3", "station_id"]:
         if col not in stations.columns:
             stations[col] = ""
         stations[col] = stations[col].fillna("").astype(str)
 
-    def make_label(row: pd.Series) -> str:
-        location_bits = []
-        if row.get("city_name"):
-            location_bits.append(row.get("city_name"))
-        if row.get("state_code"):
-            location_bits.append(row.get("state_code"))
-        if row.get("country_name"):
-            location_bits.append(row.get("country_name"))
-        location_str = ", ".join([b for b in location_bits if b])
+    # Clean up City Names: "Algiers" is fine, "Al-Minya" is fine. 
+    # Replace dots/underscores only if they look like delimiters we missed (vectorized)
+    stations["city_name"] = stations["city_name"].str.replace("_", " ", regex=False).str.title()
 
-        meta_bits = []
-        if row.get("station_id"):
-            meta_bits.append(f"WMO {row.get('station_id')}")
-        if row.get("source"):
-            meta_bits.append(row.get("source"))
-        if row.get("period"):
-            meta_bits.append(row.get("period"))
-        meta_str = ", ".join([b for b in meta_bits if b])
+    # Vectorized Country Name Lookup
+    unique_isos = stations["country_iso3"].unique()
+    iso_map = {}
+    for iso in unique_isos:
+        if iso:
+            try:
+                iso_map[iso] = _country_name_from_iso3(iso)
+            except:
+                iso_map[iso] = iso
+    
+    # Fill country_name using the map where missing
+    mask_missing_country = (stations["country_name"] == "") | (stations["country_name"] == "nan")
+    stations.loc[mask_missing_country, "country_name"] = stations.loc[mask_missing_country, "country_iso3"].map(iso_map).fillna("")
 
-        if meta_str:
-            return f"{location_str} ({meta_str})" if location_str else meta_str
-        return location_str or (row.get("raw_id") or "Unknown station")
+    # Construct Display Label (Vectorized)
+    # Format: City, State, Country (WMO ID, Source, Period)
+    
+    label_parts = pd.DataFrame({
+        "city": stations["city_name"],
+        "state": stations["state_code"],
+        "country": stations["country_name"]
+    })
+    # Filter empty strings
+    loc_str = label_parts.apply(lambda x: ", ".join(s for s in x if s), axis=1)
+    
+    # Meta Part
+    meta_parts = pd.DataFrame({
+        "wmo": stations["station_id"].apply(lambda x: f"WMO {x}" if x else ""),
+        "src": stations["source"],
+        "prd": stations["period"]
+    })
+    meta_str = meta_parts.apply(lambda x: ", ".join(s for s in x if s), axis=1)
+    
+    # Combine
+    full_labels = loc_str + " (" + meta_str + ")"
+    # Handle missing location (fallback to Raw ID or 'Unknown')
+    fallback = stations.get("raw_id", stations.get("name", "Unknown Station"))
+    
+    stations["display_label"] = np.where(loc_str != "", full_labels, fallback)
+    
+    # Clean parens if meta is empty
+    stations["display_label"] = stations["display_label"].str.replace(" ()", "", regex=False)
 
-    stations["display_label"] = stations.apply(make_label, axis=1)
     return stations
 
 
@@ -2353,10 +2359,6 @@ def render_station_picker():
 
     header = st.session_state.get("header", {}) if isinstance(st.session_state.get("header"), dict) else {}
     location_meta = header.get("location", {}) if isinstance(header, dict) else {}
-
-    st.write("Select a weather file to unlock the dashboard. Upload from the sidebar or pick a station below.")
-    st.write("")
-    st.write("")
 
     # (pending_station is managed by controller; do not clear here)
 
@@ -2447,7 +2449,7 @@ def render_select_station_page():
     render_landing_hero()
     st.markdown("<hr class='page-separator' />", unsafe_allow_html=True)
     st.markdown("<div id='station-picker'></div>", unsafe_allow_html=True)
-    st.caption("Select a station from the interactive map or drop your EPW/ZIP to unlock the dashboard views.")
+    # render_station_picker handles the map and list
     render_station_picker()
     main_upload = st.file_uploader(
         "Upload EPW or ZIP file",
@@ -2550,17 +2552,12 @@ def show_epw_status():
         record_count = len(df) if isinstance(df, pd.DataFrame) else 0
         source_label = st.session_state.get("source_label", "")
 
-        summary_label = f"✅ Loaded EPW for {city}, {country} — {period} ({record_count:,} hours)"
-        st.success(summary_label)
-        if hasattr(st, "toast"):
-            st.toast("EPW loaded successfully ✅", icon="✅")
-        if source_label and source_label not in summary_label:
-            st.caption(f"Source: {source_label}")
+        # --- DASHBOARD LOGIC ---
+    
+        # ------------------
+        # TABS
+        # ------------------
         st.session_state.pop("loading_station_name", None)
-
-        if epw_notes:
-            for note in epw_notes:
-                st.warning(f"EPW file note: {note}")
 
         with st.expander("EPW metadata", expanded=False):
             meta_rows = [
