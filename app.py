@@ -4464,11 +4464,10 @@ def render_trends_page():
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
     with d1:
         try:
-            # Generate PNG (wrapping in try/except to avoid crashes on some hosts)
             png_bytes = fig.to_image(format="png", width=1400, height=800, scale=2)
             st.download_button("📥 Download Trends (PNG)", png_bytes, f"{clean_loc}_trends_chart.png", "image/png")
-        except Exception:
-            pass
+        except Exception as e:
+            st.download_button("📥 Download Trends (PNG) - Unavailable", b"", disabled=True, help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
     with d2:
         try:
             html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")
@@ -4477,195 +4476,162 @@ def render_trends_page():
             pass
 
 
-def render_humidity_page():
-    cdf = st.session_state.get("cdf")
-    effective_page = st.session_state.get("nav_page")
-    if cdf is None: return
+# ------------- GENERIC CHART HELPERS -------------
+def _render_bar_chart(cdf, col, title_suffix, y_label, color, key_suffix):
+    import plotly.express as px
+    st.markdown("---")
+    location_label = get_clean_city_name()
+    c1, c2 = st.columns([4, 1])
+    with c1:
+        st.markdown(f"<h4>{location_label} – {title_suffix}</h4>", unsafe_allow_html=True)
+        st.caption("Monthly view only to keep the chart readable.")
+    with c2:
+        stat = st.selectbox("Statistic", ["Mean", "Median"], index=0, key=f"{col}_stat_{key_suffix}")
+    df_col = cdf[[col]].dropna().copy()
+    if df_col.empty:
+        st.info(f"No data for {title_suffix}.")
+        return
+    df_col["month"] = df_col.index.month
+    monthly = df_col.groupby("month")[col]
+    y = monthly.mean() if stat == "Mean" else monthly.median()
+    df_bar = y.reset_index().rename(columns={col: "VAL"})
+    df_bar["month_name"] = df_bar["month"].apply(lambda m: pd.Timestamp(2001, int(m), 1).strftime("%b"))
+    fig = px.bar(
+        df_bar, x="month_name", y="VAL",
+        labels={"month_name": "Month", "VAL": y_label},
+        title=f"Monthly {stat.lower()} {col}"
+    )
+    fig.update_xaxes(type="category")
+    fig.update_traces(marker_line_width=0.2, opacity=0.9, marker_color=color)
+    fig.update_layout(
+        yaxis=dict(title=y_label),
+        margin=dict(l=40, r=20, t=60, b=30),
+        legend=dict(orientation="h", x=0, y=1.02),
+        bargap=0.15
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    d1, d2 = st.columns(2)
+    clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
+    with d1:
+        try:
+            st.download_button(f"📥 Download {title_suffix} (PNG)", fig.to_image(format="png", width=1200, height=600, scale=2), f"{clean_loc}_{col}_chart.png", "image/png", key=f"dl_{col}_png_{key_suffix}")
+        except Exception as e: 
+            st.download_button(f"📥 Download {title_suffix} (PNG) - Unavailable", b"", disabled=True, key=f"dl_{col}_png_{key_suffix}_err", help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
+    with d2:
+        try:
+            st.download_button(f"📥 Download {title_suffix} (HTML)", fig.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{clean_loc}_{col}_chart.html", "text/html", key=f"dl_{col}_html_{key_suffix}")
+        except Exception: pass
 
-    # ==================== HUMIDITY BAR CHART ====================
-    if True: # effective_page check handled in main
+def _render_daily_scatter(cdf, col, title_suffix, y_label, line_color, key_suffix):
+    import plotly.express as px
+    import plotly.graph_objects as go
+    st.markdown("---")
+    location_label = get_clean_city_name()
+    st.markdown(f"<h4>{location_label} – {title_suffix}</h4>", unsafe_allow_html=True)
+    st.caption("Each panel bundles all hours for a given month.")
+    
+    scat = cdf[[col]].dropna().copy()
+    if scat.empty:
+        st.info(f"No data for {title_suffix}.")
+        return
+    scat["month"] = scat.index.month
+    scat["hour"]  = scat.index.hour
+    ordered_months = list(range(1, 13))
+    scat["month"]  = pd.Categorical(scat["month"], categories=ordered_months, ordered=True)
+    curve = scat.groupby(["month", "hour"], observed=False)[col].mean().reset_index()
+    curve["smooth"] = curve.groupby("month", observed=False)["hour"].transform(lambda h: 0)
+    curve["smooth"] = curve.groupby("month", observed=False)[col].transform(lambda s: s.rolling(3, center=True, min_periods=1).mean())
+    
+    fig_sc = px.scatter(
+        scat, x="hour", y=col,
+        facet_col="month", facet_col_wrap=4,
+        category_orders={"month": ordered_months},
+        opacity=0.35,
+        labels={"hour": "Hour", col: y_label},
+        height=720, color_discrete_sequence=[line_color]
+    )
+    fig_ln = px.line(
+        curve, x="hour", y="smooth",
+        facet_col="month", facet_col_wrap=4,
+        category_orders={"month": ordered_months},
+    )
+    for t in fig_ln.data:
+        t.showlegend = False
+        t.mode = "lines"
+        t.line.width = 2
+        t.line.color = line_color
+        fig_sc.add_trace(t)
+        
+    fig_sc.add_trace(go.Scatter(x=[None], y=[None], mode="markers", marker=dict(size=7, color=line_color, opacity=0.6), name="Hourly points", showlegend=True), row=1, col=1)
+    fig_sc.add_trace(go.Scatter(x=[None], y=[None], mode="lines", line=dict(width=3, color=line_color), name="Monthly mean (smoothed)", showlegend=True), row=1, col=1)
+    fig_sc.for_each_annotation(lambda a: a.update(text=pd.Timestamp(2001, int(a.text.split("=")[-1]), 1).strftime("%b"), y=a.y - 0.03))
+    fig_sc.update_layout(legend=dict(orientation="h", x=0, xanchor="left", y=1.08, yanchor="bottom"), margin=dict(t=105, b=70, l=50, r=30))
+    cname = get_clean_city_name().replace(" ", "_")
+    st.plotly_chart(fig_sc, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_{col}_scatter", "format": "png", "scale": 2}, "displayModeBar": True})
 
-        if "relhum" not in cdf:
-            st.info("This EPW has no Relative Humidity column.")
-        else:
-            import plotly.express as px
-            c1, c2 = st.columns([1.2, 1])
-            st.caption("Monthly view only to keep the chart readable.")
-            stat = c2.selectbox("Statistic", ["Mean", "Median"], index=0, key=f"rh_stat_{effective_page}")
-            
-            st.markdown("---")
-            location_label = get_clean_city_name()
-            st.markdown(f"<h4>{location_label} – Humidity (Bar Chart)</h4>", unsafe_allow_html=True)
-            rh = cdf[["relhum"]].dropna().copy()
-            rh["month"] = rh.index.month
-            monthly = rh.groupby("month")["relhum"]
-            y = monthly.mean() if stat == "Mean" else monthly.median()
-            df_bar = y.reset_index().rename(columns={"relhum": "RH"})
-            df_bar["month_name"] = df_bar["month"].apply(lambda m: pd.Timestamp(2001, int(m), 1).strftime("%b"))
-            fig_rh = px.bar(
-                df_bar, x="month_name", y="RH",
-                labels={"month_name": "Month", "RH": "Relative Humidity (%)"},
-                title=f"Monthly {stat.lower()} RH"
-            )
-            fig_rh.update_xaxes(type="category")
-            # Consistent styling
-            fig_rh.update_traces(marker_line_width=0.2, opacity=0.9)
-            fig_rh.update_layout(
-                yaxis=dict(range=[0, 100], title="Relative Humidity (%)"),
-                margin=dict(l=40, r=20, t=60, b=30),
-                legend=dict(orientation="h", x=0, y=1.02),
-                bargap=0.15
-            )
-            st.plotly_chart(fig_rh, use_container_width=True)
-            
-            # Download buttons for Humidity Bar
-            d1, d2 = st.columns(2)
-            clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
-            with d1:
-                try:
-                    png_bytes = fig_rh.to_image(format="png", width=1200, height=600, scale=2)
-                    st.download_button("📥 Download Humidity (PNG)", png_bytes, f"{clean_loc}_humidity_chart.png", "image/png", key="dl_hum_png")
-                except Exception:
-                    pass
-            with d2:
-                try:
-                    html_bytes = fig_rh.to_html(include_plotlyjs="cdn").encode("utf-8")
-                    st.download_button("📥 Download Humidity (HTML)", html_bytes, f"{clean_loc}_humidity_chart.html", "text/html", key="dl_hum_html")
-                except Exception:
-                    pass
+    d1, d2 = st.columns(2)
+    with d1:
+        try:
+            st.download_button(f"📥 Download {title_suffix} (PNG)", fig_sc.to_image(format="png", width=1400, height=800, scale=2), f"{cname}_{col}_scatter.png", "image/png", key=f"dl_{col}_scat_png_{key_suffix}")
+        except Exception as e: 
+            st.download_button(f"📥 Download {title_suffix} (PNG) - Unavailable", b"", disabled=True, key=f"dl_{col}_scat_png_{key_suffix}_err", help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
+    with d2:
+        try:
+            st.download_button(f"📥 Download {title_suffix} (HTML)", fig_sc.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{cname}_{col}_scatter.html", "text/html", key=f"dl_{col}_scat_html_{key_suffix}")
+        except Exception: pass
 
+def _render_heatmap(cdf, col, title_suffix, y_label, color_scale):
+    st.markdown("---")
+    location_label = get_clean_city_name()
+    st.markdown(f"<h4>{location_label} – {title_suffix}</h4>", unsafe_allow_html=True)
+    st.caption("Rows track calendar days and columns track hours.")
+    tmp = pd.DataFrame({"doy": cdf.index.dayofyear, "hour": cdf.index.hour, "val": cdf[col]}).dropna()
+    if tmp.empty:
+        st.info(f"No data for {title_suffix}.")
+        return
+    mat = tmp.pivot_table(index="doy", columns="hour", values="val", aggfunc="mean").sort_index()
+    import plotly.express as px
+    fig_hm = px.imshow(
+        mat.values, origin="lower", aspect="auto",
+        labels=dict(x="Hour", y="Day", color=y_label),
+        height=350, color_continuous_scale=color_scale
+    )
+    fig_hm.update_xaxes(side="bottom")
+    st.plotly_chart(fig_hm, use_container_width=True)
+
+    d1, d2 = st.columns(2)
+    clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
+    with d1:
+        try:
+            st.download_button(f"📥 Download {title_suffix} (PNG)", fig_hm.to_image(format="png", width=1200, height=600, scale=2), f"{clean_loc}_{col}_heatmap.png", "image/png", key=f"dl_{col}_hm_png")
+        except Exception as e: 
+            st.download_button(f"📥 Download {title_suffix} (PNG) - Unavailable", b"", disabled=True, key=f"dl_{col}_hm_png_err", help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
+    with d2:
+        try:
+            st.download_button(f"📥 Download {title_suffix} (HTML)", fig_hm.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{clean_loc}_{col}_heatmap.html", "text/html", key=f"dl_{col}_hm_html")
+        except Exception: pass
 
 def render_temperature_page():
     cdf = st.session_state.get("cdf")
-    effective_page = st.session_state.get("nav_page")
     if cdf is None: return
-    
-    col = "drybulb"  # base variable for potential downstream usage reuse
+    _render_bar_chart(cdf, "drybulb", "Temperature (Bar Chart)", "Temperature (°C)", "crimson", "temp_bar")
+    _render_daily_scatter(cdf, "drybulb", "Daily scatter (hourly points, faceted by month)", "Dry-bulb temperature (°C)", "crimson", "temp_scat")
 
-    if True: # effective_page check handled in main
-        # ==================== DAILY SCATTER (FACETS) ====================
-        label_y    = "Dry-bulb temperature (°C)" if col == "drybulb" else "Relative Humidity (%)"
-        line_color = "crimson" if col == "drybulb" else "dodgerblue"
-        st.markdown("---")
-        location_label = get_clean_city_name()
-        st.markdown(f"<h4>{location_label} – Daily scatter (hourly points, faceted by month)</h4>", unsafe_allow_html=True)
-        st.caption(
-            "Each panel bundles all hours for a given month so you can spot diurnal swings, "
-            "shoulder-season variability, and whether the adaptive comfort envelope is mostly "
-            "above or below the bias-adjusted temperature line."
-        )
-        # ---------------------- data prep ----------------------------
-        scat = cdf[[col]].copy()
-        scat["month"] = scat.index.month
-        scat["hour"]  = scat.index.hour
-        # keep all 12 months even if some are missing in the data
-        ordered_months = list(range(1, 13))
-        scat["month"]  = pd.Categorical(scat["month"], categories=ordered_months, ordered=True)
-        # hourly mean per month from the SAME data used in each facet
-        curve = (
-            scat.groupby(["month", "hour"], observed=False)[col]
-                .mean()
-                .reset_index()
-        )
-        # light smoother so the line matches the reference look
-        curve["smooth"] = (
-            curve.groupby("month", observed=False)["hour"]
-                .transform(lambda h: 0)  # just to keep index aligned; we overwrite next line
-        )
-        curve["smooth"] = (
-            curve.groupby("month", observed=False)[col]
-                .transform(lambda s: s.rolling(3, center=True, min_periods=1).mean())
-        )
-        # ---------------------- base scatter figure ------------------
-        import plotly.express as px
-        import plotly.graph_objects as go
-        fig_sc = px.scatter(
-            scat, x="hour", y=col,
-            facet_col="month", facet_col_wrap=4,
-            category_orders={"month": ordered_months},
-            opacity=0.35,
-            labels={"hour": "Hour", col: label_y},
-            height=720
-        )
-        # ---------------------- overlay lines (matching facets) ------
-        # Build a FACETED line figure with the exact same facet spec
-        fig_ln = px.line(
-            curve, x="hour", y="smooth",
-            facet_col="month", facet_col_wrap=4,
-            category_orders={"month": ordered_months},
-        )
-        # Copy the line traces onto the scatter; subplot targets stay correct
-        for t in fig_ln.data:
-            t.showlegend = False
-            t.mode = "lines"
-            t.line.width = 2
-            t.line.color = line_color
-            fig_sc.add_trace(t)
-        # ---------------------- legend (clean) -----------------------
-        pt_color = (
-            fig_sc.data[0].marker.color
-            if len(fig_sc.data) and hasattr(fig_sc.data[0], "marker")
-            else "rgba(120,170,220,0.8)"
-        )
-        fig_sc.add_trace(
-            go.Scatter(
-                x=[None], y=[None], mode="markers",
-                marker=dict(size=7, color=pt_color, opacity=0.6),
-                name="Hourly points", showlegend=True
-            ),
-            row=1, col=1
-        )
-        fig_sc.add_trace(
-            go.Scatter(
-                x=[None], y=[None], mode="lines",
-                line=dict(width=3, color=line_color),
-                name="Monthly mean (smoothed)", showlegend=True
-            ),
-            row=1, col=1
-        )
-        # ---------------------- month labels + spacing ---------------
-        # Turn "month=1" → "Jan" and nudge down so titles don’t crowd
-        fig_sc.for_each_annotation(
-            lambda a: a.update(
-                text=pd.Timestamp(2001, int(a.text.split("=")[-1]), 1).strftime("%b"),
-                y=a.y - 0.03
-            )
-        )
-        fig_sc.update_layout(
-            legend=dict(orientation="h", x=0, xanchor="left", y=1.08, yanchor="bottom"),
-            margin=dict(t=105, b=70, l=50, r=30),
-        )
-        cname = get_clean_city_name().replace(" ", "_")
-        st.plotly_chart(fig_sc, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_temperature_scatter", "format": "png", "scale": 2}, "displayModeBar": True})
-
-
-def render_heatmap_page_deprecated():
+def render_heatmap_page():
     cdf = st.session_state.get("cdf")
-    effective_page = st.session_state.get("nav_page")
-    col = "drybulb"
     if cdf is None: return
+    _render_heatmap(cdf, "drybulb", "Annual Heatmap (Day × Hour)", "°C", "RdYlBu_r")
 
-    if True: # effective_page check handled in main
-        # ==================== HEATMAP ====================
-        st.markdown("---")
-        # Dynamic header with location
-        location_label = get_clean_city_name()
-        st.markdown(f"<h4>{location_label} – Annual Heatmap (Day × Hour)</h4>", unsafe_allow_html=True)
-        st.caption(
-            "Rows track calendar days and columns track hours, so warm streaks, cold snaps, and "
-            "overnight recovery patterns appear instantly. Use it to quickly locate persistent "
-            "outliers before drilling into hourly tables."
-        )
-        tmp = pd.DataFrame({"doy": cdf.index.dayofyear, "hour": cdf.index.hour, "val": cdf[col]}).dropna()
-        mat = tmp.pivot_table(index="doy", columns="hour", values="val", aggfunc="mean").sort_index()
-        import plotly.express as px
-        fig_hm = px.imshow(
-            mat.values, origin="lower", aspect="auto",
-            labels=dict(x="Hour", y="Day", color=("°C" if col=="drybulb" else "%")),
-            height=350, color_continuous_scale=("RdYlBu_r" if col=="drybulb" else "Blues")
-        )
-        fig_hm.update_xaxes(side="bottom")
-        st.plotly_chart(fig_hm, use_container_width=True)
+def render_humidity_page():
+    cdf = st.session_state.get("cdf")
+    if cdf is None: return
+    if "relhum" not in cdf:
+        st.info("This EPW has no Relative Humidity column.")
+        return
+    _render_bar_chart(cdf, "relhum", "Humidity (Bar Chart)", "Relative Humidity (%)", "dodgerblue", "hum_bar")
+    _render_daily_scatter(cdf, "relhum", "Humidity Daily scatter", "Relative Humidity (%)", "dodgerblue", "hum_scat")
+    _render_heatmap(cdf, "relhum", "Humidity Annual Heatmap (Day × Hour)", "%", "Blues")
 # ---------------------- SUN & CLOUDS ----------------------
 
 
@@ -5665,8 +5631,14 @@ def render_solar_page():
 
         plt.show()
 
-            # ===== SUN PATH (render above cloud coverage) =====
+    # ===== SUN PATH (render above cloud coverage) =====
     from datetime import timezone, timedelta
+
+    cdf = st.session_state.get("cdf")
+    header = st.session_state.get("header")
+    if cdf is None or header is None:
+        st.error("No EPW data loaded.")
+        return
 
     # Build timezone from EPW header offset, then a Site from the same header
     loc = header["location"]
@@ -8737,9 +8709,9 @@ def main():
     elif effective_page in ("Temp & Humidity", "🌡️ Temperature & Humidity"):
         # Render all components for this composite page
         render_trends_page()
-        render_humidity_page()
         render_temperature_page()
         render_heatmap_page()
+        render_humidity_page()
         
     elif effective_page == "☀️ Solar Analysis":
         render_solar_page()
