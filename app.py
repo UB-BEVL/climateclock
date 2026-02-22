@@ -1869,27 +1869,6 @@ def _sidebar_filters_fragment(epw_loaded: bool) -> None:
 
         _phase_a_busy = bool(st.session_state.get("is_loading") or st.session_state.get("load_requested"))
         if not _phase_a_busy:
-            st.markdown(
-                """
-                <footer class="bevl-footer" style="
-                    position: fixed;
-                    bottom: 0;
-                    left: 0;
-                    width: 100%;
-                    background: rgba(30, 41, 59, 0.9);
-                    color: white;
-                    text-align: center;
-                    padding: 8px 0;
-                    font-size: 14px;
-                    z-index: 1000;
-                    backdrop-filter: blur(10px);
-                    box-shadow: 0px -2px 10px rgba(0,0,0,0.2);
-                ">
-                    0 Climate Analysis Pro | Powered by BEVL | Version 3.0
-                </footer>
-                """,
-                unsafe_allow_html=True,
-            )
             st.caption("All temperature-derived charts now reflect this additional heat load until you toggle it off.")
 
         model_options = [
@@ -1922,9 +1901,20 @@ def _sidebar_filters_fragment(epw_loaded: bool) -> None:
     base_cdf = st.session_state.get("cdf_raw")
     if base_cdf is not None:
         cdf_adjusted = base_cdf.copy(deep=True)
+        
+        # 1. Apply UHI Bias
         if st.session_state.get("apply_uhi_bias") and "drybulb" in cdf_adjusted.columns:
             delta = float(st.session_state.get("uhi_bias_delta", 1.5))
             cdf_adjusted["drybulb"] = cdf_adjusted["drybulb"] + delta
+            
+        # 2. Apply Month Range Filter (if valid datetime index)
+        m_range = st.session_state.get("month_range", (1, 12))
+        if m_range != (1, 12):
+            if cdf_adjusted.index.tz is None: # Naive or just plain DatetimeIndex
+                cdf_adjusted = cdf_adjusted[(cdf_adjusted.index.month >= m_range[0]) & (cdf_adjusted.index.month <= m_range[1])]
+            else:
+                cdf_adjusted = cdf_adjusted[(cdf_adjusted.index.month >= m_range[0]) & (cdf_adjusted.index.month <= m_range[1])]
+                
         st.session_state.cdf = cdf_adjusted
         st.session_state.comfort_pkg = build_comfort_package(cdf_adjusted)
 
