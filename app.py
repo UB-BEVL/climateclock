@@ -183,10 +183,17 @@ st.markdown(
         [data-testid="stStatusWidget"] {
             display: none !important;
         }
-        /* Constrain sidebar width on wider screens */
-        [data-testid="stSidebar"] {
-            min-width: 250px !important;
-            max-width: 300px !important;
+        
+        /* Force Sidebar Width to be smaller and not draggable past a certain point */
+        section[data-testid="stSidebar"] > div {
+            width: 260px !important;
+            min-width: 260px !important;
+            max-width: 260px !important;
+        }
+        section[data-testid="stSidebar"] {
+            width: 260px !important;
+            min-width: 260px !important;
+            max-width: 260px !important;
         }
     </style>
     """,
@@ -8122,16 +8129,23 @@ def render_sensor_comparison_page():
                     plot_df_resampled = plot_df[["_metric"]].resample('5min').mean(numeric_only=True).reset_index()
                 plot_df = plot_df_resampled
 
+            # Helper to clean up verbose sensor names for the legend
+            import re
+            def clean_sensor_name(name):
+                # Matches patterns like " 2025-12-18 00_30_58 EST (Data EST)" and removes them
+                return re.sub(r'\s+\d{4}-\d{2}-\d{2}\s+\d{2}_\d{2}_\d{2}.*$', '', str(name))
+
             fig_primary = go.Figure()
             for i, sensor in enumerate(selected_sensors):
                 style = SENSOR_STYLES[i % len(SENSOR_STYLES)]
                 sensor_data = plot_df[plot_df[sensor_col] == sensor]
                 if not sensor_data.empty and "_metric" in sensor_data.columns and "_ts" in sensor_data.columns:
+                    display_name = clean_sensor_name(sensor)
                     fig_primary.add_trace(go.Scatter(
                         x=sensor_data["_ts"],
                         y=sensor_data["_metric"],
                         mode="lines",
-                        name=sensor,
+                        name=display_name,
                         line=dict(
                             color=style["color"],
                             width=2.3,
@@ -8139,7 +8153,7 @@ def render_sensor_comparison_page():
                         ),
                         opacity=1.0,
                         showlegend=True,
-                        hovertemplate=f"{sensor}<br>%{{x}}<br>%{{y:.2f}}{unit_str}<extra></extra>"
+                        hovertemplate=f"{display_name}<br>%{{x}}<br>%{{y:.2f}}{unit_str}<extra></extra>"
                     ))
 
             fig_primary.update_layout(
@@ -8189,9 +8203,10 @@ def render_sensor_comparison_page():
                         style = SENSOR_STYLES[i % len(SENSOR_STYLES)]
                         sensor_data = plot_df_dist[plot_df_dist[sensor_col] == sensor]["_metric"].dropna()
                         if not sensor_data.empty:
+                            display_name = clean_sensor_name(sensor)
                             fig_dist.add_trace(go.Histogram(
                                 x=sensor_data, 
-                                name=sensor, 
+                                name=display_name, 
                                 opacity=0.75, 
                                 nbinsx=40,
                                 marker_color=style["color"]
@@ -8247,11 +8262,12 @@ def render_sensor_comparison_page():
                     style = SENSOR_STYLES[i % len(SENSOR_STYLES)]
                     sensor_data = plot_df[plot_df[sensor_col] == sensor]
                     if not sensor_data.empty and "_metric" in sensor_data.columns and "_ts" in sensor_data.columns:
+                        display_name = clean_sensor_name(sensor)
                         fig_secondary.add_trace(go.Scatter(
                             x=sensor_data["_ts"],
                             y=sensor_data["_metric"],
                             mode="lines",
-                            name=sensor,
+                            name=display_name,
                             line=dict(
                                 color=style["color"],
                                 width=2.3,
@@ -8259,7 +8275,7 @@ def render_sensor_comparison_page():
                             ),
                             opacity=1.0,
                             showlegend=True,
-                            hovertemplate=f"{sensor}<br>%{{x}}<br>%{{y:.2f}}{unit_str}<extra></extra>"
+                            hovertemplate=f"{display_name}<br>%{{x}}<br>%{{y:.2f}}{unit_str}<extra></extra>"
                         ))
 
                 fig_secondary.update_layout(
