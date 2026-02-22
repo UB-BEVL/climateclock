@@ -24,6 +24,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 import pvlib
 # local modules
 from metrics import comfort_energy as ce
+import live_sensors as ls
 
 # Patch platform processor to avoid Windows WMI KeyError during h5py/pvlib import
 import platform as _platform
@@ -4895,6 +4896,7 @@ def render_solar_page():
         site: Site,
         date: pd.Timestamp,
         projection: str,
+        month_range: tuple[int, int] = (1, 12),
         show_envelope: bool = True,
         show_analemmas: bool = True,
         hours_for_analemma=range(6, 19),
@@ -4996,6 +4998,7 @@ def render_solar_page():
             # Generate analemma (figure 8) points by taking 1 sample per week at each hour
             year = date.year
             analemma_dates = pd.date_range(start=f"{year}-01-01", end=f"{year}-12-31", freq=f"{analemma_step_days}D", tz=site.tz)
+            analemma_dates = analemma_dates[(analemma_dates.month >= month_range[0]) & (analemma_dates.month <= month_range[1])]
             
             an_sp_all = pvlib.solarposition.get_solarposition(analemma_dates, site.lat, site.lon, altitude=site.elev_m)
             
@@ -5060,8 +5063,11 @@ def render_solar_page():
             xs_hr, ys_hr = project_angular(df_sel["azimuth"].values, df_sel["elevation"].values, projection)
             
             # Plot the selected day path (line behind points)
-            fig.add_trace(go.Scatter(x=xs_hr, y=ys_hr, mode="lines", line=dict(color="rgba(255,255,255,0.4)", width=2, dash="dot"), name=f"{date:%b %d} Path", showlegend=True, hoverinfo="skip"))
-            
+            fig.add_trace(go.Scatter(x=xs_hr, y=ys_hr, mode="lines", line=dict(color="rgba(255,255,255,0.4)", width=2, dash="dot"), name=f"{date:%b %d} Path", showlegend=False, hoverinfo="skip"))
+            if len(xs_hr) > 0:
+                idx_mid = len(xs_hr) // 2
+                fig.add_annotation(x=xs_hr[idx_mid], y=ys_hr[idx_mid], text=f"{date:%b %d}", showarrow=False, font=dict(color="rgba(255,255,255,0.8)", size=10), yshift=12)
+                
             # Plot the data-driven points
             colors = df_sel["color_val"].to_numpy() if "color_val" in df_sel.columns else None
             
@@ -5126,7 +5132,7 @@ def render_solar_page():
                 azimuth = float(az_sel[now_pos])
                 altitude = float(el_sel[now_pos])
                 solar_time = idx_sel[now_pos].strftime("%H:%M")
-                fig.add_trace(go.Scatter(x=[sun_marker_x], y=[sun_marker_y], mode="markers", marker=dict(size=16, color="#ff4d4d", line=dict(width=3, color="rgba(255,255,255,0.7)")), name="Current Sun", showlegend=True,
+                fig.add_trace(go.Scatter(x=[sun_marker_x], y=[sun_marker_y], mode="markers+text", text=["Current Sun"], textposition="top center", textfont=dict(color="#ff4d4d", size=11), marker=dict(size=16, color="#ff4d4d", line=dict(width=3, color="rgba(255,255,255,0.7)")), name="Current Sun", showlegend=False,
                                          hovertemplate=f"Time: {solar_time}<br>Az: {azimuth:.1f}°<br>Alt: {altitude:.1f}°<extra></extra>"))
                 # radial line
                 fig.add_shape(type="line", x0=0, y0=0, x1=sun_marker_x, y1=sun_marker_y, line=dict(color="#ff4d4d", width=2))
@@ -5190,6 +5196,7 @@ def render_solar_page():
     def sunpath_plotly_3d(
         site: Site,
         date: pd.Timestamp,
+        month_range: tuple[int, int] = (1, 12),
         show_rays: bool = True,
         massing=None,
         epw: pd.DataFrame | None = None,
@@ -5852,6 +5859,9 @@ def render_solar_page():
         sc6.markdown("<br>", unsafe_allow_html=True)
         show_labels = sc6.checkbox("Show labels on markers", value=True)
         
+        st.markdown("**Filters**")
+        month_range = st.slider("Month Range", 1, 12, (1, 12))
+        
         st.markdown("**3D Camera View**")
         view_state_raw = st.radio("3D Camera View", ["Default", "Top", "South", "East"], horizontal=True, label_visibility="collapsed")
         view_mapping = {"Default": "default", "Top": "top", "South": "south", "East": "east"}
@@ -5865,6 +5875,7 @@ def render_solar_page():
 
     fig2d, info_dict = sunpath_plotly_2d(
         site, sel_ts, proj,
+        month_range=month_range,
         epw=epw_df,
         color_var=color_var,
         show_labels=show_labels,
@@ -5902,6 +5913,7 @@ def render_solar_page():
 
         fig3d = sunpath_plotly_3d(
             site, sel_ts,
+            month_range=month_range,
             show_rays=True,
             massing=[(-0.2,-0.1,0.2,0.3,0.0,0.25)],
             epw=epw_df,
@@ -5984,7 +5996,7 @@ def render_solar_page():
     tz   = site.tz
 
     # (A) Monthly arcs for the 21st of each month (daily path; points hourly)
-    for m in range(1, 13):
+    for m in range(month_range[0], month_range[1] + 1):
         day = 21 if m != 2 else 20  # avoid Feb-31 style pitfalls
         ts_local = pd.date_range(pd.Timestamp(year, m, day, tz=tz), periods=24, freq="1H")
         az, alt, _ = solar_pos(ts_local.tz_convert("UTC"))
@@ -5992,24 +6004,33 @@ def render_solar_page():
         if not mask.any():
             continue
         x = az[mask]; y = alt[mask]
+        
+        # Add a text label to the highest altitude point for this month's arc
+        lbl_idx = np.argmax(y)
+        month_lbls = [pd.Timestamp(year, m, day).strftime("%b")] if show_hour_labels else [""]
+        text_array = [""] * len(x)
+        text_array[lbl_idx] = pd.Timestamp(year, m, day).strftime("%b")
+
         if color_mode == "temperature":
             temps = _temps_for_index(ts_local[mask])
             tr = go.Scatter(
-                x=x, y=y, mode="lines+markers",
+                x=x, y=y, mode="lines+markers+text",
+                text=text_array, textposition="top center", textfont=dict(color="rgba(200,200,200,0.9)", size=10),
                 marker=dict(size=4, color=temps, colorscale="RdYlBu_r",
                             cmin=-10, cmax=35, showscale=False),
                 line=dict(width=2, color="rgba(200,200,200,0.75)"),
                 name=pd.Timestamp(year, m, day).strftime("%b 21"),
-                showlegend=(m in (6, 12))  # keep legend compact
+                showlegend=False
             )
         else:
             col = _season_color(m)
             tr = go.Scatter(
-                x=x, y=y, mode="lines+markers",
+                x=x, y=y, mode="lines+markers+text",
+                text=text_array, textposition="top center", textfont=dict(color=col, size=10),
                 marker=dict(size=4, color=col),
                 line=dict(width=2, color=col),
                 name=pd.Timestamp(year, m, day).strftime("%b 21"),
-                showlegend=(m in (6, 12))
+                showlegend=False
             )
         month_traces_cart.append(tr)
 
@@ -6023,19 +6044,23 @@ def render_solar_page():
     az_su, alt_su = _daily_arc(6, 21)
     az_wi, alt_wi = _daily_arc(12, 21)
     if len(az_su) and len(az_wi):
-        # We can't form a polygon in (az,alt) reliably (az wraps), so draw as two filled ribbons near horizon:
-        # Instead, add two reference lines and a semi-transparent band near the lower arc
         envelope_cart.append(go.Scatter(x=az_su, y=alt_su, mode="lines",
                                         line=dict(width=2.6, color="#E67E22"),
-                                        name="Summer solstice"))
+                                        name="Summer solstice", showlegend=False))
+        # Add label at noon
+        envelope_cart.append(go.Scatter(x=[az_su[len(az_su)//2]], y=[alt_su[len(az_su)//2]], mode="text", text=["Summer Solstice"], textposition="top center", textfont=dict(color="#E67E22", size=10), hoverinfo="skip", showlegend=False))
+        
         envelope_cart.append(go.Scatter(x=az_wi, y=alt_wi, mode="lines",
                                         line=dict(width=2.6, color="#3498DB"),
-                                        name="Winter solstice"))
+                                        name="Winter solstice", showlegend=False))
+        envelope_cart.append(go.Scatter(x=[az_wi[len(az_wi)//2]], y=[alt_wi[len(az_wi)//2]], mode="text", text=["Winter Solstice"], textposition="top center", textfont=dict(color="#3498DB", size=10), hoverinfo="skip", showlegend=False))
 
     # (C) Analemmas (fixed clock hour over the year)
     if show_analemmas:
         hours = range(6, 19)  # 6..18
+        # Filter days based on month slider
         days  = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="7D", tz=tz)
+        days = days[(days.month >= month_range[0]) & (days.month <= month_range[1])]
         for hh in hours:
             idx = [pd.Timestamp(d.date(), tz=tz) + pd.Timedelta(hours=hh) for d in days]
             idx = pd.DatetimeIndex(idx)
@@ -6043,12 +6068,20 @@ def render_solar_page():
             m = alt > 0
             if not m.any(): 
                 continue
+            
+            # Label at highest altitude of analemma
+            lbl_idx = np.argmax(alt[m])
+            analemma_text = [""] * len(az[m])
+            if hh in (6, 9, 12, 15, 18):
+                analemma_text[lbl_idx] = f"{hh:02d}:00"
+
             analemma_cart.append(
                 go.Scatter(
-                    x=az[m], y=alt[m], mode="lines",
+                    x=az[m], y=alt[m], mode="lines+text",
+                    text=analemma_text, textposition="top center", textfont=dict(color="rgba(100,120,200,0.8)", size=9),
                     line=dict(width=1, dash="dot", color="rgba(60,80,160,0.55)"),
                     name=(f"{hh:02d}:00" if hh in (6, 12, 18) else None),
-                    showlegend=hh in (6, 12, 18)
+                    showlegend=False
                 )
             )
 
@@ -6279,6 +6312,9 @@ def render_psychrometrics_page():
     # if cdf is None: return # handled by check inside or main
     
     # ------- Controls -------
+    st.markdown("**Filters**")
+    month_range = st.slider("Month Range", 1, 12, (1, 12), key="psy_month_range")
+    
     cA, cB = st.columns([1.2, 1])
     auto_zoom = cA.checkbox("Auto zoom to EPW range", value=True, help="Fit axes to EPW hourly temperature and absolute humidity range.")
     show_enthalpy = cB.checkbox("Show enthalpy & v lines", value=True)
@@ -6343,6 +6379,12 @@ def render_psychrometrics_page():
         P_kPa = 101.325
 
     dfp = cdf[["drybulb", "relhum"]].dropna().copy()
+    if dfp.index.tz is None: # Saftey depending on how cdf was parsed
+        dfp = dfp[ (dfp.index.month >= month_range[0]) & (dfp.index.month <= month_range[1]) ]
+    else:
+        # DatetimeIndex has month attribute
+        dfp = dfp[ (dfp.index.month >= month_range[0]) & (dfp.index.month <= month_range[1]) ]
+        
     if dfp.empty:
         st.info("No points to plot.")
         st.stop()
@@ -6430,15 +6472,23 @@ def render_psychrometrics_page():
     fig_psy.add_trace(go.Scatter(
         x=T_axis, y=y_sat_gpkg, mode="lines",
         line=dict(width=2.5, color="rgba(120,120,120,1.0)"),
-        name="Saturation (100% RH)", hovertemplate="Tdb %{x:.1f}°C<br>Abs %{y:.2f} g/kg<extra></extra>"
+        name="Saturation (100% RH)", hovertemplate="Tdb %{x:.1f}°C<br>Abs %{y:.2f} g/kg<extra></extra>",
+        showlegend=False
     ))
+    # Inline label for Saturation
+    valid_sat = (y_sat_gpkg <= Y_MAX) & (T_axis <= X_MAX)
+    if valid_sat.any():
+        idx = np.where(valid_sat)[0][-1]
+        fig_psy.add_annotation(x=T_axis[idx], y=y_sat_gpkg[idx], text="Saturation (100% RH)",
+                               xanchor="right", yanchor="bottom", showarrow=False,
+                               font=dict(size=11, color="rgba(220,220,220,0.95)"))
 
     # RH isolines (dashed gray)
     for rh in rh_list:
         fig_psy.add_trace(go.Scatter(
             x=T_axis, y=rh_curves_gpkg[rh], mode="lines",
             line=dict(width=1.2, dash="dot", color="rgba(120,120,120,0.8)"),
-            name=f"{rh}% RH", showlegend=(rh in (20,40,60,80)),
+            name=f"{rh}% RH", showlegend=False,
             hovertemplate=f"{rh}% RH<br>Tdb %{{x:.1f}}°C<br>Abs %{{y:.2f}} g/kg<extra></extra>"
         ))
 
@@ -6450,16 +6500,29 @@ def render_psychrometrics_page():
             fig_psy.add_trace(go.Scatter(
                 x=T_axis, y=y_line, mode="lines",
                 line=dict(width=1.25, dash="dash", color="rgba(255,165,0,0.85)"),
-                name=(f"h={h} kJ/kg"), hoverinfo="skip"
+                name=(f"h={h} kJ/kg"), hoverinfo="skip", showlegend=False
             ))
+            valid = (y_line >= Y_MIN) & (y_line <= Y_MAX - 1) & (T_axis >= X_MIN + 1) & (T_axis <= X_MAX - 1)
+            if valid.any():
+                idx = np.where(valid)[0][-1] # rightmost valid
+                fig_psy.add_annotation(x=T_axis[idx], y=y_line[idx], text=f"h={h}",
+                                       xanchor="left", yanchor="bottom", showarrow=False,
+                                       font=dict(size=10, color="rgba(255,180,0,0.85)"))
+
         for v in v_levels:
             w_line = w_from_specific_volume(T_axis, v, P_kPa)
             y_line = abs_hum_gpkg_from_w(w_line)
             fig_psy.add_trace(go.Scatter(
                 x=T_axis, y=y_line, mode="lines",
                 line=dict(width=1.25, dash="dot", color="rgba(90,140,255,0.85)"),
-                name=(f"v={v:.2f} m3/kg"), hoverinfo="skip"
+                name=(f"v={v:.2f} m3/kg"), hoverinfo="skip", showlegend=False
             ))
+            valid = (y_line >= Y_MIN + 1) & (y_line <= Y_MAX - 1) & (T_axis >= X_MIN + 1) & (T_axis <= X_MAX - 1)
+            if valid.any():
+                idx = np.where(valid)[0][0] # leftmost valid
+                fig_psy.add_annotation(x=T_axis[idx], y=y_line[idx], text=f"v={v:.2f} m³/kg",
+                                       xanchor="left", yanchor="bottom", showarrow=False,
+                                       font=dict(size=10, color="rgba(120,170,255,0.85)"))
 
     # RH % labels along the right margin (like PVSyst look)
     for rh in rh_list:
@@ -6476,6 +6539,7 @@ def render_psychrometrics_page():
         x=T_pts, y=Y_pts_gpkg, mode="markers",
         marker=dict(size=4, opacity=0.35, color="royalblue"),
         name="Hourly conditions",
+        showlegend=False,
         customdata=custom,
         hovertemplate=(
             "<b>Hourly</b><br>"
@@ -6525,7 +6589,6 @@ def render_psychrometrics_page():
             tr.line.width = 0.8
             tr.line.color = "rgba(255,255,255,0.28)"
             tr.hoverinfo = "skip"
-            tr.showlegend = (n in {"20% RH", "40% RH", "60% RH", "80% RH"})
 
         if n.startswith("h="):  # enthalpy
             tr.line.width = 1.0
@@ -6548,18 +6611,9 @@ def render_psychrometrics_page():
 
 
     fig_psy.update_layout(
-        margin=dict(l=90, r=280, t=70, b=80),  # extra right for the legend
+        margin=dict(l=90, r=40, t=70, b=80),  # extra right for the legend removed
         height=680,
-        legend=dict(
-            orientation="v",
-            x=1.18, y=1.0,
-            xanchor="left", yanchor="top",
-            bgcolor="rgba(0,0,0,0)",
-            bordercolor="rgba(255,255,255,0.20)",
-            borderwidth=0.8,
-            itemclick=False,
-            itemdoubleclick=False
-        ),
+        showlegend=False,
         hovermode="closest",
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
