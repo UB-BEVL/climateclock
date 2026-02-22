@@ -3056,15 +3056,36 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
             # Plotly default: 0 at bottom. So "reversed" makes 0 top.
         )
         
+        # Calculate percentage stats for the description
+        total_valid_hours = float(np.sum(~np.isnan(pivot_plot_slice.values)))
+        description = ""
+        if total_valid_hours > 0:
+            if strip_name == "Dry Bulb Temperature":
+                # Assuming Comfort Zone is 20°C to 26.6°C (bin index 2)
+                # The data is binned 0-4. Bin 2 is Comf. Zone.
+                comf_hours = np.sum(pivot_plot_slice.values == 2)
+                pct = (comf_hours / total_valid_hours) * 100
+                description = f"({pct:.1f}% of hours in Comf. Zone)"
+            elif strip_name == "Solar Radiation":
+                # Bin 3 is 500-700, Bin 4 is >700
+                high_rad_hours = np.sum(pivot_plot_slice.values >= 3)
+                pct = (high_rad_hours / total_valid_hours) * 100
+                description = f"({pct:.1f}% of hours > 500 W/m²)"
+            elif strip_name == "Wind Speed":
+                # Assuming >4.5 m/s is the highest bin (Bin 2 based on provided config)
+                high_wind_hours = np.sum(pivot_plot_slice.values == 2)
+                pct = (high_wind_hours / total_valid_hours) * 100
+                description = f"({pct:.1f}% of hours > 4.5 m/s)"
+
         # Add Title Annotation BELOW the heatmap
         fig.add_annotation(
             xref=f"x{row if row > 1 else ''} domain",
             yref=f"y{row if row > 1 else ''} domain",
             x=0.0, 
             y=-0.15, # Position below, moved left
-            text=strip_name.upper() + ": description placeholder", # You can update descriptions later
+            text=f"{strip_name.upper()}: {description}", 
             showarrow=False,
-            font=dict(size=10, color="#333333", weight="bold"),
+            font=dict(size=10, color="#d1d5db", weight="bold"),
             xanchor="left",
             yshift=0
         )
