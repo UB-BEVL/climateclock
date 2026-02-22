@@ -1691,8 +1691,6 @@ SECONDARY_CSS = r'''
 .map-wrapper { margin-top: 16px; }
 .hairline { height: 1px; background: rgba(255,255,255,0.08); margin: 12px 0; }
 .tab-guard { margin: 26px 0; }
-[data-baseweb="select"] { min-height: 36px; }
-[data-baseweb="select"] > div { padding-top: 4px; padding-bottom: 4px; }
 .stAlert { background: rgba(17,24,39,0.85); border: 1px solid rgba(255,255,255,0.08); color: #d5dbe7; }
 
 .landing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
@@ -3882,17 +3880,14 @@ def render_dashboard_page():
                         # Downloads reflecting current thresholds
                         city_clean = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
                         clean_loc = city_clean
-                        c1d, c2d = st.columns(2)
-                        with c1d:
-                            try:
-                                png_bytes = fig.to_image(format="png", scale=2, width=1200, height=800)
-                                st.download_button(label="📥 Download heatmaps as PNG", data=png_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.png", mime="image/png")
-                            except Exception:
-                                html_bytes = fig.to_html(include_plotlyjs='cdn').encode('utf-8')
-                                st.download_button(label="📥 Download heatmaps (HTML)", data=html_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.html", mime="text/html")
-
-                        with c2d:
-                            try:
+                        try:
+                            html_bytes = fig.to_html(include_plotlyjs='cdn').encode('utf-8')
+                            st.download_button(label="📥 Download heatmaps (HTML)", data=html_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.html", mime="text/html")
+                        except Exception:
+                            pass
+                        
+                        # Data CSV Download
+                        try:
                                 export_df = cdf.copy()
                                 long_records = []
                                 thresholds_json = json.dumps(thresholds_state)
@@ -4477,20 +4472,11 @@ def render_trends_page():
     st.plotly_chart(fig, use_container_width=True)
 
     # Download buttons for Trends
-    d1, d2 = st.columns(2)
-    clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
-    with d1:
-        try:
-            png_bytes = fig.to_image(format="png", width=1400, height=800, scale=2)
-            st.download_button("📥 Download Trends (PNG)", png_bytes, f"{clean_loc}_trends_chart.png", "image/png")
-        except Exception as e:
-            st.download_button("📥 Download Trends (PNG) - Unavailable", b"", disabled=True, help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
-    with d2:
-        try:
-            html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")
-            st.download_button("📥 Download Trends (HTML)", html_bytes, f"{clean_loc}_trends_chart.html", "text/html")
-        except Exception:
-            pass
+    try:
+        html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")
+        st.download_button("📥 Download Trends (interactive HTML)", html_bytes, f"{clean_loc}_trends_chart.html", "text/html")
+    except Exception:
+        pass
 
 
 # ------------- GENERIC CHART HELPERS -------------
@@ -4528,17 +4514,9 @@ def _render_bar_chart(cdf, col, title_suffix, y_label, color, key_suffix):
     )
     st.plotly_chart(fig, use_container_width=True)
     
-    d1, d2 = st.columns(2)
-    clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
-    with d1:
-        try:
-            st.download_button(f"📥 Download {title_suffix} (PNG)", fig.to_image(format="png", width=1200, height=600, scale=2), f"{clean_loc}_{col}_chart.png", "image/png", key=f"dl_{col}_png_{key_suffix}")
-        except Exception as e: 
-            st.download_button(f"📥 Download {title_suffix} (PNG) - Unavailable", b"", disabled=True, key=f"dl_{col}_png_{key_suffix}_err", help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
-    with d2:
-        try:
-            st.download_button(f"📥 Download {title_suffix} (HTML)", fig.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{clean_loc}_{col}_chart.html", "text/html", key=f"dl_{col}_html_{key_suffix}")
-        except Exception: pass
+    try:
+        st.download_button(f"📥 Download {title_suffix} (interactive HTML)", fig.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{clean_loc}_{col}_chart.html", "text/html", key=f"dl_{col}_html_{key_suffix}")
+    except Exception: pass
 
 def _render_daily_scatter(cdf, col, title_suffix, y_label, line_color, key_suffix):
     import plotly.express as px
@@ -4587,16 +4565,9 @@ def _render_daily_scatter(cdf, col, title_suffix, y_label, line_color, key_suffi
     cname = get_clean_city_name().replace(" ", "_")
     st.plotly_chart(fig_sc, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_{col}_scatter", "format": "png", "scale": 2}, "displayModeBar": True})
 
-    d1, d2 = st.columns(2)
-    with d1:
-        try:
-            st.download_button(f"📥 Download {title_suffix} (PNG)", fig_sc.to_image(format="png", width=1400, height=800, scale=2), f"{cname}_{col}_scatter.png", "image/png", key=f"dl_{col}_scat_png_{key_suffix}")
-        except Exception as e: 
-            st.download_button(f"📥 Download {title_suffix} (PNG) - Unavailable", b"", disabled=True, key=f"dl_{col}_scat_png_{key_suffix}_err", help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
-    with d2:
-        try:
-            st.download_button(f"📥 Download {title_suffix} (HTML)", fig_sc.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{cname}_{col}_scatter.html", "text/html", key=f"dl_{col}_scat_html_{key_suffix}")
-        except Exception: pass
+    try:
+        st.download_button(f"📥 Download {title_suffix} (interactive HTML)", fig_sc.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{cname}_{col}_scatter.html", "text/html", key=f"dl_{col}_scat_html_{key_suffix}")
+    except Exception: pass
 
 
 def _render_heatmap(cdf, col, title_suffix, y_label, color_scale):
@@ -4618,17 +4589,9 @@ def _render_heatmap(cdf, col, title_suffix, y_label, color_scale):
     fig_hm.update_xaxes(side="bottom")
     st.plotly_chart(fig_hm, use_container_width=True)
 
-    d1, d2 = st.columns(2)
-    clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
-    with d1:
-        try:
-            st.download_button(f"📥 Download {title_suffix} (PNG)", fig_hm.to_image(format="png", width=1200, height=600, scale=2), f"{clean_loc}_{col}_heatmap.png", "image/png", key=f"dl_{col}_hm_png")
-        except Exception as e: 
-            st.download_button(f"📥 Download {title_suffix} (PNG) - Unavailable", b"", disabled=True, key=f"dl_{col}_hm_png_err", help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
-    with d2:
-        try:
-            st.download_button(f"📥 Download {title_suffix} (HTML)", fig_hm.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{clean_loc}_{col}_heatmap.html", "text/html", key=f"dl_{col}_hm_html")
-        except Exception: pass
+    try:
+        st.download_button(f"📥 Download {title_suffix} (interactive HTML)", fig_hm.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{clean_loc}_{col}_heatmap.html", "text/html", key=f"dl_{col}_hm_html")
+    except Exception: pass
 
 def render_temperature_page():
     cdf = st.session_state.get("cdf")
@@ -6651,21 +6614,11 @@ def render_psychrometrics_page():
         },
     )
 
-    # Download buttons for Psychrometric Chart
-    d1, d2 = st.columns(2)
-    with d1:
-        try:
-            # Explicitly safe dimensions to prevent memory crash
-            png_bytes = fig_psy.to_image(format="png", width=1200, height=900, scale=2)
-            st.download_button("📥 Download Chart (PNG)", png_bytes, f"{clean_loc}_psychrometric_chart.png", "image/png", key="dl_psy_png")
-        except Exception:
-            pass
-    with d2:
-        try:
-            html_bytes = fig_psy.to_html(include_plotlyjs="cdn").encode("utf-8")
-            st.download_button("📥 Download Chart (HTML)", html_bytes, f"{clean_loc}_psychrometric_chart.html", "text/html", key="dl_psy_html")
-        except Exception:
-            pass
+    try:
+        html_bytes = fig_psy.to_html(include_plotlyjs="cdn").encode("utf-8")
+        st.download_button("📥 Download Chart (interactive HTML)", html_bytes, f"{clean_loc}_psychrometric_chart.html", "text/html", key="dl_psy_html")
+    except Exception:
+        pass
 
 
 def render_live_data_page():
