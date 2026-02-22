@@ -3126,7 +3126,7 @@ def render_dashboard_page():
         )
 
         loc = header["location"]
-        overview_tab, comfort_tab, diagnostics_tab, heatmaps_tab, temp_hum_tab, solar_tab, psych_tab, raw_data_tab = st.tabs([
+        overview_tab, comfort_tab, diagnostics_tab, heatmaps_tab, temp_hum_tab, solar_tab, psych_tab, wind_tab, raw_data_tab = st.tabs([
             "Overview & Stats",
             "Comfort & Loads",
             "Data Quality",
@@ -3134,6 +3134,7 @@ def render_dashboard_page():
             "Temp & Humidity",
             "Solar Analysis",
             "Psychrometrics",
+            "Wind",
             "Raw Data",
         ])
 
@@ -3941,6 +3942,9 @@ def render_dashboard_page():
             
         with psych_tab:
             render_psychrometrics_page()
+            
+        with wind_tab:
+            render_wind_page()
             
         with raw_data_tab:
             render_raw_data_page()
@@ -6664,6 +6668,134 @@ def render_psychrometrics_page():
             st.download_button("📥 Download Chart (HTML)", html_bytes, f"{clean_loc}_psychrometric_chart.html", "text/html", key="dl_psy_html")
         except Exception:
             pass
+
+
+def create_wind_rose(df):
+    df = df.copy()
+
+    # Get proper columns for wind speed and direction:
+    wind_spd_col = get_metric_column(df, ["wind_speed", "windspeed", "ws", "wspd"])
+    wind_dir_col = get_metric_column(df, ["wind_direction", "winddir", "wd", "wdir", "wind_dir"])
+
+    if not wind_spd_col or not wind_dir_col:
+        return None
+
+    # Convert wind speed from m/s to mph
+    df.loc[:, "Speed_mph"] = df[wind_spd_col] * 2.23694
+
+    # Define direction bins
+    dir_bins = np.arange(0, 361, 22.5)
+    dir_labels = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+
+    # Dynamically create speed bins based on data
+    max_speed = df["Speed_mph"].max()
+    if pd.isna(max_speed) or max_speed == 0:
+        max_speed = 10 # fallback
+
+    num_bins = 6
+    speed_bins = np.linspace(0, max_speed, num_bins + 1)
+    speed_labels = [f"{speed_bins[i]:.1f}-{speed_bins[i + 1]:.1f}" for i in range(len(speed_bins) - 1)]
+
+    # Categorize data
+    df.loc[:, "dir_cat"] = pd.cut(
+        df[wind_dir_col], bins=dir_bins, labels=dir_labels, include_lowest=True, ordered=False,
+    )
+    df.loc[:, "speed_cat"] = pd.cut(
+        df["Speed_mph"], bins=speed_bins, labels=speed_labels, include_lowest=True, ordered=False,
+    )
+
+    # Count occurrences and calculate percentages
+    wind_data = df.groupby(["dir_cat", "speed_cat"], observed=True).size().unstack(fill_value=0)
+    total_count = wind_data.sum().sum()
+    if total_count == 0: return None
+    wind_percentages = wind_data / total_count * 100
+
+    # Create wind rose
+    fig = go.Figure()
+    colors = px.colors.diverging.RdYlBu[::-1][: len(speed_labels)]
+
+    for i, speed_cat in enumerate(speed_labels):
+        fig.add_trace(
+            go.Barpolar(
+                r=wind_percentages[speed_cat],
+                theta=dir_labels,
+                name=f"{speed_cat} mph",
+                marker_color=colors[i],
+                marker_line_width=1,
+                opacity=0.8,
+                hovertemplate="Direction: %{theta}<br>Speed: " + speed_cat + " mph<br>Percentage: %{r:.1f}%<extra></extra>",
+            )
+        )
+
+    max_pct = wind_percentages.max().max()
+    if pd.isna(max_pct): max_pct = 10
+    
+    tick_step = max(5, int(max_pct / 5)) if max_pct >= 5 else 1
+
+    fig.update_layout(
+        title={"text": "Wind Rose Diagram", "x": 0.5, "xanchor": "center", "yanchor": "top"},
+        font_size=12, legend_font_size=10,
+        polar=dict(
+            radialaxis=dict(
+                visible=True, range=[0, max_pct * 1.05], ticksuffix="%", tickmode="array",
+                tickvals=np.arange(0, max_pct + tick_step, tick_step),
+                ticktext=[f"{i}%" for i in range(0, int(max_pct + tick_step), tick_step)],
+            ),
+            angularaxis=dict(direction="clockwise", rotation=90),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        height=620, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
+        margin=dict(t=80, b=80, l=40, r=40)
+    )
+
+    return fig
+
+def render_wind_page():
+    cdf = st.session_state.get("cdf")
+    if cdf is None or cdf.empty:
+        st.info("No weather data available to construct the Wind dashboard.")
+        return
+
+    location_label = get_clean_city_name()
+    st.markdown(f"<h3>{location_label} – Wind Analysis</h3>", unsafe_allow_html=True)
+    st.caption("Understand prevalent wind patterns, magnitude, and directional distribution across the selected period.")
+    
+    wind_spd_col = get_metric_column(cdf, ["wind_speed", "windspeed", "ws", "wspd"])
+    wind_dir_col = get_metric_column(cdf, ["wind_direction", "winddir", "wd", "wdir", "wind_dir"])
+
+    if not wind_spd_col or not wind_dir_col:
+        st.warning(f"This EPW file is missing required wind columns (Speed or Direction). Cannot generate Wind Rose.")
+        return
+
+    df_clean = cdf.dropna(subset=[wind_spd_col, wind_dir_col])
+    if df_clean.empty:
+        st.warning("All wind records are empty or invalid.")
+        return
+
+    # Using the single function since it perfectly generalizes to full-year plotting
+    fig = create_wind_rose(df_clean)
+    
+    if fig:
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+        
+        # Add a download button for the wind rose
+        d1, d2 = st.columns(2)
+        clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
+        with d1:
+            try:
+                png_bytes = fig.to_image(format="png", width=800, height=800, scale=2)
+                st.download_button("📥 Download Wind Rose (PNG)", png_bytes, f"{clean_loc}_wind_rose.png", "image/png")
+            except Exception as e:
+                st.download_button("📥 Download Wind Rose (PNG) - Unavailable", b"", disabled=True, help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
+        with d2:
+            try:
+                html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")
+                st.download_button("📥 Download Wind Rose (HTML)", html_bytes, f"{clean_loc}_wind_rose.html", "text/html")
+            except Exception:
+                pass
+    else:
+        st.warning("Not enough valid points to construct a Wind Rose.")
 
 
 def render_live_data_page():
