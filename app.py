@@ -4936,7 +4936,7 @@ def render_solar_page():
         # Altitude concentric rings (10..80)
         for alt in range(10, 90, 10):
             x0, y0 = project_angular(np.array([0.0]), np.array([alt]), projection)
-            r = float(np.hypot(x0, y0))
+            r = float(np.hypot(x0[0], y0[0]))
             shapes.append(dict(type="circle", xref="x", yref="y", x0=-r, y0=-r, x1=r, y1=r, line=dict(width=0.7, color="rgba(255,255,255,0.25)", dash="dot")))
 
         # Azimuth ticks (every 10°; major every 90°)
@@ -4967,7 +4967,7 @@ def render_solar_page():
         # Altitude ring labels (placed toward southern rim for readability)
         for alt in range(10, 90, 10):
             x0, y0 = project_angular(np.array([0.0]), np.array([alt]), projection)
-            r = float(np.hypot(x0, y0))
+            r = float(np.hypot(x0[0], y0[0]))
             fig.add_trace(go.Scatter(x=[0.0], y=[-r], text=[f"{alt}°"], mode="text", showlegend=False, hoverinfo="skip",
                                      textfont=dict(size=11, color="#94a3b8")))
 
