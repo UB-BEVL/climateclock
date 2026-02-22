@@ -1831,8 +1831,7 @@ def render_landing_hero():
 
 
 
-@st.fragment
-def _sidebar_filters_fragment(epw_loaded: bool) -> None:
+def render_sidebar_filters(epw_loaded: bool) -> None:
     st.markdown("### Filters and units")
     with st.expander("Filters and units", expanded=False):
         st.caption("Refine the analysis sandbox. Settings persist for this session.")
@@ -2026,7 +2025,7 @@ def render_sidebar():
             st.session_state["nav_page"] = chosen_page
             _rerun()
 
-        _sidebar_filters_fragment(epw_loaded)
+        render_sidebar_filters(epw_loaded)
 
         st.divider()
         st.markdown("### 🔧 Troubleshooting")
@@ -8968,8 +8967,8 @@ def main():
             <div style="opacity:0.6; font-size: 0.85rem">
                 Research-grade tools for the built environment.
                 <br/>
-                <a href="http://ap.buffalo.edu/bevl" target="_blank" style="color:inherit;text-decoration:underline;">Visit Lab</a> &bull; 
-                <a href="#" style="color:inherit;text-decoration:underline;">Documentation</a>
+                <a href="https://archplan.buffalo.edu/research/research-centers/bevl.html" target="_blank" style="color:inherit;text-decoration:underline;">Visit Lab</a> &bull; 
+                <a href="https://github.com/UB-BEVL/climateclock/blob/main/README.md" target="_blank" style="color:inherit;text-decoration:underline;">Documentation</a>
             </div>
         </div>
         """,
