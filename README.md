@@ -1,78 +1,86 @@
-Climate Analysis Pro - Feature Overview
-======================================
+# Climate Analysis Pro - Detailed Documentation
+=============================================
 
-Purpose
--------
-Streamlit-based weather/EPW exploration with station search, quick picks, interactive map, uploads, and analysis tabs.
+## Purpose
+Climate Analysis Pro is a comprehensive, Streamlit-based web application designed for built-environment professionals, architects, and researchers. It allows users to explore hourly weather data (EPW files) through interactive visualizations, thermal comfort metrics, and solar analysis. 
 
-Key Flows
----------
-1) Station search (type-ahead)
-   - Large search input filters stations live by city/state/country/ISO3/station ID/source/period.
-   - Shows top matches with human-friendly labels (e.g., "Buffalo Greater, NY, United States (WMO 725280, TMY, 2007-2021)").
-   - Selecting a match stores the full station row in session_state (selected_station) and stages it for loading.
+The application provides a "Research-grade sandbox" to evaluate climates globally, either by searching a live database of over 30,000 WMO weather stations or by uploading custom `.epw` / `.zip` files.
 
-2) Quick-pick buttons
-   - Four shortcut stations (Buffalo/Denver/Chicago/Phoenix) prefill station metadata and load immediately.
+---
 
-3) Interactive map
-   - Plotly scatter map of all stations; clicking a point stages and loads that station.
+## 1. Application Layout & Navigation
+The application is structured into a main visualization area and a fixed sidebar for global controls.
 
-4) Sidebar upload
-   - EPW/ZIP upload; auto extraction of EPWs from ZIPs; optional pick if multiple EPWs inside.
+### Sidebar Controls
+These filters act globally, meaning changes here instantly recalculate the underlying dataset and update all charts simultaneously.
+* **Navigation Menu**: Switch between different analysis dashboards (e.g., Dashboard, Temperature, Solar).
+* **Temperature Units**: Toggle between Celsius (°C) and Fahrenheit (°F).
+* **Focus Comfort Threshold**: A user-defined "Overheating" setpoint. All hours exceeding this temperature are tallied and displayed across the app as a custom heat load metric.
+* **Urban Heat Island (UHI) Bias**: A toggle and slider to artificially inflate the dry-bulb temperature data by a fixed delta (e.g., +1.5°C). This simulates the warming effect of dense urban environments.
+* **Month Range**: Restrict all datasets and visualizations to a specific time of year (e.g., Months 6-8 for Summer only).
 
-5) Current selection panel
-   - Displays the friendly label for the loaded station or uploaded EPW, plus period/source.
+---
 
-6) Analysis tabs
-   - Multiple pages (Dashboard, Temperature/Humidity, Solar, Psychrometrics, Live vs EPW, Raw Data, Short-Term Prediction, Future Climate) rendered after a station or EPW is loaded.
+## 2. Terminology & Core Metrics
+The application relies on several standard meteorological and building-science metrics.
 
- Main Modules in app.py
- ----------------------
- - Styling: PRIMARY_CSS/SECONDARY_CSS inject dark theme; nav uses styled horizontal radio buttons.
- - Loaders: load_station_index() normalizes station records (lat/lon, URLs, period, heating/cooling db), parses raw_id into country/state/city/station_id/source, cleans NaNs, and builds display_label.
- - State helpers: _rerun(), _stage_station_and_load() keep sel_station, selected_station, sel_station_url, source_label, and navigate to the first tab after selection.
- - Station picker: search bar with top-N matches, quick-picks, and map click integration, all feeding _stage_station_and_load().
- - Upload flow: handle_epw_upload() supports EPW or ZIP, prompts when multiple EPWs in ZIP, stores raw bytes and source labels.
- - Sidebar controls: temperature units, custom overheat threshold, adaptive comfort toggle, UHI bias slider, forecast model choice.
- - Analysis sections (post-load):
-   * Dashboard & Temperature/Humidity: key charts, stats, degree-day style outputs.
-   * Solar Analysis: sun-path sphere, irradiance charts, shading/azimuth context.
-   * Psychrometrics: psych chart with points/regions.
-   * Live Data vs EPW: compares real-time feed (if configured) to EPW baselines.
-   * Raw Data: tabular EPW exploration and downloads.
-   * Short-Term Prediction: SARIMAX default with fallback options.
-   * Future Climate: SSP 2050/2080 scenarios overlay.
- - Caching: STREAMLIT cache decorators are no-ops when unavailable (for compatibility).
- - Robustness: URL extraction from anchor tags, fallback URL guessing, period/heating/cooling coercion, and safe defaults when data are missing.
+### Basic Meteorological Terms
+* **Dry-bulb Temperature**: The ambient air temperature, uninfluenced by radiation or moisture.
+* **Relative Humidity (RH)**: The percentage of water vapor present in the air relative to the maximum it could hold at that temperature.
+* **Dew Point**: The temperature to which air must be cooled to become fully saturated with water vapor.
+* **Global Horizontal Irradiance (GHI)**: Total solar radiation received on a horizontal surface (Direct + Diffuse).
+* **Direct Normal Irradiance (DNI)**: Solar radiation received precisely perpendicular to the sun's rays.
+* **Diffuse Horizontal Irradiance (DHI)**: Solar radiation scattered by the atmosphere, received on a horizontal surface.
 
-Data Handling
--------------
-- Station index is normalized to ensure lat/lon present and to clean URLs.
-- raw_id is parsed when available to derive country_iso3, state_code, city_raw/city_name, station_id, source, and period.
-- Labels avoid nan by filling blanks with empty strings before formatting.
-- Selected station metadata propagates to session_state for downstream charts and labeling.
+### Thermal Comfort Metrics
+* **Discomfort Index (DI) / Thom's Index**: A simple empirical index combining dry-bulb temperature and wet-bulb temperature to estimate human discomfort.
+* **UTCI (Universal Thermal Climate Index)**: An advanced, bio-meteorological index that models human thermal stress. It accounts for temperature, humidity, wind speed, and mean radiant temperature to output a "feels-like" equivalent temperature.
+* **Humidex & Heat Index**: Standard indices used by weather agencies to describe how hot the weather feels to the average person, factoring in humidity.
+* **Adaptive Comfort**: A dynamic comfort model (ASHRAE 55) recognizing that people in naturally ventilated buildings adapt to their local climate. The "comfort zone" shifts historically based on the prevailing mean outdoor temperatures.
 
-UI Styling (Dark Theme)
-----------------------
-- Flat top navigation via styled radio buttons.
-- Dark cards, subtle borders, cyan accents for active states.
-- Compact controls: reduced paddings on select components; map wrapper sized for clarity.
+---
 
-How to Run
-----------
-- Install dependencies: pip install -r requirements.txt
-- Launch app: streamlit run app.py
-- Optional (fixed port): streamlit run app.py --server.port 8502
-- Open the provided local URL in a browser.
+## 3. Analysis Dashboards & Visualizations
 
-Notes
------
-- Large tables (e.g., Raw Data views) use `streamlit-aggrid` for paginated rendering to keep the browser responsive.
-   If `streamlit-aggrid` is not available, the app falls back to Streamlit's built-in `st.dataframe`.
+### 📊 Dashboard (Overview)
+This page acts as a high-level summary of the loaded climate.
+* **Climate Overview**: Displays site metadata (Latitude, Longitude, Elevation) and annual/seasonal averages for Temperature, Humidity, Wind, and Solar Radiation.
+* **Comfort & Loads**: Summarizes the percentage of the year spent inside the comfort band. It categorizes unmet hours into cold stress and heat stress (using UTCI).
+* **Data Quality**: Evaluates the EPW file for missing or invalid data, plotting the chronological completeness of key metrics to ensure simulation validity.
+* **Heatmaps**: A high-density chronological visualization. The Y-axis represents the hour of the day (0-23), and the X-axis represents the day of the year (1-365). Colors indicate the intensity of metrics like temperature and solar radiation, allowing quick spotting of diurnal and seasonal patterns.
 
-Tips
-----
-- Use the search box for fast lookup; keep queries short (city, ISO3, or WMO ID).
-- If no matches appear, broaden the term or check spelling.
-- Uploading an EPW overrides the current station selection and updates the source label.
+### 🌡️ Temperature & Humidity
+Deep dive into sensible heat and moisture.
+* **Temperature/Humidity Distribution (Violin & Box Plots)**: Shows the statistical spread, median, and quartile range of temperatures for every month. Violin width indicates frequency at that temperature.
+* **Diurnal Swing (Line Charts)**: Plots the average daily profile (minimum, average, maximum) for each month, highlighting the temperature swing between night and day.
+* **Comfort Diagnostics (Bar Charts)**: A visual breakdown of heating required, cooling required, and "free running" (comfortable) hours per month.
+
+### ☀️ Solar Analysis
+Visualizations dedicated to understanding solar geometry and site radiation.
+* **Interactive 3D Sun Path**: A volumetric, interactive globe showing the sun's trajectory across the sky vault throughout the year. The red/orange arcs represent the sun's daily path at different seasons, while the vertical analemmas show the sun's position at a specific hour over the year.
+* **Solar Radiation Heatmaps**: 24x365 contour plots showing when the site receives the most intense solar energy.
+* **Irradiance Distribution**: Histograms showing the frequency and intensity of Direct Normal and Diffuse Horizontal irradiance.
+
+### 📈 Psychrometrics
+The engineer's view of the climate's thermodynamic properties.
+* **Psychrometric Chart**: A fundamental thermodynamic graph plotting Dry-Bulb Temperature (X-axis) against Humidity Ratio (Y-axis). 
+  * **Saturation Curve**: The upper boundary where air is 100% saturated (condensation point).
+  * **Scatter Points**: Every hour of the year is plotted as a point.
+  * **Comfort Polygon**: An overlaid boundary indicating the zone of human comfort. Points outside this zone require heating, cooling, humidification, or dehumidification.
+  * **Enthalpy & Specific Volume Lines**: Isoclines revealing the total energy and physical density of the air at any given state.
+
+### 📡 Live Data vs EPW (Live Sensors)
+* **Ingested Sensors**: Connects to real-time IoT datastreams (if configured) to compare actual measured conditions on-site against the historical EPW baseline. Useful for tracking climate drift or verifying local microclimates.
+
+### 🔀 Sensor Comparison
+* **Multi-Trace Plotting**: Overlay multiple incoming live sensor streams on a single temporal X-axis for hardware comparisons and anomaly detection.
+
+### 📁 Raw Data
+* **Tabular EPW Explorer**: A paginated, filterable grid displaying the raw, hour-by-hour numeric data of the loaded weather file. Allows for localized CSV exports of specific time slices.
+
+---
+
+## 4. Troubleshooting & Notes
+* If the charts appear blank, ensure an EPW file corresponds to the correct geographic location and contains valid hourly data.
+* **Performance**: Loading extreme datasets spanning decades may cause the browser to temporarily throttle. The application uses smart caching and data downcasting (Float32) to mitigate memory overhead.
+* **Browser Compatibility**: Recommended for use on Chromium-based browsers (Chrome, Edge) or Firefox. Safar's WebGL implementation may occasionally struggle with the 3D Sun Path.
