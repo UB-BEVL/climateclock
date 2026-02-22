@@ -183,6 +183,11 @@ st.markdown(
         [data-testid="stStatusWidget"] {
             display: none !important;
         }
+        /* Constrain sidebar width on wider screens */
+        [data-testid="stSidebar"] {
+            min-width: 250px !important;
+            max-width: 300px !important;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -7692,6 +7697,18 @@ def render_live_data_page():
 def render_sensor_comparison_page():
     page = st.session_state.get("nav_page")
     
+    # Brute-force distinguishable styles for multi-sensor plots
+    SENSOR_STYLES = [
+        {"color": "#f97316", "dash": "solid"},    # vivid orange
+        {"color": "#22c55e", "dash": "dot"},      # green dotted
+        {"color": "#3b82f6", "dash": "dash"},     # blue dashed
+        {"color": "#e11d48", "dash": "dashdot"},  # magenta dash-dot
+        {"color": "#a855f7", "dash": "longdash"}, # violet long dash
+        {"color": "#facc15", "dash": "solid"},    # yellow solid
+        {"color": "#06b6d4", "dash": "dot"},      # cyan dotted
+        {"color": "#ef4444", "dash": "dash"},     # red dashed
+    ]
+
     # ========== PROOF MARKER ==========
     st.success("Sensor Comparison UI loaded")
     
