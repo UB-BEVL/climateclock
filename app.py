@@ -195,6 +195,11 @@ st.markdown(
             min-width: 260px !important;
             max-width: 260px !important;
         }
+
+        /* Hide heading anchor links */
+        a.header-anchor {
+            display: none !important;
+        }
     </style>
     """,
     unsafe_allow_html=True,
