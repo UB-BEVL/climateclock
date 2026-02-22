@@ -185,12 +185,12 @@ st.markdown(
         }
         
         /* Force Sidebar Width to be smaller and not draggable past a certain point */
-        section[data-testid="stSidebar"] > div {
+        section[data-testid="stSidebar"][aria-expanded="true"] > div {
             width: 260px !important;
             min-width: 260px !important;
             max-width: 260px !important;
         }
-        section[data-testid="stSidebar"] {
+        section[data-testid="stSidebar"][aria-expanded="true"] {
             width: 260px !important;
             min-width: 260px !important;
             max-width: 260px !important;
