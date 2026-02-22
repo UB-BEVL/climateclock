@@ -196,32 +196,20 @@ st.markdown(
             max-width: 260px !important;
         }
 
-        /* Hide heading anchor links */
-        a.header-anchor {
-            display: none !important;
-        }
-        
-        /* Hide Streamlit anchor links via testid */
-        [data-testid="stHeader"] a,
-        [data-testid="stSubheader"] a,
-        [data-testid="stMarkdownContainer"] a.header-anchor,
-        .stMarkdown a,
-        h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {
+        /* Target Streamlit's specific heading anchor links without hiding normal links */
+        a.header-anchor,
+        .stMarkdown a.header-anchor,
+        h1 > a:empty,
+        h2 > a:empty,
+        h3 > a:empty,
+        h4 > a:empty,
+        h5 > a:empty,
+        h6 > a:empty {
             display: none !important;
         }
 
         /* Hide the specific SVG anchor icon next to headers */
-        svg[title="Link"] {
-            display: none !important;
-        }
-        
-        /* Additional targeting for SVGs inside headers */
-        [data-testid="stMarkdownContainer"] h1 svg,
-        [data-testid="stMarkdownContainer"] h2 svg,
-        [data-testid="stMarkdownContainer"] h3 svg,
-        [data-testid="stMarkdownContainer"] h4 svg,
-        [data-testid="stMarkdownContainer"] h5 svg,
-        [data-testid="stMarkdownContainer"] h6 svg {
+        h1 svg, h2 svg, h3 svg, h4 svg, h5 svg, h6 svg {
             display: none !important;
         }
     </style>
