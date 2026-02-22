@@ -7716,6 +7716,12 @@ def render_sensor_comparison_page():
         {"color": "#ef4444", "dash": "dash"},     # red dashed
     ]
 
+    # Helper to clean up verbose sensor names for the legend
+    import re
+    def clean_sensor_name(name):
+        # Matches patterns like " 2025-12-18 00_30_58 EST (Data EST)" and removes them
+        return re.sub(r'\s+\d{4}-\d{2}-\d{2}\s+\d{2}_\d{2}_\d{2}.*$', '', str(name))
+
     # ========== PROOF MARKER ==========
     st.success("Sensor Comparison UI loaded")
     
@@ -8128,12 +8134,6 @@ def render_sensor_comparison_page():
                 else:
                     plot_df_resampled = plot_df[["_metric"]].resample('5min').mean(numeric_only=True).reset_index()
                 plot_df = plot_df_resampled
-
-            # Helper to clean up verbose sensor names for the legend
-            import re
-            def clean_sensor_name(name):
-                # Matches patterns like " 2025-12-18 00_30_58 EST (Data EST)" and removes them
-                return re.sub(r'\s+\d{4}-\d{2}-\d{2}\s+\d{2}_\d{2}_\d{2}.*$', '', str(name))
 
             fig_primary = go.Figure()
             for i, sensor in enumerate(selected_sensors):
