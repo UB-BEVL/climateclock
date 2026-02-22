@@ -3888,42 +3888,42 @@ def render_dashboard_page():
                         
                         # Data CSV Download
                         try:
-                                export_df = cdf.copy()
-                                long_records = []
-                                thresholds_json = json.dumps(thresholds_state)
-                                for strip_name, (pivot_binned, info) in heatmap_dict.items():
-                                    col = info.get('col')
-                                    if not col or col not in export_df.columns:
-                                        continue
-                                    s = pd.to_numeric(export_df[col], errors="coerce").dropna()
-                                    if s.empty:
-                                        continue
-                                    thresholds_list = info.get("thresholds", [])
-                                    bins = [-np.inf] + thresholds_list + [np.inf]
-                                    labels = info.get("labels", [])
-                                    if len(labels) != len(bins) - 1:
-                                        labels = _labels_from_thresholds(thresholds_list, "")
-                                    assert len(labels) == len(bins) - 1, (len(labels), len(bins))
-                                    cat = pd.cut(s, bins=bins, labels=labels, right=False)
-                                    for ts, val, bl in zip(cat.index, s.values, cat.astype(object).values):
-                                        long_records.append({
-                                            'datetime': ts.isoformat(),
-                                            'variable': strip_name,
-                                            'value': float(val),
-                                            'bin_label': bl if pd.notna(bl) else None,
-                                            'month': int(ts.month),
-                                            'hour': int(ts.hour),
-                                            'thresholds': thresholds_json,
-                                        })
+                            export_df = cdf.copy()
+                            long_records = []
+                            thresholds_json = json.dumps(thresholds_state)
+                            for strip_name, (pivot_binned, info) in heatmap_dict.items():
+                                col = info.get('col')
+                                if not col or col not in export_df.columns:
+                                    continue
+                                s = pd.to_numeric(export_df[col], errors="coerce").dropna()
+                                if s.empty:
+                                    continue
+                                thresholds_list = info.get("thresholds", [])
+                                bins = [-np.inf] + thresholds_list + [np.inf]
+                                labels = info.get("labels", [])
+                                if len(labels) != len(bins) - 1:
+                                    labels = _labels_from_thresholds(thresholds_list, "")
+                                assert len(labels) == len(bins) - 1, (len(labels), len(bins))
+                                cat = pd.cut(s, bins=bins, labels=labels, right=False)
+                                for ts, val, bl in zip(cat.index, s.values, cat.astype(object).values):
+                                    long_records.append({
+                                        'datetime': ts.isoformat(),
+                                        'variable': strip_name,
+                                        'value': float(val),
+                                        'bin_label': bl if pd.notna(bl) else None,
+                                        'month': int(ts.month),
+                                        'hour': int(ts.hour),
+                                        'thresholds': thresholds_json,
+                                    })
 
-                                if not long_records:
-                                    st.caption("No long-format data available for CSV export.")
-                                else:
-                                    long_df = pd.DataFrame(long_records)
-                                    csv_bytes = long_df.to_csv(index=False).encode('utf-8')
-                                    st.download_button(label="📥 Download heatmap data (CSV)", data=csv_bytes, file_name=f"{clean_loc}_diurnal_heatmaps_data.csv", mime="text/csv")
-                            except Exception as e:
-                                st.caption(f"CSV export failed: {str(e)[:80]}")
+                            if not long_records:
+                                st.caption("No long-format data available for CSV export.")
+                            else:
+                                long_df = pd.DataFrame(long_records)
+                                csv_bytes = long_df.to_csv(index=False).encode('utf-8')
+                                st.download_button(label="📥 Download heatmap data (CSV)", data=csv_bytes, file_name=f"{clean_loc}_diurnal_heatmaps_data.csv", mime="text/csv")
+                        except Exception as e:
+                            st.caption(f"CSV export failed: {str(e)[:80]}")
                     else:
                         st.warning("Could not generate heatmap figure from available data.")
 
