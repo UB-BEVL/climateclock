@@ -11,3 +11,4 @@ requests
 openpyxl
 kaleido
 rapidfuzz
+pycountry
