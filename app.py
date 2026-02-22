@@ -200,6 +200,30 @@ st.markdown(
         a.header-anchor {
             display: none !important;
         }
+        
+        /* Hide Streamlit anchor links via testid */
+        [data-testid="stHeader"] a,
+        [data-testid="stSubheader"] a,
+        [data-testid="stMarkdownContainer"] a.header-anchor,
+        .stMarkdown a,
+        h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {
+            display: none !important;
+        }
+
+        /* Hide the specific SVG anchor icon next to headers */
+        svg[title="Link"] {
+            display: none !important;
+        }
+        
+        /* Additional targeting for SVGs inside headers */
+        [data-testid="stMarkdownContainer"] h1 svg,
+        [data-testid="stMarkdownContainer"] h2 svg,
+        [data-testid="stMarkdownContainer"] h3 svg,
+        [data-testid="stMarkdownContainer"] h4 svg,
+        [data-testid="stMarkdownContainer"] h5 svg,
+        [data-testid="stMarkdownContainer"] h6 svg {
+            display: none !important;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -2213,7 +2237,7 @@ def _station_search_fragment() -> None:
     if not isinstance(stations, pd.DataFrame) or stations.empty:
         return
 
-    st.markdown("### 🔍 Station Search")
+    st.subheader("🔍 Station Search", anchor=False)
     st.caption(f"{len(stations):,} verified download links. Search, then load once.")
     st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
 
