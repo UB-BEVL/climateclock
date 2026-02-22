@@ -217,10 +217,6 @@ st.session_state.setdefault("_clear_map_on_next_run", False)
 NAV_ITEMS = [
     ("🛰️ Select weather file", "Select weather file"),
     ("📊 Dashboard", "📊 Dashboard"),
-    ("📁 Raw Data", "📁 Raw Data"),
-    ("🌡️ Temperature & Humidity", "🌡️ Temperature & Humidity"),
-    ("☀️ Solar Analysis", "☀️ Solar Analysis"),
-    ("📈 Psychrometrics", "📈 Psychrometrics"),
     ("📡 Live Data vs EPW", "📡 Live Data vs EPW"),
     ("🧪 Sensor Comparison", "Sensor Comparison"),
     ("🧭 Short-Term Prediction (24–72h)", "📈 Short-Term Prediction (24–72h)"),
@@ -3132,11 +3128,15 @@ def render_dashboard_page():
         )
 
         loc = header["location"]
-        overview_tab, comfort_tab, diagnostics_tab, heatmaps_tab = st.tabs([
+        overview_tab, comfort_tab, diagnostics_tab, heatmaps_tab, temp_hum_tab, solar_tab, psych_tab, raw_data_tab = st.tabs([
             "Overview & Stats",
             "Comfort & Loads",
             "Data Quality",
             "Heatmaps",
+            "Temp & Humidity",
+            "Solar Analysis",
+            "Psychrometrics",
+            "Raw Data",
         ])
 
         with overview_tab:
@@ -3931,6 +3931,21 @@ def render_dashboard_page():
                                 st.caption(f"CSV export failed: {str(e)[:80]}")
                     else:
                         st.warning("Could not generate heatmap figure from available data.")
+
+        with temp_hum_tab:
+            render_trends_page()
+            render_temperature_page()
+            render_heatmap_page()
+            render_humidity_page()
+            
+        with solar_tab:
+            render_solar_page()
+            
+        with psych_tab:
+            render_psychrometrics_page()
+            
+        with raw_data_tab:
+            render_raw_data_page()
 
 # ====================== TEMPERATURE & HUMIDITY (CLEAN) ======================
 
@@ -8925,22 +8940,6 @@ def main():
     
     elif effective_page == "📊 Dashboard":
         render_dashboard_page()
-    
-    elif effective_page == "📁 Raw Data":
-        render_raw_data_page()
-        
-    elif effective_page in ("Temp & Humidity", "🌡️ Temperature & Humidity"):
-        # Render all components for this composite page
-        render_trends_page()
-        render_temperature_page()
-        render_heatmap_page()
-        render_humidity_page()
-        
-    elif effective_page == "☀️ Solar Analysis":
-        render_solar_page()
-        
-    elif effective_page == "📈 Psychrometrics":
-        render_psychrometrics_page()
         
     elif effective_page == "📡 Live Data vs EPW":
         render_live_data_page()
