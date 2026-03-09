@@ -4693,6 +4693,33 @@ def render_humidity_page():
 # ---------------------- SUN & CLOUDS ----------------------
 
 
+# ---------- Data model ----------
+
+@dataclass
+class Site:
+    lat: float
+    lon: float
+    tz: object     # was str
+    elev_m: float = 0.0
+    north_deg_ccw_from_y: float = 0.0
+
+@dataclass
+class Options2D:
+    projection: str = "stereographic"  # "stereographic" | "orthographic"
+    radius: float = 1.0
+    show_hour_labels: bool = True
+    hour_label_step: int = 1
+    show_envelope: bool = True
+    show_annual_grid: bool = True
+    use_solar_time: bool = False
+
+@dataclass
+class Options3D:
+    show_3d: bool = False
+    show_rays: bool = True
+    # Simple building massing: list of prisms (x, y, w, d, z0, z1)
+    massing: Optional[List[Tuple[float, float, float, float, float, float]]] = None
+
 def render_solar_page():
     effective_page = st.session_state.get("nav_page")
     # Solar page logic handled self-contained data loading if needed, or uses session state
@@ -4720,35 +4747,7 @@ def render_solar_page():
 
 
 
-    # ---------- Data model ----------
-
-    @dataclass
-    class Site:
-        lat: float
-        lon: float
-        tz: object     # was str
-        elev_m: float = 0.0
-        north_deg_ccw_from_y: float = 0.0
-
-
-
-    @dataclass
-    class Options2D:
-        projection: str = "stereographic"  # "stereographic" | "orthographic"
-        radius: float = 1.0
-        show_hour_labels: bool = True
-        hour_label_step: int = 1
-        show_envelope: bool = True
-        show_annual_grid: bool = True
-        use_solar_time: bool = False
-
-
-    @dataclass
-    class Options3D:
-        show_3d: bool = False
-        show_rays: bool = True
-        # Simple building massing: list of prisms (x, y, w, d, z0, z1)
-        massing: Optional[List[Tuple[float, float, float, float, float, float]]] = None
+    # ---------- Data model moved to global scope ----------
 
 
     # ---------- Solar helpers ----------
@@ -5016,8 +5015,8 @@ def render_solar_page():
         # Cardinal labels (N,E,S,W) at perimeter
         cardinals = [("N", 0), ("E", 90), ("S", 180), ("W", 270)]
         fig.add_trace(go.Scatter(
-            x=[az_unit(a)[0] * 1.07 for _, a in cardinals],
-            y=[az_unit(a)[1] * 1.07 for _, a in cardinals],
+            x=[az_unit(a)[0] * 1.12 for _, a in cardinals],
+            y=[az_unit(a)[1] * 1.12 for _, a in cardinals],
             text=[t for t, _ in cardinals], mode="text", showlegend=False, hoverinfo="skip",
             textfont=dict(size=16, color="#e5e7eb", family="Arial Black")
         ))
@@ -5030,25 +5029,106 @@ def render_solar_page():
                                      textfont=dict(size=11, color="#94a3b8")))
 
         # Perimeter azimuth degree labels (every 30°)
-        az_lab = list(range(0, 360, 30))
-        az_x = [az_unit(a)[0] * 1.09 for a in az_lab]
-        az_y = [az_unit(a)[1] * 1.09 for a in az_lab]
+        az_lab = [a for a in range(0, 360, 30) if a % 90 != 0]
+        az_x = [az_unit(a)[0] * 1.05 for a in az_lab]
+        az_y = [az_unit(a)[1] * 1.05 for a in az_lab]
         az_text = [f"{a}°" for a in az_lab]
         fig.add_trace(go.Scatter(x=az_x, y=az_y, text=az_text, mode="text", showlegend=False, hoverinfo="skip",
                      textfont=dict(size=9, color="#d1d5db")))
 
-        # Hour labels placed on rim (6..18)
+        # Hour labels placed inside the rim (6..18)
         hr_x = []
         hr_y = []
         hr_text = []
         for h in range(6, 19):
             az = (h - 12) * 15 + 180
             ux, uy = az_unit(az)
-            hr_x.append(ux * 1.08)
-            hr_y.append(uy * 1.08)
+            hr_x.append(ux * 0.94)
+            hr_y.append(uy * 0.94)
             hr_text.append(str(h))
             fig.add_trace(go.Scatter(x=hr_x, y=hr_y, text=hr_text, mode="text", showlegend=False, hoverinfo="skip",
                                      textfont=dict(size=11, color="#fbbf24")))
+
+        # Pre-determine color properties for overall plot
+        color_cols = ["temp_air","DryBulb","Dry_Bulb","drybulb","Temperature"]
+        color_title = "Dry Bulb (°C)"
+        colorscale = "RdYlBu_r"
+        cmin = None
+        cmax = None
+        colorbar_added = False
+
+        if epw is not None:
+            if color_var == "temperature":
+                color_cols = ["temp_air","DryBulb","Dry_Bulb","drybulb","Temperature"]
+                color_title = "Dry Bulb (°C)"
+            elif color_var == "solar":
+                color_cols = ["glohorrad","ghi","global_horiz","global_horizontal","solar","radiation"]
+                color_title = "Solar Radiation (W/m²)"
+            elif color_var == "humidity":
+                color_cols = ["relhum","relative_humidity","rh"]
+                color_title = "Relative Humidity (%)"
+            elif color_var == "wind":
+                color_cols = ["windspd","wind_speed","wspd","wind"]
+                color_title = "Wind Speed (m/s)"
+            
+            found_col = next((c for c in color_cols if c in epw.columns), None)
+            if found_col is not None:
+                epw_vals = pd.to_numeric(epw[found_col], errors="coerce").dropna()
+                if not epw_vals.empty:
+                    low, high = np.percentile(epw_vals, [1, 99])
+                    if low == high:
+                        high = low + 1e-6
+                    cmin, cmax = low, high
+
+        def get_colors(df_in):
+            """Look up EPW color values by matching month-day-hour.
+            This approach is immune to year mismatches between TMY EPW and current-year sun positions."""
+            if epw is None or not color_cols:
+                return None
+            target_col = next((c for c in color_cols if c in epw.columns), None)
+            if target_col is None:
+                return None
+            try:
+                # Convert both to the site timezone for consistent month/day/hour
+                epw_local = epw.copy()
+                if epw_local.index.tz is None:
+                    epw_local.index = epw_local.index.tz_localize("UTC")
+                epw_local = epw_local.tz_convert(site.tz)
+                
+                idx = df_in.index
+                if idx.tz is None:
+                    idx = idx.tz_localize(site.tz)
+                else:
+                    idx = idx.tz_convert(site.tz)
+                
+                # Build a lookup dict: (month, day, hour) -> value
+                epw_vals = pd.to_numeric(epw_local[target_col], errors="coerce")
+                lookup = {}
+                for ts, val in zip(epw_local.index, epw_vals):
+                    key = (ts.month, ts.day, ts.hour)
+                    lookup[key] = val
+                
+                # Match each sun position to EPW by month-day-hour
+                result = np.full(len(idx), np.nan)
+                for i, ts in enumerate(idx):
+                    key = (ts.month, ts.day, ts.hour)
+                    if key in lookup:
+                        result[i] = lookup[key]
+                    else:
+                        # Fallback: try same month/hour, any day (nearest day)
+                        best_val = np.nan
+                        best_dist = 999
+                        for (m, d, h), v in lookup.items():
+                            if m == ts.month and h == ts.hour:
+                                dist = abs(d - ts.day)
+                                if dist < best_dist:
+                                    best_dist = dist
+                                    best_val = v
+                        result[i] = best_val
+                
+                return result
+            except Exception:
+                return None
 
         if show_analemmas:
             # Generate analemma (figure 8) points by taking 1 sample per week at each hour
@@ -5081,6 +5161,71 @@ def render_solar_page():
                     line=dict(color="rgba(100,116,139,0.3)", width=1.5), 
                     showlegend=False, hoverinfo="skip"
                 ))
+                
+                c_vals_an = get_colors(hr_data)
+                show_cb_an = (c_vals_an is not None) and not colorbar_added
+                if show_cb_an: colorbar_added = True
+                
+                fig.add_trace(go.Scatter(
+                    x=hx, y=hy, mode="markers",
+                    marker=dict(
+                        size=3.5,
+                        color=c_vals_an if c_vals_an is not None else "#2962ff",
+                        colorscale=colorscale, cmin=cmin, cmax=cmax,
+                        showscale=show_cb_an,
+                        colorbar=(dict(title=color_title or "Value", thickness=10, len=0.5, x=1.03) if show_cb_an else None),
+                        opacity=0.85
+                    ),
+                    showlegend=False, hoverinfo="skip"
+                ))
+
+        # ===== Solstice & Equinox arcs (3 key days) =====
+        key_days = [
+            (6, 21, "Summer Solstice", "#FF6B3D"),
+            (12, 21, "Winter Solstice", "#3498DB"),
+            (3, 21, "Equinox", "#2ECC71"),
+        ]
+        year = date.year
+        for km, kd, klabel, kcolor in key_days:
+            kts = pd.Timestamp(year, km, kd, tz=site.tz)
+            kxs, kys, kaz, kel, kidx = sunpath_for_day(kts)
+            if len(kxs) == 0:
+                continue
+            # Arc line
+            fig.add_trace(go.Scatter(
+                x=kxs, y=kys, mode="lines",
+                line=dict(color=kcolor, width=2.5),
+                name=klabel, showlegend=True, hoverinfo="skip"
+            ))
+            # Colored markers on this arc
+            kdf = solar_positions(site, kts)
+            if not kdf.empty:
+                kcolors = get_colors(kdf)
+                kx_m, ky_m = project_angular(kdf["azimuth"].values, kdf["elevation"].values, projection)
+                show_cb_k = (kcolors is not None) and not colorbar_added
+                if show_cb_k: colorbar_added = True
+                fig.add_trace(go.Scatter(
+                    x=kx_m, y=ky_m, mode="markers",
+                    marker=dict(
+                        size=6,
+                        color=kcolors if kcolors is not None else kcolor,
+                        colorscale=colorscale, cmin=cmin, cmax=cmax,
+                        showscale=show_cb_k,
+                        colorbar=(dict(title=color_title or "Value", thickness=10, len=0.5, x=1.03) if show_cb_k else None),
+                        line=dict(width=0.5, color=kcolor),
+                        opacity=0.9
+                    ),
+                    showlegend=False, hoverinfo="skip"
+                ))
+            # Label at the apex of the arc
+            apex_idx = np.argmax(kel)
+            fig.add_annotation(
+                x=kxs[apex_idx], y=kys[apex_idx],
+                text=klabel, showarrow=True, arrowhead=0, arrowcolor=kcolor,
+                font=dict(color=kcolor, size=10, family="Arial"),
+                bgcolor="rgba(13,17,23,0.7)", borderpad=2,
+                ax=0, ay=-20
+            )
 
         # Selected date: compute positions and set up data-driven colors
         xs_sel, ys_sel, az_sel, el_sel, idx_sel = sunpath_for_day(date)
@@ -5089,32 +5234,7 @@ def render_solar_page():
             df_sel = _with_solar_time(df_sel, site)
             df_sel = df_sel.iloc[::max(1, int(1))]  # default 10min -> hourly (already hourly from solar_positions)
             
-            # Determine colors
-            color_series = None
-            color_title = None
-            cmin = None
-            cmax = None
-            colorscale = "Cividis"
-            if epw is not None:
-                if color_var == "temperature":
-                    color_series = _nearest_epw_by_solar_time(epw, df_sel["solar_time"], ["temp_air","DryBulb","Dry_Bulb","drybulb","Temperature"])
-                    color_title = "Dry Bulb (°C)"
-                    colorscale = "RdYlBu_r"
-                elif color_var == "solar":
-                    color_series = _nearest_epw_by_solar_time(epw, df_sel["solar_time"], ["glohorrad","ghi","global_horiz"])
-                    color_title = "Solar Radiation"
-                    colorscale = "Inferno"
-                elif color_var == "humidity":
-                    color_series = _nearest_epw_by_solar_time(epw, df_sel["solar_time"], ["relhum","relative_humidity","rh"])
-                    color_title = "Humidity"
-                    colorscale = "Blues"
-                
-            if color_series is not None:
-                df_sel["color_val"] = pd.to_numeric(color_series, errors="coerce")
-                finite_vals = df_sel["color_val"].replace([np.inf, -np.inf], np.nan).dropna()
-                if not finite_vals.empty:
-                    low, high = np.percentile(finite_vals, [5, 95])
-                    cmin, cmax = low, max(high, low + 1e-6)
+            colors = get_colors(df_sel)
 
             xs_hr, ys_hr = project_angular(df_sel["azimuth"].values, df_sel["elevation"].values, projection)
             
@@ -5124,8 +5244,8 @@ def render_solar_page():
                 idx_mid = len(xs_hr) // 2
                 fig.add_annotation(x=xs_hr[idx_mid], y=ys_hr[idx_mid], text=f"{date:%b %d}", showarrow=False, font=dict(color="rgba(255,255,255,0.8)", size=10), yshift=12)
                 
-            # Plot the data-driven points
-            colors = df_sel["color_val"].to_numpy() if "color_val" in df_sel.columns else None
+            show_cb_sel = (colors is not None) and not colorbar_added
+            if show_cb_sel: colorbar_added = True
             
             fig.add_trace(go.Scatter(
                 x=xs_hr, y=ys_hr,
@@ -5137,8 +5257,8 @@ def render_solar_page():
                     size=10,
                     color=colors if colors is not None else "#fbbf24",
                     colorscale=colorscale, cmin=cmin, cmax=cmax,
-                    showscale=bool(colors is not None),
-                    colorbar=(dict(title=color_title or "Value", thickness=12, len=0.55, y=0.5, x=1.03) if colors is not None else None),
+                    showscale=show_cb_sel,
+                    colorbar=(dict(title=color_title or "Value", thickness=12, len=0.55, y=0.5, x=1.03) if show_cb_sel else None),
                     line=dict(width=1, color="rgba(255,255,255,0.8)")
                 ),
                 name="Hourly markers",
@@ -5379,17 +5499,148 @@ def render_solar_page():
             showlegend=False, hoverinfo="skip",
         ))
 
+        # Pre-determine color properties for overall plot
+        color_cols = ["temp_air","DryBulb","Dry_Bulb","drybulb","Temperature"]
+        color_title = "Dry Bulb (°C)"
+        colorscale = "RdYlBu_r"
+        cmin = None
+        cmax = None
+        colorbar_added = False
+
+        if epw is not None:
+            if color_var == "temperature":
+                color_cols = ["temp_air","DryBulb","Dry_Bulb","drybulb","Temperature"]
+                color_title = "Dry Bulb (°C)"
+            elif color_var == "solar":
+                color_cols = ["glohorrad","ghi","global_horiz","global_horizontal","solar","radiation"]
+                color_title = "Solar Radiation (W/m²)"
+            elif color_var == "humidity":
+                color_cols = ["relhum","relative_humidity","rh"]
+                color_title = "Relative Humidity (%)"
+            elif color_var == "wind":
+                color_cols = ["windspd","wind_speed","wspd","wind"]
+                color_title = "Wind Speed (m/s)"
+            
+            found_col = next((c for c in color_cols if c in epw.columns), None)
+            if found_col is not None:
+                epw_vals = pd.to_numeric(epw[found_col], errors="coerce").dropna()
+                if not epw_vals.empty:
+                    low, high = np.percentile(epw_vals, [1, 99])
+                    if low == high:
+                        high = low + 1e-6
+                    cmin, cmax = low, high
+
+        def get_colors(df_in):
+            """Look up EPW color values by matching month-day-hour.
+            Immune to year mismatches between TMY EPW and current-year sun positions."""
+            if epw is None or not color_cols:
+                return None
+            target_col = next((c for c in color_cols if c in epw.columns), None)
+            if target_col is None:
+                return None
+            try:
+                epw_vals = pd.to_numeric(epw[target_col], errors="coerce")
+                lookup = {}
+                
+                # Use columns instead of index timezones to avoid crashes on basic RangeIndex
+                for m, d, h, val in zip(epw["month"], epw["day"], epw["hour"], epw_vals):
+                    # pvlib uses 0-23 hours; EPW natively often uses 1-24. Adjust if needed.
+                    h_adj = int(h) - 1
+                    key = (int(m), int(d), h_adj)
+                    lookup[key] = val
+                
+                idx = df_in.index
+                result = np.full(len(idx), np.nan)
+                
+                # Check timezone and extract properties safe
+                if hasattr(idx, "tz") and idx.tz is not None:
+                    # Convert to target TZ
+                    idx_local = idx.tz_convert(site.tz)
+                elif hasattr(idx, "tz_localize"):
+                    idx_local = idx.tz_localize(site.tz)
+                else:
+                    idx_local = idx
+                
+                # Assign values
+                for i, ts in enumerate(idx_local):
+                    try:
+                        m, d, h = ts.month, ts.day, ts.hour
+                        
+                        # exact match
+                        if (m, d, h) in lookup:
+                            result[i] = lookup[(m, d, h)]
+                            continue
+                            
+                        # nearest hour fallback (e.g. for pvlib shifts or analemmas)
+                        best_val = np.nan
+                        best_dist = 9999
+                        for (lm, ld, lh), v in lookup.items():
+                            if lh == h and lm == m:
+                                dist = abs(ld - d)
+                                if dist < best_dist:
+                                    best_dist = dist
+                                    best_val = v
+                        
+                        # Full fallback if still NaN (e.g. missing month data in EPW)
+                        if pd.isna(best_val):
+                            for (lm, ld, lh), v in lookup.items():
+                                if lh == h:
+                                    dist = abs(lm - m)*30 + abs(ld - d)
+                                    if dist < best_dist:
+                                        best_dist = dist
+                                        best_val = v
+                                        
+                        result[i] = best_val
+                    except AttributeError:
+                        continue
+                
+                # If all NaNs, return None to trigger solid colors
+                if np.isnan(result).all():
+                    return None
+                    
+                return result
+            except Exception:
+                return None
+
         def _sunpath_for(ts: pd.Timestamp, color: str, label: str):
+            nonlocal colorbar_added
             df = solar_positions(site, ts)
             if df.empty: return
+            
+            # Subsample for markers
+            df_markers = df.iloc[::max(1, int(marker_every))]
+            
             az, alt = np.deg2rad(df["azimuth"].values), np.deg2rad(df["elevation"].values)
             x, y, z = np.cos(alt) * np.sin(az), np.cos(alt) * np.cos(az), np.sin(alt)
             fig.add_trace(go.Scatter3d(
                 x=x, y=y, z=z, mode="lines",
-                line=dict(width=1.5, color=color), name=label,
+                line=dict(width=1, color=color), name=label,
                 hovertemplate="%{customdata[0]:.1f}° az<br>%{customdata[1]:.1f}° alt<extra></extra>",
                 customdata=np.c_[df["azimuth"].values, df["elevation"].values],
             ))
+            
+            # Subsample for markers
+            df_markers = df.iloc[::max(1, int(marker_every))]
+            if not df_markers.empty:
+                c_vals = get_colors(df_markers)
+                m_az, m_alt = np.deg2rad(df_markers["azimuth"].values), np.deg2rad(df_markers["elevation"].values)
+                m_x, m_y, m_z = np.cos(m_alt) * np.sin(m_az), np.cos(m_alt) * np.cos(m_az), np.sin(m_alt)
+                
+                show_cb = (c_vals is not None) and not colorbar_added
+                if show_cb: colorbar_added = True
+                
+                fig.add_trace(go.Scatter3d(
+                    x=m_x, y=m_y, z=m_z, mode="markers",
+                    marker=dict(
+                        size=5,
+                        color=c_vals if c_vals is not None else "#fbbf24",
+                        colorscale=colorscale, cmin=cmin, cmax=cmax,
+                        showscale=show_cb,
+                        colorbar=(dict(title=color_title or "Value", thickness=10, len=0.5, x=1.03) if show_cb else None),
+                        opacity=0.85
+                    ),
+                    showlegend=False, hoverinfo="skip"
+                ))
 
         # Volumetric Sky Vault Surface (Andrew Marsh style)
         year = date.year
@@ -5407,15 +5658,15 @@ def render_solar_page():
             Z_surf.append(np.sin(alt_surf))
         fig.add_trace(go.Surface(
             x=np.array(X_surf), y=np.array(Y_surf), z=np.array(Z_surf),
-            colorscale=[[0, "rgba(235, 245, 190, 0.45)"], [1, "rgba(235, 245, 190, 0.45)"]],
+            colorscale=[[0, "rgba(100, 149, 237, 0.1)"], [1, "rgba(100, 149, 237, 0.1)"]],
             showscale=False, hoverinfo="skip"
         ))
 
         # seasonal arcs (solid red/orange Andrew Marsh style)
         season_days = [
-            (12, 21, "#e63946", "Winter Solstice"),
-            (3, 21, "#e63946", "Equinox"),
-            (6, 21, "#e63946", "Summer Solstice"),
+            (12, 21, "rgba(230, 57, 70, 0.25)", "Winter Solstice"),
+            (3, 21, "rgba(230, 57, 70, 0.25)", "Equinox"),
+            (6, 21, "rgba(230, 57, 70, 0.25)", "Summer Solstice"),
         ]
         for m, d, col, label in season_days:
             ts = pd.Timestamp(year=date.year, month=m, day=d, tz=site.tz)
@@ -5447,7 +5698,24 @@ def render_solar_page():
             
             fig.add_trace(go.Scatter3d(
                 x=x_an, y=y_an, z=z_an, mode="lines", 
-                line=dict(color="#2962ff", width=1.5), 
+                line=dict(color="rgba(41, 98, 255, 0.2)", width=1), 
+                showlegend=False, hoverinfo="skip"
+            ))
+
+            c_vals_an = get_colors(hr_data)
+            show_cb_an = (c_vals_an is not None) and not colorbar_added
+            if show_cb_an: colorbar_added = True
+            
+            fig.add_trace(go.Scatter3d(
+                x=x_an, y=y_an, z=z_an, mode="markers",
+                marker=dict(
+                    size=5,
+                    color=c_vals_an if c_vals_an is not None else "#2962ff",
+                    colorscale=colorscale, cmin=cmin, cmax=cmax,
+                    showscale=show_cb_an,
+                    colorbar=(dict(title=color_title or "Value", thickness=10, len=0.5, x=1.03) if show_cb_an else None),
+                    opacity=0.85
+                ),
                 showlegend=False, hoverinfo="skip"
             ))
 
@@ -5460,37 +5728,8 @@ def render_solar_page():
             # keep marker cadence by hour modulo marker_every
             df = df[df.index.hour % max(1, int(marker_every)) == 0]
 
-            color_series = None
-            color_title = None
-            cmin = None
-            cmax = None
-            colorscale = "Cividis"
-            if epw is not None:
-                if color_var == "temperature":
-                    color_series = _nearest_epw_by_solar_time(epw, df["solar_time"], ["temp_air","DryBulb","Dry_Bulb","drybulb","Temperature"])
-                    color_title = "Dry Bulb (°C)"
-                    cmin, cmax = None, None
-                elif color_var == "solar":
-                    color_series = _nearest_epw_by_solar_time(epw, df["solar_time"], ["glohorrad","ghi","global_horiz","global_horizontal","solar","radiation"])
-                    color_title = "Solar Radiation (W/m²)"
-                    cmin, cmax = None, None
-                elif color_var == "humidity":
-                    color_series = _nearest_epw_by_solar_time(epw, df["solar_time"], ["relhum","relative_humidity","rh"])
-                    color_title = "Relative Humidity (%)"
-                    cmin, cmax = None, None
-                elif color_var == "wind":
-                    color_series = _nearest_epw_by_solar_time(epw, df["solar_time"], ["windspd","wind_speed","wspd","wind"])
-                    color_title = "Wind Speed (m/s)"
-                    cmin, cmax = None, None
-            if color_series is not None:
-                color_series = pd.to_numeric(color_series, errors="coerce")
-                df["color_val"] = color_series
-                finite_vals = df["color_val"].replace([np.inf, -np.inf], np.nan).dropna()
-                if not finite_vals.empty:
-                    low, high = np.percentile(finite_vals, [5, 95])
-                    if low == high:
-                        high = low + 1e-6
-                    cmin, cmax = low, high
+            colors = get_colors(df)
+            unit = "" if color_title is None else color_title.split("(")[-1].replace(")", "")
 
             az, alt = np.deg2rad(df["azimuth"].values), np.deg2rad(df["elevation"].values)
             sx = np.cos(alt) * np.sin(az)
@@ -5498,9 +5737,6 @@ def render_solar_page():
             sz = np.sin(alt)
 
             path_customdata = np.c_[df["azimuth"].values, df["elevation"].values]
-
-            colors = df["color_val"].to_numpy() if "color_val" in df.columns else None
-            unit = "" if color_title is None else color_title.split("(")[-1].replace(")", "")
             local_times = pd.to_datetime(df["solar_time"])
             if local_times.dt.tz is None:
                 local_times = local_times.dt.tz_localize(site.tz)
@@ -5551,6 +5787,9 @@ def render_solar_page():
             else:
                 text_labels = [""] * len(time_strs)
 
+            show_cb_sel = (colors is not None) and not colorbar_added
+            if show_cb_sel: colorbar_added = True
+            
             fig.add_trace(go.Scatter3d(
                 x=sx, y=sy, z=sz,
                 mode="markers+text" if show_labels else "markers",
@@ -5560,11 +5799,9 @@ def render_solar_page():
                 marker=dict(
                     size=5,
                     color=colors if colors is not None else "#fbbf24",
-                    colorscale=colorscale or "Turbo",
-                    cmin=cmin,
-                    cmax=cmax,
-                    showscale=bool(colors is not None),
-                    colorbar=(dict(title=color_title or "Value", thickness=10, len=0.5, x=1.03) if colors is not None else None),
+                    colorscale=colorscale, cmin=cmin, cmax=cmax,
+                    showscale=show_cb_sel,
+                    colorbar=(dict(title=color_title or "Value", thickness=10, len=0.5, x=1.03) if show_cb_sel else None),
                     symbol="circle",
                     opacity=0.9,
                 ),
@@ -5597,9 +5834,9 @@ def render_solar_page():
             scene=dict(
                 xaxis=dict(range=[-1.2, 1.2], visible=True, showbackground=False, showgrid=True, gridcolor="#475569", zeroline=True, zerolinecolor="#94a3b8", title="", tickfont=dict(color="#94a3b8")),
                 yaxis=dict(range=[-1.2, 1.2], visible=True, showbackground=False, showgrid=True, gridcolor="#475569", zeroline=True, zerolinecolor="#94a3b8", title="", tickfont=dict(color="#94a3b8")),
-                zaxis=dict(range=[0.0, 1.05], visible=False),
+                zaxis=dict(range=[0.0, 1.1], visible=False),
                 aspectmode="manual",
-                aspectratio=dict(x=1, y=1, z=0.6),
+                aspectratio=dict(x=1, y=1, z=0.5),
                 bgcolor="#0d1117",
             ),
             scene_camera=dict(
@@ -5874,12 +6111,18 @@ def render_solar_page():
     wind_col = get_metric_column(cdf, ["windspd", "wind_speed", "wspd", "wind"])
     if wind_col:
         epw_df["windspd"] = cdf[wind_col]
+        
+    # Explicitly add time components needed by the color lookups
+    epw_df["month"] = cdf.index.month
+    epw_df["day"] = cdf.index.day
+    epw_df["hour"] = cdf.index.hour
 
     # Ensure tz-awareness consistent with site tz, then convert to UTC for clean joins
     if epw_df.index.tz is None:
         epw_df.index = epw_df.index.tz_localize(tzinfo)
     epw_df = epw_df.tz_convert("UTC").sort_index()
     epw_df = epw_df[~epw_df.index.duplicated(keep="first")]
+
 
     # Available options for coloring
     avail_options = []
@@ -5906,7 +6149,6 @@ def render_solar_page():
         color_choice_label = sc2.selectbox("Color sun points by", options=avail_options, index=0)
         color_var = option_map.get(color_choice_label, "temperature")
         sc3.markdown("<br>", unsafe_allow_html=True)
-        show3d = sc3.checkbox("Show 3D dome & rays", value=False)
         
         sc4, sc5, sc6 = st.columns([1.2, 1.2, 1])
         hour_stride = sc4.slider("Show sun every N hours", min_value=1, max_value=4, value=1, step=1)
@@ -5953,57 +6195,57 @@ def render_solar_page():
         st.info("No sun above horizon on this date at this location.")
     st.markdown("---")
 
-    if show3d:
-        st.subheader(f"Sun Path (3D) — {display_date}")
 
-        def _camera_eye_for(view: str) -> Dict[str, float]:
-            base = {
-                "default": dict(x=1.25, y=1.25, z=0.9),
-                "top": dict(x=0.0, y=0.0, z=2.2),
-                "south": dict(x=0.0, y=-2.0, z=1.2),
-                "east": dict(x=2.0, y=0.0, z=1.2),
-            }.get(view, dict(x=1.25, y=1.25, z=0.9))
-            return base
 
-        camera_eye = _camera_eye_for(view_state)
+    st.subheader(f"Sun Path (3D) — {display_date}")
 
-        fig3d = sunpath_plotly_3d(
-            site, sel_ts,
-            month_range=month_range,
-            show_rays=True,
-            massing=[(-0.2,-0.1,0.2,0.3,0.0,0.25)],
-            epw=epw_df,
-            color_var=color_var,
-            hour_stride=hour_stride,
-            show_labels=show_labels,
-            label_every=label_every,
-            marker_every=marker_every,
-            camera_eye=camera_eye,
+    def _camera_eye_for(view: str) -> Dict[str, float]:
+        base = {
+            "default": dict(x=1.25, y=1.25, z=0.9),
+            "top": dict(x=0.0, y=0.0, z=2.2),
+            "south": dict(x=0.0, y=-2.0, z=1.2),
+            "east": dict(x=2.0, y=0.0, z=1.2),
+        }.get(view, dict(x=1.25, y=1.25, z=0.9))
+        return base
+
+    camera_eye = _camera_eye_for(view_state)
+
+    fig3d = sunpath_plotly_3d(
+        site, sel_ts,
+        month_range=month_range,
+        show_rays=True,
+        massing=[(-0.2,-0.1,0.2,0.3,0.0,0.25)],
+        epw=epw_df,
+        color_var=color_var,
+        hour_stride=hour_stride,
+        show_labels=show_labels,
+        label_every=label_every,
+        marker_every=marker_every,
+        camera_eye=camera_eye,
+    )
+    # Coerce common non-figure returns and guard against bad types before plotting.
+    if isinstance(fig3d, (dict, list)):
+        fig3d = go.Figure(fig3d)
+    if isinstance(fig3d, go.Figure):
+        st.plotly_chart(
+            fig3d,
+            use_container_width=True,
+            config={
+                "scrollZoom": True,
+                "displayModeBar": True,
+                "displaylogo": False,
+                "toImageButtonOptions": {"filename": f"{cname}_sunpath_3d", "format": "png", "scale": 2},
+            },
         )
-        # Coerce common non-figure returns and guard against bad types before plotting.
-        if isinstance(fig3d, (dict, list)):
-            fig3d = go.Figure(fig3d)
-        if isinstance(fig3d, go.Figure):
-            st.plotly_chart(
-                fig3d,
-                use_container_width=True,
-                config={
-                    "scrollZoom": True,
-                    "displayModeBar": True,
-                    "displaylogo": False,
-                    "toImageButtonOptions": {"filename": f"{cname}_sunpath_3d", "format": "png", "scale": 2},
-                },
-            )
-            st.caption("Sun position colored by selected environmental variable.")
-        else:
-            st.warning(f"3D sun path unavailable (got {type(fig3d).__name__}).")
-
+        st.caption("Sun position colored by selected environmental variable.")
+    else:
+        st.warning(f"3D sun path unavailable (got {type(fig3d).__name__}).")
 
     # ======================== PLOT: CARTESIAN (PVSyst-style) ========================
     st.markdown("#### Cartesian sun path (PVSyst style)")
 
-    # Only temperature mode currently used for coloring (keeps prior behavior explicit)
-    color_mode = "temperature"
+    # Link the Cartesian graph to the dynamically selected color variable
+    color_mode = color_var # inherit from the 3D expandable settings above
 
     # ---- Controls (feel free to move to a UI row above) ----
     cA, cB, cC, cD = st.columns([1,1,1,1])
@@ -6022,19 +6264,89 @@ def render_solar_page():
         # pvlib azimuth is 0..360 from North, elevation provided
         return sp["azimuth"].to_numpy(), sp["elevation"].to_numpy(), sp
 
-    # ---- Build a color scalar for temperature mode (via nearest EPW to *solar time*) ----
-    def _temps_for_index(idx_local):
-        """Return temperatures aligned to idx_local (tz-aware) using nearest match in epw_df."""
+    color_title = "Value"
+    colorscale = "RdYlBu_r"
+    cmin = None
+    cmax = None
+    
+    if epw_df is not None and not epw_df.empty and color_mode is not None:
+        if color_mode == "temperature":
+            target_col = next((c for c in ["temp_air","DryBulb","Dry_Bulb","drybulb","Temperature"] if c in epw_df.columns), None)
+            color_title = "Dry Bulb (°C)"
+        elif color_mode == "solar":
+            target_col = next((c for c in ["glohorrad","ghi","global_horiz","global_horizontal","solar","radiation"] if c in epw_df.columns), None)
+            color_title = "Solar Radiation (W/m²)"
+        elif color_mode == "humidity":
+            target_col = next((c for c in ["relhum","relative_humidity","rh"] if c in epw_df.columns), None)
+            color_title = "Relative Humidity (%)"
+        elif color_mode == "wind":
+            target_col = next((c for c in ["windspd","wind_speed","wspd","wind"] if c in epw_df.columns), None)
+            color_title = "Wind Speed (m/s)"
+        else:
+            target_col = None
+
+        if target_col is not None:
+            epw_vals = pd.to_numeric(epw_df[target_col], errors="coerce").dropna()
+            if not epw_vals.empty:
+                low, high = np.percentile(epw_vals, [1, 99])
+                if low == high:
+                    high = low + 1e-6
+                cmin, cmax = low, high
+
+    def _colors_for_index(idx_local):
+        """Return EPW data aligned to idx_local using month-day-hour matching (year-proof)."""
         if epw_df is None or epw_df.empty:
             return np.full(len(idx_local), np.nan)
-        # make sure epw_df index tz matches
+        
+        # Determine the column to extract based on color_mode setting
+        target_col = None
+        if color_mode == "temperature":
+            target_col = next((c for c in ["temp_air","DryBulb","Dry_Bulb","drybulb","Temperature"] if c in epw_df.columns), None)
+        elif color_mode == "solar":
+            target_col = next((c for c in ["glohorrad","ghi","global_horiz","global_horizontal","solar","radiation"] if c in epw_df.columns), None)
+        elif color_mode == "humidity":
+            target_col = next((c for c in ["relhum","relative_humidity","rh"] if c in epw_df.columns), None)
+        elif color_mode == "wind":
+            target_col = next((c for c in ["windspd","wind_speed","wspd","wind"] if c in epw_df.columns), None)
+        
+        if target_col is None:
+            return np.full(len(idx_local), np.nan)
+        
+        # Convert EPW to site local time for month/day/hour matching
         epw = epw_df.copy()
         if epw.index.tz is None:
-            epw.index = epw.index.tz_localize(site.tz)
-        # nearest lookup
-        locs = epw.index.get_indexer(idx_local, method="nearest")
-        locs = np.clip(locs, 0, len(epw) - 1)
-        return epw.iloc[locs]["temp_air"].to_numpy(dtype=float)
+            epw.index = epw.index.tz_localize("UTC")
+        epw_local = epw.tz_convert(site.tz)
+        
+        # Convert query index to site local time
+        if idx_local.tz is None:
+            idx_local = idx_local.tz_localize(site.tz)
+        else:
+            idx_local = idx_local.tz_convert(site.tz)
+        
+        # Build lookup dict: (month, day, hour) -> value
+        epw_vals = pd.to_numeric(epw_local[target_col], errors="coerce")
+        lookup = {}
+        for ts, val in zip(epw_local.index, epw_vals):
+            lookup[(ts.month, ts.day, ts.hour)] = val
+        
+        result = np.full(len(idx_local), np.nan)
+        for i, ts in enumerate(idx_local):
+            key = (ts.month, ts.day, ts.hour)
+            if key in lookup:
+                result[i] = lookup[key]
+            else:
+                best_val = np.nan
+                best_dist = 999
+                for (m, d, h), v in lookup.items():
+                    if m == ts.month and h == ts.hour:
+                        dist = abs(d - ts.day)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_val = v
+                result[i] = best_val
+            
+        return result
 
     def _season_color(month):
         return {12:"#2D7DD2",1:"#2D7DD2",2:"#2D7DD2",
@@ -6067,13 +6379,13 @@ def render_solar_page():
         text_array = [""] * len(x)
         text_array[lbl_idx] = pd.Timestamp(year, m, day).strftime("%b")
 
-        if color_mode == "temperature":
-            temps = _temps_for_index(ts_local[mask])
+        if color_mode is not None:
+            c_vals = _colors_for_index(ts_local[mask])
             tr = go.Scatter(
                 x=x, y=y, mode="lines+markers+text",
                 text=text_array, textposition="top center", textfont=dict(color="rgba(200,200,200,0.9)", size=10),
-                marker=dict(size=4, color=temps, colorscale="RdYlBu_r",
-                            cmin=-10, cmax=35, showscale=False),
+                marker=dict(size=4, color=c_vals, colorscale=colorscale,
+                            cmin=cmin, cmax=cmax, showscale=False),
                 line=dict(width=2, color="rgba(200,200,200,0.75)"),
                 name=pd.Timestamp(year, m, day).strftime("%b 21"),
                 showlegend=False
@@ -6147,15 +6459,15 @@ def render_solar_page():
     m_sel = alt_sel > 0
     x_sel = az_sel[m_sel]; y_sel = alt_sel[m_sel]
     labels = [f"{t.hour:02d}:00" for t in idx_sel[m_sel]]
-    if color_mode == "temperature":
-        temps_sel = _temps_for_index(idx_sel[m_sel])
+    if color_mode is not None:
+        c_vals_sel = _colors_for_index(idx_sel[m_sel])
         suns_traces_cart.append(
             go.Scatter(
                 x=x_sel, y=y_sel, mode="lines+markers+text",
                 text=labels if show_hour_labels else None,
                 textposition="top center",
-                marker=dict(size=6, color=temps_sel, colorscale="RdYlBu_r",
-                            cmin=-10, cmax=35, showscale=False, line=dict(width=0.5, color="#222")),
+                marker=dict(size=6, color=c_vals_sel, colorscale=colorscale,
+                            cmin=cmin, cmax=cmax, showscale=False, line=dict(width=0.5, color="#222")),
                 line=dict(width=2, color="#CCCCCC"),
                 name=f"{sel_ts:%b %d} (solar day)"
             )
@@ -6179,14 +6491,14 @@ def render_solar_page():
     for tr in analemma_cart:     fig_cart.add_trace(tr)
     for tr in suns_traces_cart:  fig_cart.add_trace(tr)
 
-    # Optional coloraxis with colorbar (only if temperature mode AND requested)
-    if color_mode == "temperature" and show_colorbar:
+    # Optional coloraxis with colorbar
+    if color_mode is not None and show_colorbar:
         # Add a tiny hidden dummy trace to carry the colorbar
         fig_cart.add_trace(go.Scatter(
             x=[None], y=[None], mode="markers",
-            marker=dict(size=0.1, color=[-10, 35], colorscale="RdYlBu_r",
-                        cmin=-10, cmax=35, showscale=True,
-                        colorbar=dict(title="°C", len=0.85)),
+            marker=dict(size=0.1, color=[cmin, cmax], colorscale=colorscale,
+                        cmin=cmin, cmax=cmax, showscale=True,
+                        colorbar=dict(title=color_title, len=0.85)),
             showlegend=False, hoverinfo="skip"
         ))
 
