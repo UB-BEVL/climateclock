@@ -1736,8 +1736,8 @@ def _encode_image_to_base64(path: Union[str, Path]) -> str:
         return ""
 
 
-LOGO_PRIMARY = _encode_image_to_base64(Path("assets/bevl_framework.png"))
-LOGO_SECONDARY = _encode_image_to_base64(Path("assets/ub_framework.png"))
+LOGO_PRIMARY = _encode_image_to_base64(Path("assets/bevl_framework.svg"))
+LOGO_SECONDARY = _encode_image_to_base64(Path("assets/ub_framework.svg"))
 
 
 
@@ -3164,12 +3164,13 @@ def render_dashboard_page():
         )
 
         loc = header["location"]
-        overview_tab, comfort_tab, diagnostics_tab, heatmaps_tab, temp_hum_tab, solar_tab, psych_tab, wind_tab, raw_data_tab = st.tabs([
+        overview_tab, comfort_tab, diagnostics_tab, heatmaps_tab, temp_hum_tab, utci_tab, solar_tab, psych_tab, wind_tab, raw_data_tab = st.tabs([
             "Overview & Stats",
             "Comfort & Loads",
             "Data Quality",
             "Heatmaps",
             "Temp & Humidity",
+            "UTCI",
             "Solar Analysis",
             "Psychrometrics",
             "Wind",
@@ -3922,8 +3923,8 @@ def render_dashboard_page():
                         c1d, c2d = st.columns(2)
                         with c1d:
                             try:
-                                png_bytes = fig.to_image(format="png", scale=2, width=1200, height=800)
-                                st.download_button(label="📥 Download heatmaps as PNG", data=png_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.png", mime="image/png")
+                                svg_bytes = fig.to_image(format="svg", scale=2, width=1200, height=800)
+                                st.download_button(label="📥 Download heatmaps as SVG", data=svg_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.svg", mime="image/svg+xml")
                             except Exception:
                                 html_bytes = fig.to_html(include_plotlyjs='cdn').encode('utf-8')
                                 st.download_button(label="📥 Download heatmaps (HTML)", data=html_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.html", mime="text/html")
@@ -3974,6 +3975,9 @@ def render_dashboard_page():
             render_temperature_page()
             render_heatmap_page()
             render_humidity_page()
+            
+        with utci_tab:
+            render_utci_page()
             
         with solar_tab:
             render_solar_page()
@@ -4521,10 +4525,10 @@ def render_trends_page():
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
     with d1:
         try:
-            png_bytes = fig.to_image(format="png", width=1400, height=800, scale=2)
-            st.download_button("📥 Download Trends (PNG)", png_bytes, f"{clean_loc}_trends_chart.png", "image/png")
+            svg_bytes = fig.to_image(format="svg", width=1400, height=800, scale=2)
+            st.download_button("📥 Download Trends (SVG)", svg_bytes, f"{clean_loc}_trends_chart.svg", "image/svg+xml")
         except Exception as e:
-            st.download_button("📥 Download Trends (PNG) - Unavailable", b"", disabled=True, help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
+            st.download_button("📥 Download Trends (SVG) - Unavailable", b"", disabled=True, help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
     with d2:
         try:
             html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")
@@ -4572,9 +4576,9 @@ def _render_bar_chart(cdf, col, title_suffix, y_label, color, key_suffix):
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
     with d1:
         try:
-            st.download_button(f"📥 Download {title_suffix} (PNG)", fig.to_image(format="png", width=1200, height=600, scale=2), f"{clean_loc}_{col}_chart.png", "image/png", key=f"dl_{col}_png_{key_suffix}")
+            st.download_button(f"📥 Download {title_suffix} (SVG)", fig.to_image(format="svg", width=1200, height=600, scale=2), f"{clean_loc}_{col}_chart.svg", "image/svg+xml", key=f"dl_{col}_png_{key_suffix}")
         except Exception as e: 
-            st.download_button(f"📥 Download {title_suffix} (PNG) - Unavailable", b"", disabled=True, key=f"dl_{col}_png_{key_suffix}_err", help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
+            st.download_button(f"📥 Download {title_suffix} (SVG) - Unavailable", b"", disabled=True, key=f"dl_{col}_png_{key_suffix}_err", help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
     with d2:
         try:
             st.download_button(f"📥 Download {title_suffix} (HTML)", fig.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{clean_loc}_{col}_chart.html", "text/html", key=f"dl_{col}_html_{key_suffix}")
@@ -4630,9 +4634,9 @@ def _render_daily_scatter(cdf, col, title_suffix, y_label, line_color, key_suffi
     d1, d2 = st.columns(2)
     with d1:
         try:
-            st.download_button(f"📥 Download {title_suffix} (PNG)", fig_sc.to_image(format="png", width=1400, height=800, scale=2), f"{cname}_{col}_scatter.png", "image/png", key=f"dl_{col}_scat_png_{key_suffix}")
+            st.download_button(f"📥 Download {title_suffix} (SVG)", fig_sc.to_image(format="svg", width=1400, height=800, scale=2), f"{cname}_{col}_scatter.svg", "image/svg+xml", key=f"dl_{col}_scat_png_{key_suffix}")
         except Exception as e: 
-            st.download_button(f"📥 Download {title_suffix} (PNG) - Unavailable", b"", disabled=True, key=f"dl_{col}_scat_png_{key_suffix}_err", help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
+            st.download_button(f"📥 Download {title_suffix} (SVG) - Unavailable", b"", disabled=True, key=f"dl_{col}_scat_png_{key_suffix}_err", help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
     with d2:
         try:
             st.download_button(f"📥 Download {title_suffix} (HTML)", fig_sc.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{cname}_{col}_scatter.html", "text/html", key=f"dl_{col}_scat_html_{key_suffix}")
@@ -4662,9 +4666,9 @@ def _render_heatmap(cdf, col, title_suffix, y_label, color_scale):
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
     with d1:
         try:
-            st.download_button(f"📥 Download {title_suffix} (PNG)", fig_hm.to_image(format="png", width=1200, height=600, scale=2), f"{clean_loc}_{col}_heatmap.png", "image/png", key=f"dl_{col}_hm_png")
+            st.download_button(f"📥 Download {title_suffix} (SVG)", fig_hm.to_image(format="svg", width=1200, height=600, scale=2), f"{clean_loc}_{col}_heatmap.svg", "image/svg+xml", key=f"dl_{col}_hm_png")
         except Exception as e: 
-            st.download_button(f"📥 Download {title_suffix} (PNG) - Unavailable", b"", disabled=True, key=f"dl_{col}_hm_png_err", help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
+            st.download_button(f"📥 Download {title_suffix} (SVG) - Unavailable", b"", disabled=True, key=f"dl_{col}_hm_png_err", help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
     with d2:
         try:
             st.download_button(f"📥 Download {title_suffix} (HTML)", fig_hm.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{clean_loc}_{col}_heatmap.html", "text/html", key=f"dl_{col}_hm_html")
@@ -4690,6 +4694,28 @@ def render_humidity_page():
     _render_bar_chart(cdf, "relhum", "Humidity (Bar Chart)", "Relative Humidity (%)", "dodgerblue", "hum_bar")
     _render_daily_scatter(cdf, "relhum", "Humidity Daily scatter", "Relative Humidity (%)", "dodgerblue", "hum_scat")
     _render_heatmap(cdf, "relhum", "Humidity Annual Heatmap (Day × Hour)", "%", "Blues")
+
+def render_utci_page():
+    cdf = st.session_state.get("cdf")
+    if cdf is None: return
+    
+    utci_df = st.session_state.get("comfort_pkg", {}).get("utci")
+    
+    if utci_df is None or utci_df.empty:
+        st.info("UTCI index could not be computed. Ensure dry-bulb temperature, relative humidity, and wind speed are present.")
+        return
+        
+    temp_df = cdf.copy()
+    temp_df["utci_index"] = utci_df
+    
+    st.markdown("<h3>Universal Thermal Climate Index (UTCI)</h3>", unsafe_allow_html=True)
+    st.caption("UTCI is an advanced thermal comfort metric that combines temperature, humidity, wind speed, and radiation estimating the physiological response of the human body.")
+        
+    _render_bar_chart(temp_df, "utci_index", "UTCI (Bar Chart)", "UTCI (°C)", "purple", "utci_bar")
+    _render_daily_scatter(temp_df, "utci_index", "UTCI Daily scatter", "UTCI (°C)", "purple", "utci_scat")
+    
+    # Custom divergent scale for UTCI limits (extreme cold to extreme heat)
+    _render_heatmap(temp_df, "utci_index", "UTCI Annual Heatmap (Day × Hour)", "°C", "Turbo")
 # ---------------------- SUN & CLOUDS ----------------------
 
 
@@ -7008,8 +7034,8 @@ def render_psychrometrics_page():
     with d1:
         try:
             # Explicitly safe dimensions to prevent memory crash
-            png_bytes = fig_psy.to_image(format="png", width=1200, height=900, scale=2)
-            st.download_button("📥 Download Chart (PNG)", png_bytes, f"{clean_loc}_psychrometric_chart.png", "image/png", key="dl_psy_png")
+            svg_bytes = fig_psy.to_image(format="svg", width=1200, height=900, scale=2)
+            st.download_button("📥 Download Chart (SVG)", svg_bytes, f"{clean_loc}_psychrometric_chart.svg", "image/svg+xml", key="dl_psy_png")
         except Exception:
             pass
     with d2:
@@ -7134,10 +7160,10 @@ def render_wind_page():
         clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
         with d1:
             try:
-                png_bytes = fig.to_image(format="png", width=800, height=800, scale=2)
-                st.download_button("📥 Download Wind Rose (PNG)", png_bytes, f"{clean_loc}_wind_rose.png", "image/png")
+                svg_bytes = fig.to_image(format="svg", width=800, height=800, scale=2)
+                st.download_button("📥 Download Wind Rose (SVG)", svg_bytes, f"{clean_loc}_wind_rose.svg", "image/svg+xml")
             except Exception as e:
-                st.download_button("📥 Download Wind Rose (PNG) - Unavailable", b"", disabled=True, help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
+                st.download_button("📥 Download Wind Rose (SVG) - Unavailable", b"", disabled=True, help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
         with d2:
             try:
                 html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")

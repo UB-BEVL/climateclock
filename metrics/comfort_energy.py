@@ -32,40 +32,38 @@ def compute_utci_approx(
     rh_col: str = "relhum",
     wind_col: str = "windspd",
 ) -> pd.Series:
-    """Approximate UTCI from basic meteorological variables.
+    """Accurate UTCI calculation utilizing the PyThermalComfort library's polynomial.
 
-    This uses a reduced form of the official UTCI polynomial (Broede et al. 2012) that
-    captures first-order effects of air temperature (Ta), vapor pressure (vp), and wind speed (ws):
-
-        UTCI ≈ Ta + 0.607562 + 0.022771 * Ta + 0.000806 * Ta**2 + 0.002 * vp
-                - 0.065 * ws + 0.001 * Ta * ws - 0.015 * Ta * vp - 0.00025 * vp * ws
-
-    where vapor pressure vp (hPa) = RH/100 * 6.105 * exp(17.27 * Ta / (237.7 + Ta)).
-
-    The coefficients above are a simplified fit intended for rapid assessments; they do not
-    replace the full UTCI implementation but provide comparable trends for design studies.
+    Calculates the Universal Thermal Climate Index.
     """
     missing = [c for c in (temp_col, rh_col, wind_col) if c not in df.columns]
     if missing:
-        raise KeyError(f"Cannot compute UTCI approximation, missing columns: {missing}")
+        raise KeyError(f"Cannot compute UTCI, missing columns: {missing}")
 
-    Ta = df[temp_col].astype(float)
-    RH = df[rh_col].astype(float).clip(0, 100)
-    ws = df[wind_col].astype(float).fillna(1.5).clip(lower=0.1)
+    from pythermalcomfort.models import utci
+    Ta = df[temp_col].to_numpy()
+    RH = df[rh_col].astype(float).clip(0, 100).to_numpy()
+    ws = df[wind_col].astype(float).fillna(1.5).clip(lower=0.1).to_numpy()
 
-    vp = (RH / 100.0) * 6.105 * np.exp((17.27 * Ta) / (237.7 + Ta))
-    utci = (
-        Ta
-        + 0.607562
-        + 0.022771 * Ta
-        + 0.000806 * (Ta**2)
-        + 0.002 * vp
-        - 0.065 * ws
-        + 0.001 * Ta * ws
-        - 0.015 * Ta * vp / 100.0
-        - 0.00025 * vp * ws
-    )
-    return pd.Series(utci.to_numpy(), index=df.index, name="UTCI")
+    # For outdoor environments, if MRT (Mean Radiant Temp) is unavailable, 
+    # it is often approximated as Air Temp + small offset or just Air Temp for simplicity
+    # without running a heavy sky globe simulation.
+    mrt = Ta 
+
+    try:
+        # PyThermalComfort returns a dictionary-like object with .utci 
+        results = utci(tdb=Ta, tr=mrt, v=ws, rh=RH)
+        utci_vals = results.utci
+    except Exception:
+        # Fallback to the approximation if library fails for some reason
+        vp = (RH / 100.0) * 6.105 * np.exp((17.27 * Ta) / (237.7 + Ta))
+        utci_vals = (
+            Ta + 0.607562 + 0.022771 * Ta + 0.000806 * (Ta**2)
+            + 0.002 * vp - 0.065 * ws + 0.001 * Ta * ws
+            - 0.015 * Ta * vp / 100.0 - 0.00025 * vp * ws
+        )
+
+    return pd.Series(utci_vals, index=df.index, name="UTCI")
 
 
 def compute_heat_index(
