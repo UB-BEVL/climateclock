@@ -66,6 +66,40 @@ def compute_utci_approx(
     return pd.Series(utci_vals, index=df.index, name="UTCI")
 
 
+def compute_pmv(
+    df: pd.DataFrame,
+    temp_col: str = "drybulb",
+    rh_col: str = "relhum",
+    wind_col: str = "windspd",
+    met: float = 1.1,
+    clo: float = 0.5,
+) -> pd.Series:
+    """Accurate PMV calculation utilizing the PyThermalComfort library's ASHRAE 55 model.
+    
+    Calculates the Predicted Mean Vote.
+    """
+    missing = [c for c in (temp_col, rh_col, wind_col) if c not in df.columns]
+    if missing:
+        raise KeyError(f"Cannot compute PMV, missing columns: {missing}")
+
+    from pythermalcomfort.models.pmv_ppd_ashrae import pmv_ppd_ashrae
+    import numpy as np
+    
+    Ta = df[temp_col].to_numpy()
+    RH = df[rh_col].astype(float).clip(0, 100).to_numpy()
+    ws = df[wind_col].astype(float).fillna(0.1).clip(lower=0.1).to_numpy()
+
+    mrt = Ta
+
+    try:
+        results = pmv_ppd_ashrae(tdb=Ta, tr=mrt, vr=ws, rh=RH, met=met, clo=clo, limit_inputs=False)
+        pmv_vals = results.pmv
+    except Exception:
+        pmv_vals = np.full(len(df), np.nan)
+
+    return pd.Series(pmv_vals, index=df.index, name="PMV")
+
+
 def compute_heat_index(
     df: pd.DataFrame,
     temp_col: str = "drybulb",

@@ -905,6 +905,7 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
     package: Dict[str, Optional[pd.DataFrame]] = {
         "di": None,
         "utci": None,
+        "pmv": None,
         "heat_index": None,
         "humidex": None,
         "comfort_annual": pd.DataFrame(),
@@ -931,6 +932,14 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
             package["utci"] = utci
         except Exception:
             utci = None
+
+    pmv = None
+    if {"drybulb", "relhum", "windspd"}.issubset(cdf.columns):
+        try:
+            pmv = ce.compute_pmv(cdf)
+            package["pmv"] = pmv
+        except Exception:
+            pmv = None
 
     heat_index = None
     if {"drybulb", "relhum"}.issubset(cdf.columns):
@@ -3164,13 +3173,15 @@ def render_dashboard_page():
         )
 
         loc = header["location"]
-        overview_tab, comfort_tab, diagnostics_tab, heatmaps_tab, temp_hum_tab, utci_tab, solar_tab, psych_tab, wind_tab, raw_data_tab = st.tabs([
+        overview_tab, comfort_tab, diagnostics_tab, heatmaps_tab, temp_hum_tab, di_tab, utci_tab, pmv_tab, solar_tab, psych_tab, wind_tab, raw_data_tab = st.tabs([
             "Overview & Stats",
             "Comfort & Loads",
             "Data Quality",
             "Heatmaps",
             "Temp & Humidity",
+            "DI",
             "UTCI",
+            "PMV",
             "Solar Analysis",
             "Psychrometrics",
             "Wind",
@@ -3976,8 +3987,14 @@ def render_dashboard_page():
             render_heatmap_page()
             render_humidity_page()
             
+        with di_tab:
+            render_di_page()
+            
         with utci_tab:
             render_utci_page()
+            
+        with pmv_tab:
+            render_pmv_page()
             
         with solar_tab:
             render_solar_page()
@@ -4716,6 +4733,88 @@ def render_utci_page():
     
     # Custom divergent scale for UTCI limits (extreme cold to extreme heat)
     _render_heatmap(temp_df, "utci_index", "UTCI Annual Heatmap (Day × Hour)", "°C", "Turbo")
+
+def render_pmv_page():
+    cdf = st.session_state.get("cdf")
+    if cdf is None: return
+    
+    pmv_df = st.session_state.get("comfort_pkg", {}).get("pmv")
+    
+    if pmv_df is None or pmv_df.empty:
+        st.info("PMV index could not be computed. Ensure dry-bulb temperature, relative humidity, and wind speed are present.")
+        return
+        
+    temp_df = cdf.copy()
+    temp_df["pmv_index"] = pmv_df
+    
+    st.markdown("<h3>Predicted Mean Vote (PMV)</h3>", unsafe_allow_html=True)
+    st.caption("PMV is a thermal comfort index that predicts the mean value of the thermal votes of a large group of people on a 7-point thermal sensation scale (-3 cold to +3 hot).")
+        
+    _render_bar_chart(temp_df, "pmv_index", "PMV (Bar Chart)", "PMV", "teal", "pmv_bar")
+    _render_daily_scatter(temp_df, "pmv_index", "PMV Daily scatter", "PMV", "teal", "pmv_scat")
+    
+    # Custom divergent scale for PMV limits (-3 to +3)
+    _render_heatmap(temp_df, "pmv_index", "PMV Annual Heatmap (Day × Hour)", "Vote", "RdYlBu_r")
+
+def render_di_page():
+    cdf = st.session_state.get("cdf")
+    if cdf is None: return
+    
+    di_df = st.session_state.get("comfort_pkg", {}).get("di")
+    
+    if di_df is None or di_df.empty:
+        st.info("DI index could not be computed. Ensure dry-bulb temperature and relative humidity are present.")
+        return
+        
+    temp_df = cdf.copy()
+    temp_df["di_index"] = di_df
+    
+    st.markdown("<h3>Discomfort Index (DI)</h3>", unsafe_allow_html=True)
+    st.caption("Thom's Discomfort Index (DI) is an indicator of heat stress combining temperature and humidity.")
+    
+    st.markdown("#### Custom Discomfort Band")
+    st.caption("Select the temperature band at which you feel discomfort.")
+    
+    # Initialize slider state
+    if "di_discomfort_band" not in st.session_state:
+        st.session_state["di_discomfort_band"] = (24.0, 27.0)
+
+    # Unit based conversion
+    unit_label = "°F" if _temp_unit() == "F" else "°C"
+    if _temp_unit() == "F":
+        min_v = int(round(_c_to_f(0.0)))
+        max_v = int(round(_c_to_f(45.0)))
+        val = (int(round(_c_to_f(st.session_state["di_discomfort_band"][0]))),
+               int(round(_c_to_f(st.session_state["di_discomfort_band"][1]))))
+        slider_val = st.slider(f"Discomfort Band ({unit_label})", min_value=min_v, max_value=max_v, value=val, step=1)
+        st.session_state["di_discomfort_band"] = (_f_to_c(slider_val[0]), _f_to_c(slider_val[1]))
+    else:
+        min_v = 0.0
+        max_v = 45.0
+        val = st.session_state["di_discomfort_band"]
+        slider_val = st.slider(f"Discomfort Band ({unit_label})", min_value=min_v, max_value=max_v, value=val, step=0.5)
+        st.session_state["di_discomfort_band"] = slider_val
+
+    # Read the updated bounds (in C)
+    low_bound, high_bound = st.session_state["di_discomfort_band"]
+    
+    # Calculate discomfort hours
+    discomfort_mask = (temp_df["di_index"] >= low_bound) & (temp_df["di_index"] <= high_bound)
+    discomfort_hours = int(discomfort_mask.sum())
+    total_hours = int(temp_df["di_index"].notna().sum())
+    if total_hours > 0:
+        pct = (discomfort_hours / total_hours) * 100
+    else:
+        pct = 0.0
+        
+    st.metric(f"Hours within Discomfort Band ({format_temperature(low_bound)} to {format_temperature(high_bound)})", f"{discomfort_hours} h", f"{pct:.1f}% of year", delta_color="off")
+    
+    _render_bar_chart(temp_df, "di_index", "DI (Bar Chart)", "DI", "orange", "di_bar")
+    _render_daily_scatter(temp_df, "di_index", "DI Daily scatter", "DI", "orange", "di_scat")
+    
+    # Custom divergent scale for DI limits
+    _render_heatmap(temp_df, "di_index", "DI Annual Heatmap (Day × Hour)", "DI", "RdYlBu_r")
+
 # ---------------------- SUN & CLOUDS ----------------------
 
 
