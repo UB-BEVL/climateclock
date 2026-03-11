@@ -1745,8 +1745,9 @@ def _encode_image_to_base64(path: Union[str, Path]) -> str:
         return ""
 
 
-LOGO_PRIMARY = _encode_image_to_base64(Path("assets/bevl_framework.svg"))
-LOGO_SECONDARY = _encode_image_to_base64(Path("assets/ub_framework.svg"))
+BASE_DIR = Path(__file__).parent
+LOGO_PRIMARY = _encode_image_to_base64(BASE_DIR / "assets" / "bevl_framework.png")
+LOGO_SECONDARY = _encode_image_to_base64(BASE_DIR / "assets" / "ub_framework.png")
 
 
 
