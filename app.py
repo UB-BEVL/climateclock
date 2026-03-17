@@ -4754,7 +4754,10 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
     d1, d2 = st.columns(2)
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
     with d1:
-        pass # removed to_image SVG export as per earlier fix to prevent kaleido crash
+        try:
+            st.download_button(f"📥 Download {title_suffix} (SVG)", fig.to_image(format="svg", width=1200, height=600, scale=2), f"{clean_loc}_{col}_{key_suffix}.svg", "image/svg+xml", key=f"dl_{col}_{key_suffix}_svg")
+        except Exception as e:
+            st.download_button(f"📥 Download {title_suffix} (SVG) - Unavailable", b"", disabled=True, key=f"dl_{col}_{key_suffix}_err", help=f"SVG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
     with d2:
         try:
             st.download_button(f"📥 Download {title_suffix} (HTML)", fig.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{clean_loc}_{col}_{key_suffix}.html", "text/html", key=f"dl_{col}_{key_suffix}_html")
@@ -7625,7 +7628,28 @@ def render_live_data_page():
                                     st.error("Excel ingest requires the 'openpyxl' package. Install it and try again.")
                                     raw = pd.DataFrame()
                             else:
-                                raw = pd.read_csv(uploaded_file)
+                                import io, csv
+                                if hasattr(uploaded_file, "seek"): uploaded_file.seek(0)
+                                content = uploaded_file.read()
+                                if isinstance(content, bytes): content = content.decode("utf-8", errors="replace")
+                                try:
+                                    raw = pd.read_csv(io.StringIO(content))
+                                except Exception as e:
+                                    if "saw" in str(e).lower() and "expected" in str(e).lower():
+                                        lines = content.splitlines()
+                                        max_cols = 0
+                                        best_skip = 0
+                                        for i, line in enumerate(lines[:50]):
+                                            if not line.strip(): continue
+                                            try:
+                                                cols = len(next(csv.reader([line])))
+                                                if cols > max_cols:
+                                                    max_cols = cols
+                                                    best_skip = i
+                                            except Exception: pass
+                                        raw = pd.read_csv(io.StringIO(content), skiprows=best_skip)
+                                    else:
+                                        raise
                             norm = _normalize_sensor_columns(raw, tzinfo or "US/Eastern")
                         if norm.empty:
                             st.warning(f"No rows after parsing: {uploaded_file.name}")
@@ -7953,10 +7977,16 @@ def render_live_data_page():
             work = work.dropna(subset=["timestamp"]).sort_values("timestamp")
             work = work.set_index("timestamp")
             numeric_cols = [c for c in ["T_db", "RH", "GHI", "abs_hum", "windspd", "winddir", "temperature", "relative_humidity", "ghi", "wind_speed", "wind_dir"] if c in work.columns]
-            resampled = work.resample("1H").mean()
+            
+            # Select only numeric columns to prevent TypeError during aggregation
+            work_num = work.select_dtypes(include=["number"])
+            resampled = work_num.resample("1H").mean()
+            
             if numeric_cols:
-                resampled[numeric_cols] = resampled[numeric_cols].interpolate(method="time", limit_direction="both")
-                resampled[numeric_cols] = resampled[numeric_cols].rolling(window=1, center=True, min_periods=1).mean()
+                valid_cols = [c for c in numeric_cols if c in resampled.columns]
+                if valid_cols:
+                    resampled[valid_cols] = resampled[valid_cols].interpolate(method="time", limit_direction="both")
+                    resampled[valid_cols] = resampled[valid_cols].rolling(window=1, center=True, min_periods=1).mean()
             return resampled.reset_index().dropna(subset=["timestamp"])
 
         # Sensor timezone normalization + smoothing pipeline (plotting only; raw store unchanged)

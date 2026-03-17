@@ -79,7 +79,40 @@ def ingest_csv(uploaded_file) -> pd.DataFrame:
     pd.DataFrame
         Schema-aligned sensor data indexed by timestamp.
     """
-    df = pd.read_csv(uploaded_file)
+    import io
+    import csv
+
+    # Read the file contents. Streamlit UploadedFile's read() returns bytes.
+    if hasattr(uploaded_file, "seek"):
+        uploaded_file.seek(0)
+    content = uploaded_file.read()
+    if isinstance(content, bytes):
+        content = content.decode("utf-8", errors="replace")
+
+    try:
+        # Try normal read first
+        df = pd.read_csv(io.StringIO(content))
+    except Exception as e:
+        # If parsing fails due to preamble lines having fewer columns:
+        if "saw" in str(e).lower() and "expected" in str(e).lower():
+            lines = content.splitlines()
+            max_cols = 0
+            best_skip = 0
+            # Scan the first 50 lines to find the actual table header (line with most columns)
+            for i, line in enumerate(lines[:50]):
+                if not line.strip(): 
+                    continue
+                try:
+                    cols = len(next(csv.reader([line])))
+                    if cols > max_cols:
+                        max_cols = cols
+                        best_skip = i
+                except Exception:
+                    pass
+            df = pd.read_csv(io.StringIO(content), skiprows=best_skip)
+        else:
+            raise
+
     normalized = _require_columns(df)
     normalized["timestamp"] = pd.to_datetime(normalized["timestamp"], utc=True, errors="coerce")
     normalized["sensor_id"] = normalized["sensor_id"].fillna("sensor_csv")
