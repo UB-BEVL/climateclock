@@ -1,0 +1,1 @@
+def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: dict) -> Optional[go.Figure]:

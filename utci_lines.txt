@@ -1,0 +1,75 @@
+906:         "utci": None,
+907:         "pmv": None,
+919:     di = None
+922:             di = ce.compute_di(cdf)
+925:             di = None
+927:     utci = None
+930:             utci = ce.compute_utci_approx(cdf)
+931:             package["utci"] = utci
+933:             utci = None
+935:     pmv = None
+938:             pmv = ce.compute_pmv(cdf)
+939:             package["pmv"] = pmv
+941:             pmv = None
+960:         package["comfort_annual"] = ce.summarize_comfort(cdf, di, utci, freq="A")
+965:         package["comfort_monthly"] = ce.summarize_comfort(cdf, di, utci, freq="M")
+3176:         overview_tab, comfort_tab, diagnostics_tab, heatmaps_tab, temp_hum_tab, di_tab, utci_tab, pmv_tab, solar_tab, psych_tab, wind_tab, raw_data_tab = st.tabs([
+3183:             "UTCI",
+3184:             "PMV",
+3315:             utci_series = comfort_pkg.get("utci")
+3391:                     utci_series,
+3409:                     utci_series,
+3437:                 utci_heat = latest.get("hours_utci_heat_stress", np.nan)
+3438:                 utci_cold = latest.get("hours_utci_cold_stress", np.nan)
+3455:                 utci_available = utci_series is not None and not getattr(utci_series, "empty", True)
+3458:                 utci_value = _fmt_hours(utci_heat)
+3459:                 delta_cold = None if pd.isna(utci_cold) else f"Cold: {utci_cold:.0f} h"
+3461:                 mc2.metric("DI discomfort", di_value)
+3462:                 mc3.metric("UTCI heat stress", utci_value, delta=delta_cold)
+3466:                 if not utci_available:
+3467:                     mc3.caption("Needs dry-bulb, relative humidity, and wind speed for UTCI.")
+3553:                     if "hours_utci_heat_stress" in monthly_grouped:
+3555:                             name="UTCI heat stress",
+3557:                             y=monthly_grouped["hours_utci_heat_stress"].fillna(0),
+3603:                             snap_di = di_series.iloc[nearest_idx[0]] if di_series is not None and not getattr(di_series, "empty", True) else np.nan
+3604:                             snap_utci = utci_series.iloc[nearest_idx[0]] if utci_series is not None and not getattr(utci_series, "empty", True) else np.nan
+3610:                                 ("UTCI (°C)", "—" if pd.isna(snap_utci) else f"{snap_utci:.1f}"),
+3620:                     pct_cols = [c for c in latest.index if c.startswith("temp_p") or c.startswith("di_p") or c.startswith("utci_p")]
+3993:         with utci_tab:
+3994:             render_utci_page()
+3996:         with pmv_tab:
+3997:             render_pmv_page()
+4715: def render_utci_page():
+4719:     utci_df = st.session_state.get("comfort_pkg", {}).get("utci")
+4721:     if utci_df is None or utci_df.empty:
+4722:         st.info("UTCI index could not be computed. Ensure dry-bulb temperature, relative humidity, and wind speed are present.")
+4726:     temp_df["utci_index"] = utci_df
+4728:     st.markdown("<h3>Universal Thermal Climate Index (UTCI)</h3>", unsafe_allow_html=True)
+4729:     st.caption("UTCI is an advanced thermal comfort metric that combines temperature, humidity, wind speed, and radiation estimating the physiological response of the human body.")
+4731:     _render_bar_chart(temp_df, "utci_index", "UTCI (Bar Chart)", "UTCI (°C)", "purple", "utci_bar")
+4732:     _render_daily_scatter(temp_df, "utci_index", "UTCI Daily scatter", "UTCI (°C)", "purple", "utci_scat")
+4734:     # Custom divergent scale for UTCI limits (extreme cold to extreme heat)
+4735:     _render_heatmap(temp_df, "utci_index", "UTCI Annual Heatmap (Day × Hour)", "°C", "Turbo")
+4737: def render_pmv_page():
+4741:     pmv_df = st.session_state.get("comfort_pkg", {}).get("pmv")
+4743:     if pmv_df is None or pmv_df.empty:
+4744:         st.info("PMV index could not be computed. Ensure dry-bulb temperature, relative humidity, and wind speed are present.")
+4748:     temp_df["pmv_index"] = pmv_df
+4750:     st.markdown("<h3>Predicted Mean Vote (PMV)</h3>", unsafe_allow_html=True)
+4751:     st.caption("PMV is a thermal comfort index that predicts the mean value of the thermal votes of a large group of people on a 7-point thermal sensation scale (-3 cold to +3 hot).")
+4753:     _render_bar_chart(temp_df, "pmv_index", "PMV (Bar Chart)", "PMV", "teal", "pmv_bar")
+4754:     _render_daily_scatter(temp_df, "pmv_index", "PMV Daily scatter", "PMV", "teal", "pmv_scat")
+4756:     # Custom divergent scale for PMV limits (-3 to +3)
+4757:     _render_heatmap(temp_df, "pmv_index", "PMV Annual Heatmap (Day × Hour)", "Vote", "RdYlBu_r")
+4766:         st.info("DI index could not be computed. Ensure dry-bulb temperature and relative humidity are present.")
+4812:     _render_bar_chart(temp_df, "di_index", "DI (Bar Chart)", "DI", "orange", "di_bar")
+4813:     _render_daily_scatter(temp_df, "di_index", "DI Daily scatter", "DI", "orange", "di_scat")
+4815:     # Custom divergent scale for DI limits
+4816:     _render_heatmap(temp_df, "di_index", "DI Annual Heatmap (Day × Hour)", "DI", "RdYlBu_r")
+9330:                     "hours_utci_heat_stress": "UTCI heat h",
+9331:                     "hours_utci_cold_stress": "UTCI cold h",
+9332:                     "hours_di_discomfort": "DI discomfort h",
+9381:                         "UTCI heat stress",
+9382:                         _metric_value(target_row, "hours_utci_heat_stress"),
+9383:                         delta=_delta(target_row, base_row, "hours_utci_heat_stress"),
+9390:                         ("UTCI heat h", target_row.get("hours_utci_heat_stress", np.nan), base_row.get("hours_utci_heat_stress", np.nan)),
