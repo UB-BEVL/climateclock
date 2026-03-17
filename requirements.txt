@@ -9,7 +9,6 @@ matplotlib
 pvlib
 requests
 openpyxl
-kaleido==0.1.0.post1
 rapidfuzz
 pycountry
 pythermalcomfort
