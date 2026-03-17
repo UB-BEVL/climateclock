@@ -4750,9 +4750,9 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
     fig.update_xaxes(tickvals=month_days, ticktext=month_names, ticklen=5, range=[0.5, 366.5])
     fig.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"], autorange="reversed", ticklen=5, range=[-0.5, 23.5])
     fig.update_layout(height=450, margin=dict(t=30, b=40, l=50, r=20), legend=dict(y=1, yanchor="top", x=1.02, xanchor="left", traceorder="reversed"))
-    st.plotly_chart(fig, use_container_width=True)
-    d1, d2 = st.columns(2)
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
+    st.plotly_chart(fig, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{clean_loc}_{col}_{key_suffix}", "format": "svg"}, "displayModeBar": True})
+    d1, d2 = st.columns(2)
     with d1:
         try:
             st.download_button(f"📥 Download {title_suffix} (SVG)", fig.to_image(format="svg", width=1200, height=600, scale=2), f"{clean_loc}_{col}_{key_suffix}.svg", "image/svg+xml", key=f"dl_{col}_{key_suffix}_svg")
