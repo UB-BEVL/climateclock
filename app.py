@@ -246,11 +246,9 @@ NAV_ITEMS = [
 ]
 
 FROZEN_NAV_LABELS = {
-    "🧭 Short-Term Prediction (24–72h)",
     "🌍 Future Climate (2050 / 2080 SSP)",
 }
 FROZEN_PAGES = {
-    "📈 Short-Term Prediction (24–72h)",
     "🌍 Future Climate (2050 / 2080 SSP)",
 }
 
