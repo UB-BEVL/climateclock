@@ -269,3 +269,71 @@ def plot_overheating(df_forecast: pd.DataFrame, threshold: float = 30.0) -> go.F
         template="plotly_dark"
     )
     return fig
+
+
+def calculate_degree_days(daily_df: pd.DataFrame, base_temp: float = 18.0) -> tuple[float, float]:
+    """Calculate Heating Degree Days (HDD) and Cooling Degree Days (CDD)."""
+    if daily_df.empty:
+        return 0.0, 0.0
+
+    hdd_total = 0.0
+    cdd_total = 0.0
+
+    for _, row in daily_df.iterrows():
+        tmean = (row["temp_max"] + row["temp_min"]) / 2.0
+        if tmean < base_temp:
+            hdd_total += (base_temp - tmean)
+        elif tmean > base_temp:
+            cdd_total += (tmean - base_temp)
+
+    return hdd_total, cdd_total
+
+
+def plot_solar_potential(df: pd.DataFrame) -> go.Figure:
+    """Plot Global Horizontal (GHI), Direct Normal (DNI), and Diffuse (DHI) Irradiance overlay."""
+    fig = go.Figure()
+    if df.empty or "ghi_forecast" not in df.columns:
+        return fig
+
+    # Filled area for Global Horizontal Irradiance (GHI)
+    fig.add_trace(go.Scatter(
+        x=df.index,
+        y=df["ghi_forecast"],
+        mode="lines",
+        name="Global Horizontal (GHI)",
+        line=dict(color="#fbbf24", width=2),
+        fill="tozeroy",
+        fillcolor="rgba(251, 191, 36, 0.2)"
+    ))
+
+    # Line for Direct Normal Irradiance (DNI)
+    fig.add_trace(go.Scatter(
+        x=df.index,
+        y=df["dni_forecast"],
+        mode="lines",
+        name="Direct Normal (DNI)",
+        line=dict(color="#f97316", width=2, dash="dot")
+    ))
+
+    # Line for Diffuse Horizontal Irradiance (DHI)
+    fig.add_trace(go.Scatter(
+        x=df.index,
+        y=df["dhi_forecast"],
+        mode="lines",
+        name="Diffuse Horizontal (DHI)",
+        line=dict(color="#60a5fa", width=2, dash="dash")
+    ))
+
+    fig.update_layout(
+        title="Solar Radiation Forecast (W/m²)",
+        yaxis_title="Irradiance (W/m²)",
+        xaxis_title="Time",
+        margin=dict(l=0, r=0, t=40, b=0),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#f8fafc"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    fig.update_xaxes(showgrid=False, linecolor="rgba(255,255,255,0.2)")
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
+    return fig
