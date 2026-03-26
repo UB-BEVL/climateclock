@@ -9328,7 +9328,10 @@ def render_short_term_prediction_page():
                 </div>
                 """
             cards_html += "</div>"
-            st.markdown(cards_html, unsafe_allow_html=True)
+            try:
+                st.html(cards_html)
+            except AttributeError:
+                st.markdown(cards_html, unsafe_allow_html=True)
 
         st.markdown("#### Hourly Detail")
         st.plotly_chart(
