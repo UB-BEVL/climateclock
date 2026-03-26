@@ -1,118 +1,104 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional, Tuple
+import datetime
+from typing import Optional
 
 import numpy as np
 import pandas as pd
+import requests
 import plotly.graph_objects as go
-try:
-    from statsmodels.tsa.statespace.sarimax import SARIMAX
-except Exception:  # pragma: no cover - fallback when statsmodels missing
-    SARIMAX = None
 
 import live_sensors as ls
 
 
-@dataclass
-class ForecastResult:
-    forecast: pd.DataFrame
-    bias_comparison: Optional[pd.DataFrame] = None
-    forecast_fig: Optional[go.Figure] = None
-    bias_fig: Optional[go.Figure] = None
-    overheating_fig: Optional[go.Figure] = None
+def fetch_openmeteo_10day_forecast(lat: float, lon: float) -> pd.DataFrame:
+    """Fetch 10-day hourly deterministic forecast from Open-Meteo."""
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "temperature_2m,relative_humidity_2m,dew_point_2m,surface_pressure,wind_speed_10m,wind_direction_10m,shortwave_radiation,direct_normal_irradiance,diffuse_radiation",
+        "wind_speed_unit": "ms",
+        "forecast_days": 10,
+        "timezone": "UTC"
+    }
+    resp = requests.get(url, params=params, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()["hourly"]
+
+    df = pd.DataFrame({
+        "timestamp": pd.to_datetime(data["time"]),
+        "temp_forecast": data["temperature_2m"],
+        "rh_forecast": data["relative_humidity_2m"],
+        "dew_forecast": data["dew_point_2m"],
+        "pressure_forecast": data["surface_pressure"],  # hPa
+        "windspd_forecast": data["wind_speed_10m"],    # m/s
+        "winddir_forecast": data["wind_direction_10m"],
+        "ghi_forecast": data["shortwave_radiation"],
+        "dni_forecast": data["direct_normal_irradiance"],
+        "dhi_forecast": data["diffuse_radiation"],
+    })
+    
+    # Convert pressure from hPa to Pa
+    df["pressure_forecast"] = df["pressure_forecast"] * 100.0
+    return df
 
 
-def load_sensor_data() -> pd.DataFrame:
-    """Load stored sensor readings and ensure an hourly index."""
-    df = ls.load_sensor_data().copy()
-    if df.empty:
-        return df
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
-    df = df.set_index("timestamp")
-    hourly = df.resample("1H").mean().dropna(how="all")
-    return hourly
-
-
-def load_epw_climatology(cdf: pd.DataFrame) -> pd.DataFrame:
-    """Build the EPW climatology with day-of-year and hour bins."""
-    return ls.build_epw_climatology(cdf)
-
-
-def _fit_series(
-    series: pd.Series,
-    horizon: int,
-    confidence_level: float,
-) -> Tuple[pd.Series, pd.Series, pd.Series]:
-    series = series.dropna()
-    if len(series) < 48:
-        idx = pd.date_range(series.index.max() + pd.Timedelta(hours=1), periods=horizon, freq="1H")
-        fallback = pd.Series(series.iloc[-1] if len(series) else np.nan, index=idx)
-        return fallback, fallback.copy(), fallback.copy()
-
-    try:
-        if SARIMAX is None:
-            raise RuntimeError("SARIMAX unavailable")
-        alpha = 1.0 - float(confidence_level)
-        alpha = float(np.clip(alpha, 0.01, 0.99))
-        model = SARIMAX(
-            series,
-            order=(1, 1, 1),
-            seasonal_order=(0, 1, 1, 24),
-            enforce_stationarity=False,
-            enforce_invertibility=False,
-        )
-        fitted = model.fit(disp=False)
-        forecast = fitted.get_forecast(steps=horizon)
-        pred = forecast.predicted_mean
-        conf_int = forecast.conf_int(alpha=alpha)
-        lower = conf_int.iloc[:, 0]
-        upper = conf_int.iloc[:, 1]
-        return pred, lower, upper
-    except Exception:
-        idx = pd.date_range(series.index.max() + pd.Timedelta(hours=1), periods=horizon, freq="1H")
-        fallback = pd.Series(series.iloc[-1], index=idx)
-        return fallback, fallback.copy(), fallback.copy()
-
-
-def build_forecast_model(
-    sensor_df: pd.DataFrame,
-    horizon_hours: int = 72,
-    training_days: int = 14,
-    confidence_level: float = 0.8,
-) -> pd.DataFrame:
-    """Train SARIMAX models per variable and return a consolidated forecast dataframe."""
-    if sensor_df.empty:
-        return pd.DataFrame(columns=[
-            "timestamp", "temp_forecast", "rh_forecast", "ghi_forecast", "lower_ci", "upper_ci"
-        ])
-
-    cutoff = sensor_df.index.max() - pd.Timedelta(days=training_days)
-    window = sensor_df.loc[sensor_df.index >= cutoff].copy()
-
-    idx = pd.date_range(window.index.max() + pd.Timedelta(hours=1), periods=horizon_hours, freq="1H")
-    out = pd.DataFrame({"timestamp": idx})
-
-    temp_pred, lower, upper = _fit_series(
-        window.get("temperature", pd.Series(dtype=float)), horizon_hours, confidence_level
-    )
-    out["temp_forecast"] = temp_pred.reindex(idx).to_numpy(dtype=float)
-    out["lower_ci"] = lower.reindex(idx).to_numpy(dtype=float)
-    out["upper_ci"] = upper.reindex(idx).to_numpy(dtype=float)
-
-    if "relative_humidity" in window.columns:
-        rh_pred, _, _ = _fit_series(window["relative_humidity"], horizon_hours, confidence_level)
-        out["rh_forecast"] = rh_pred.reindex(idx).to_numpy(dtype=float)
-    else:
-        out["rh_forecast"] = np.nan
-
-    if "ghi" in window.columns:
-        ghi_pred, _, _ = _fit_series(window["ghi"], horizon_hours, confidence_level)
-        out["ghi_forecast"] = ghi_pred.reindex(idx).to_numpy(dtype=float)
-    else:
-        out["ghi_forecast"] = np.nan
-
+def build_forecast_epw_dataframe(forecast_df: pd.DataFrame) -> pd.DataFrame:
+    """Map Open-Meteo columns into the standard 35 EPW columns format for EPW generation."""
+    epw_cols = [
+        "year", "month", "day", "hour", "minute", "datasource", "drybulb", "dewpoint",
+        "relhum", "atmos_pressure", "exthorrad", "extdirrad", "horirsky", "glohorrad",
+        "dirnorrad", "difhorrad", "glohorillum", "dirnorillum", "difhorillum", "zenlum",
+        "winddir", "windspd", "totskycvr", "opaqskycvr", "visibility", "ceiling_hgt",
+        "presweathobs", "presweathcodes", "precip_wtr", "aerosol_opt_depth", "snowdepth",
+        "days_last_snow", "albedo", "liq_precip_depth", "liq_precip_rate"
+    ]
+    
+    out = pd.DataFrame(index=forecast_df.index, columns=epw_cols)
+    out["year"] = forecast_df["timestamp"].dt.year
+    out["month"] = forecast_df["timestamp"].dt.month
+    out["day"] = forecast_df["timestamp"].dt.day
+    out["hour"] = forecast_df["timestamp"].dt.hour + 1  # EPW convention is 1-24
+    out["minute"] = 60
+    out["datasource"] = "OpenMeteo-NWP"
+    
+    out["drybulb"] = forecast_df["temp_forecast"]
+    out["dewpoint"] = forecast_df["dew_forecast"]
+    out["relhum"] = forecast_df["rh_forecast"]
+    out["atmos_pressure"] = forecast_df["pressure_forecast"]
+    out["glohorrad"] = forecast_df["ghi_forecast"]
+    out["dirnorrad"] = forecast_df["dni_forecast"]
+    out["difhorrad"] = forecast_df["dhi_forecast"]
+    out["windspd"] = forecast_df["windspd_forecast"]
+    out["winddir"] = forecast_df["winddir_forecast"]
+    
+    # Fill missing EPW fields with standard missing values
+    out["exthorrad"] = 9999
+    out["extdirrad"] = 9999
+    out["horirsky"] = 9999
+    out["glohorillum"] = 999999
+    out["dirnorillum"] = 999999
+    out["difhorillum"] = 999999
+    out["zenlum"] = 9999
+    out["totskycvr"] = 99
+    out["opaqskycvr"] = 99
+    out["visibility"] = 9999
+    out["ceiling_hgt"] = 99999
+    out["presweathobs"] = 9
+    out["presweathcodes"] = 999999999
+    out["precip_wtr"] = 999
+    out["aerosol_opt_depth"] = 0.999
+    out["snowdepth"] = 999
+    out["days_last_snow"] = 99
+    out["albedo"] = 999
+    out["liq_precip_depth"] = 999
+    out["liq_precip_rate"] = 999
+    
+    # Adjust hour 24 convention
+    mask_24 = out["hour"] == 25
+    out.loc[mask_24, "hour"] = 1
+    
     return out
 
 
@@ -130,14 +116,12 @@ def compare_forecast_to_epw(df_forecast: pd.DataFrame, df_epw_clim: pd.DataFrame
 
 def plot_forecast(
     df_forecast: pd.DataFrame,
-    confidence_level: float = 0.8,
     recent_history: Optional[pd.Series] = None,
 ) -> go.Figure:
     fig = go.Figure()
     if df_forecast.empty:
         fig.update_layout(title="No forecast available")
         return fig
-    band_pct = int(round(confidence_level * 100))
     if recent_history is not None:
         history = recent_history.dropna().sort_index()
         if not history.empty:
@@ -154,17 +138,8 @@ def plot_forecast(
         x=df_forecast["timestamp"],
         y=df_forecast["temp_forecast"],
         mode="lines",
-        name="Temperature forecast",
+        name="10-Day Deterministic Forecast",
         line=dict(color="#60a5fa", width=2)
-    ))
-    fig.add_trace(go.Scatter(
-        x=pd.concat([df_forecast["timestamp"], df_forecast["timestamp"][::-1]]),
-        y=pd.concat([df_forecast["upper_ci"], df_forecast["lower_ci"][::-1]]),
-        fill="toself",
-        fillcolor="rgba(96,165,250,0.15)",
-        line=dict(color="rgba(0,0,0,0)"),
-        hoverinfo="skip",
-        name=f"{band_pct}% confidence band"
     ))
     fig.update_layout(
         height=360,
@@ -189,8 +164,6 @@ def summarize_peak_event(df_forecast: pd.DataFrame) -> Optional[dict]:
     return {
         "timestamp": timestamp,
         "temp": float(row.get("temp_forecast", np.nan)),
-        "lower": float(row.get("lower_ci", np.nan)) if "lower_ci" in row.index else np.nan,
-        "upper": float(row.get("upper_ci", np.nan)) if "upper_ci" in row.index else np.nan,
     }
 
 
@@ -229,7 +202,7 @@ def plot_overheating(df_forecast: pd.DataFrame, threshold: float = 30.0) -> go.F
         y=flagged["temp_forecast"],
         mode="markers",
         marker=dict(size=10, color="#ef4444"),
-        name=">=30°C"
+        name=">= Threshold"
     ))
     fig.update_layout(
         height=220,

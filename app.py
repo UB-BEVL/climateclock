@@ -9197,145 +9197,105 @@ def render_raw_data_page():
 
 
 def render_short_term_prediction_page():
-    # imports usually global, but safe here if already imported or will be.
-    # Assuming fc, fepw etc are imported at top level or inside functions if lazy.
-    # Looking at previous code, 'fc' seems to be imported.
+    import models.forecasting as fc
     page = st.session_state.get("nav_page")
     cdf = st.session_state.get("cdf")
     
-    st.markdown("### 📈 Short-Term Prediction (24–72h)")
+    st.markdown("### 📈 Short-Term Prediction (10-Day NWP)")
     st.caption(
-        "Train a lightweight SARIMAX model on the last 1–2 weeks of sensor data, then compare the next few days "
-        "against EPW expectations to see if a heat event is brewing. The charts below highlight when forecasts "
-        "exceed comfort thresholds or diverge from the TMY baseline."
+        "Fetch a 10-day deterministic hourly weather forecast from the Open-Meteo external NWP API "
+        "(based on ECMWF/GFS models). You can evaluate upcoming heat events or download the forecast as an EPW file for immediate building simulations."
     )
 
-    model_choice = st.session_state.get("forecast_model_choice", "Auto SARIMAX (default)")
     focus_threshold = float(st.session_state.get("custom_overheat_threshold", 30))
 
-    sensor_hourly = fc.load_sensor_data()
-    if sensor_hourly.empty:
-        st.info("No sensor history available. Ingest data via the Live Data tab to unlock forecasting.")
+    base_header = st.session_state.get("header")
+    if base_header is None:
+        st.info("Please load an EPW file first to establish the geographic location for the forecast.")
+        return
+        
+    lat = base_header.get("latitude")
+    lon = base_header.get("longitude")
+    if lat is None or lon is None:
+        st.error("EPW header is missing latitude/longitude coordinates required for the NWP lookup.")
+        return
+
+    st.session_state.setdefault("short_forecast", None)
+    st.session_state.setdefault("short_forecast_bias", None)
+
+    if st.button("Fetch 10-Day NWP Forecast", type="primary"):
+        with st.spinner(f"Querying Open-Meteo API for {float(lat):.3f}, {float(lon):.3f}…"):
+            try:
+                forecast_df = fc.fetch_openmeteo_10day_forecast(float(lat), float(lon))
+                epw_clim_short = fc.load_epw_climatology(cdf)
+                bias_df = fc.compare_forecast_to_epw(forecast_df, epw_clim_short)
+                st.session_state["short_forecast"] = forecast_df
+                st.session_state["short_forecast_bias"] = bias_df
+                st.success("Successfully loaded 10-Day Forecast.")
+            except Exception as exc:
+                st.error(f"Failed to fetch forecast from Open-Meteo API: {exc}")
+
+    forecast_df = st.session_state.get("short_forecast")
+    bias_df = st.session_state.get("short_forecast_bias")
+    
+    if forecast_df is None or forecast_df.empty:
+        st.info("Click the button above to generate a 10-day forecast.")
     else:
-        st.session_state.setdefault("short_forecast", None)
-        st.session_state.setdefault("short_forecast_bias", None)
-        st.session_state.setdefault("short_forecast_meta", None)
+        temp_series = pd.Series(forecast_df["temp_forecast"])
+        max_temp = float(temp_series.max()) if not temp_series.empty else float("nan")
+        overheating_hours = int((temp_series >= focus_threshold).sum())
+        delta_series = bias_df["epw_temp_bias_forecast"] if bias_df is not None and not bias_df.empty else pd.Series(dtype=float)
+        delta_mean = float(delta_series.mean()) if not delta_series.empty else np.nan
 
-        stored_meta = st.session_state.get("short_forecast_meta") or {}
-        default_horizon = int(stored_meta.get("horizon_hours", 72))
-        default_training = int(stored_meta.get("training_days", 14))
-        default_conf_pct = int(round((stored_meta.get("confidence_level", 0.8)) * 100))
-        default_horizon = min(max(default_horizon, 24), 168)
-        default_training = min(max(default_training, 7), 30)
-        default_conf_pct = min(max(default_conf_pct, 60), 95)
+        # Optionally show recent sensor history if loaded
+        sensor_hourly = fc.load_sensor_data()
+        history_series = None
+        if not sensor_hourly.empty and "temperature" in sensor_hourly.columns:
+            recent = sensor_hourly["temperature"].dropna().tail(24*7) # Last 7 days
+            if not recent.empty:
+                history_series = recent
 
-        with st.container():
-            ctrl1, ctrl2, ctrl3 = st.columns(3)
-            horizon_hours = ctrl1.slider(
-                "Horizon (hours)", 24, 168, value=default_horizon, step=12,
-                help="Choose how far ahead to forecast. Longer horizons widen uncertainty."
-            )
-            training_days = ctrl2.slider(
-                "Training window (days)", 7, 30, value=default_training, step=1,
-                help="Use this many trailing days of sensor data for model fitting."
-            )
-            confidence_pct = ctrl3.slider(
-                "Confidence band (%)", 60, 95, value=default_conf_pct, step=5,
-                help="The shaded band and textual summary use this interval."
-            )
-            confidence_level = confidence_pct / 100.0
+        m1, m2, m3 = st.columns(3)
+        m1.metric("10-Day max temperature", format_temperature(max_temp))
+        m2.metric(f"{format_threshold_label(focus_threshold)} hours", f"{overheating_hours}")
+        m3.metric("Mean Δ forecast vs EPW", format_temperature_delta(delta_mean) if not np.isnan(delta_mean) else "—")
 
-            st.caption(f"Active forecast model: {model_choice}")
-            if model_choice != "Auto SARIMAX (default)":
-                st.warning("Alternative model options are in preview; falling back to SARIMAX while we finish their implementations.")
+        st.markdown("#### Forecast outlook")
+        st.plotly_chart(
+            fc.plot_forecast(forecast_df, recent_history=history_series),
+            use_container_width=True,
+        )
 
-            if st.button("Train forecast", type="primary"):
-                with st.spinner("Fitting SARIMAX models per variable…"):
-                    forecast_df = fc.build_forecast_model(
-                        sensor_hourly,
-                        horizon_hours=horizon_hours,
-                        training_days=training_days,
-                        confidence_level=confidence_level,
-                    )
-                    epw_clim_short = fc.load_epw_climatology(cdf)
-                    bias_df = fc.compare_forecast_to_epw(forecast_df, epw_clim_short)
-                    st.session_state["short_forecast"] = forecast_df
-                    st.session_state["short_forecast_bias"] = bias_df
-                    st.session_state["short_forecast_meta"] = {
-                        "horizon_hours": horizon_hours,
-                        "training_days": training_days,
-                        "confidence_level": confidence_level,
-                        "model_choice": model_choice,
-                    }
-        forecast_df = st.session_state.get("short_forecast")
-        bias_df = st.session_state.get("short_forecast_bias")
-        meta = st.session_state.get("short_forecast_meta") or {}
-        active_conf = float(meta.get("confidence_level", 0.8))
-        active_horizon = int(meta.get("horizon_hours", 72))
-        active_training = int(meta.get("training_days", 14))
-        active_model = meta.get("model_choice", model_choice)
-        if forecast_df is None or forecast_df.empty:
-            st.info("Click the button above to generate an outlook with the selected settings.")
-        else:
-            temp_series = pd.Series(forecast_df["temp_forecast"])
-            max_temp = float(temp_series.dropna().max()) if not temp_series.dropna().empty else float("nan")
-            overheating_hours = int((temp_series >= focus_threshold).sum())
-            delta_series = bias_df["epw_temp_bias_forecast"] if bias_df is not None and not bias_df.empty else pd.Series(dtype=float)
-            delta_mean = float(delta_series.mean()) if not delta_series.empty else np.nan
+        peak = fc.summarize_peak_event(forecast_df)
+        if peak and peak.get("temp") is not None and not np.isnan(peak.get("temp", np.nan)):
+            ts = peak.get("timestamp")
+            ts_label = "Peak hour" if pd.isna(ts) else pd.Timestamp(ts).strftime("%b %d %H:%M")
+            st.caption(f"Peak around {ts_label}: {format_temperature(peak['temp'])}.")
 
-            history_series = None
-            if "temperature" in sensor_hourly.columns:
-                history_window_start = sensor_hourly.index.max() - pd.Timedelta(days=active_training)
-                recent = sensor_hourly.loc[sensor_hourly.index >= history_window_start, "temperature"].dropna()
-                if not recent.empty:
-                    history_series = recent
+        st.info("Forecasts are sourced from Open-Meteo leveraging deterministic ECMWF/GFS outputs.")
 
-            m1, m2, m3 = st.columns(3)
-            m1.metric(f"{active_horizon}h max temperature", format_temperature(max_temp))
-            m2.metric(f"{format_threshold_label(focus_threshold)} hours", f"{overheating_hours}")
-            m3.metric("Mean Δ forecast vs EPW", format_temperature_delta(delta_mean) if not np.isnan(delta_mean) else "—")
+        st.markdown("#### EPW vs forecast bias")
+        st.plotly_chart(fc.plot_bias(bias_df if bias_df is not None else pd.DataFrame()), use_container_width=True)
 
-            st.markdown("#### Forecast outlook")
-            st.plotly_chart(
-                fc.plot_forecast(
-                    forecast_df,
-                    confidence_level=active_conf,
-                    recent_history=history_series,
-                ),
-                use_container_width=True,
-            )
+        st.markdown("#### Overheating flags")
+        st.plotly_chart(fc.plot_overheating(forecast_df), use_container_width=True)
 
-            peak = fc.summarize_peak_event(forecast_df)
-            if peak and peak.get("temp") is not None and not np.isnan(peak.get("temp", np.nan)):
-                ts = peak.get("timestamp")
-                if pd.isna(ts):
-                    ts_label = "Peak hour"
-                else:
-                    ts_label = pd.Timestamp(ts).strftime("%b %d %H:%M")
-                lower = peak.get("lower")
-                upper = peak.get("upper")
-                if lower is None or upper is None or np.isnan(lower) or np.isnan(upper):
-                    band_text = "band unavailable"
-                else:
-                    band_text = f"{format_temperature(lower)} – {format_temperature(upper)}"
-                band_pct = int(round(active_conf * 100))
-                st.caption(
-                    f"Peak around {ts_label}: {format_temperature(peak['temp'])} with {band_pct}% band {band_text}."
-                )
+        st.markdown("#### Forecast Data & EPW Export")
+        
+        # Download Forecast EPW Integration
+        forecast_epw_df = fc.build_forecast_epw_dataframe(forecast_df)
+        epw_blob = compose_epw_text(base_header, forecast_epw_df)
+        
+        st.download_button(
+            label="⬇️ Download Forecast EPW",
+            data=epw_blob.encode("utf-8"),
+            file_name="forecast_10day.epw",
+            mime="text/plain",
+            type="secondary"
+        )
 
-            st.info(
-                f"Forecasts come from {active_model} fit to the last {active_training} days of hourly sensor temperatures. "
-                "Adjust the training window or try another model preset in the sidebar to test sensitivity."
-            )
-
-            st.markdown("#### EPW vs forecast bias")
-            st.plotly_chart(fc.plot_bias(bias_df if bias_df is not None else pd.DataFrame()), use_container_width=True)
-
-            st.markdown("#### Overheating flags")
-            st.plotly_chart(fc.plot_overheating(forecast_df), use_container_width=True)
-
-            with st.expander("Forecast table", expanded=False):
-                st.dataframe(forecast_df.set_index("timestamp"), use_container_width=True, height=260)
+        with st.expander("Forecast table (Raw data)", expanded=False):
+            st.dataframe(forecast_df.set_index("timestamp"), use_container_width=True, height=260)
 
 
 
