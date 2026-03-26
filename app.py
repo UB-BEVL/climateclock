@@ -2285,7 +2285,6 @@ def _interactive_map_fragment() -> None:
                     _stage_station_and_load(station_info)
 
 
-@st.fragment
 def _station_search_fragment() -> None:
     """Micro-rerun fragment for station search + load button."""
     stations = st.session_state.get("_stations_picker_df")
@@ -9296,7 +9295,7 @@ def render_short_term_prediction_page():
         
         st.download_button(
             label="⬇️ Download Forecast EPW",
-            data=epw_blob.encode("utf-8"),
+            data=epw_blob,
             file_name="forecast_10day.epw",
             mime="text/plain",
             type="secondary"
