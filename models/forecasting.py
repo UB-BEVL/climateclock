@@ -11,21 +11,47 @@ import plotly.graph_objects as go
 import live_sensors as ls
 
 
-def fetch_openmeteo_10day_forecast(lat: float, lon: float) -> pd.DataFrame:
-    """Fetch 10-day hourly deterministic forecast from Open-Meteo."""
+def get_weather_emoji(wmo_code: int) -> str:
+    """Map WMO weather codes to universally understood emojis."""
+    if wmo_code == 0:
+        return "☀️"
+    elif wmo_code in [1, 2, 3]:
+        return "⛅"
+    elif wmo_code in [45, 48]:
+        return "🌫️"
+    elif wmo_code in [51, 53, 55, 56, 57]:
+        return "🌧️"
+    elif wmo_code in [61, 63, 65, 66, 67]:
+        return "🌧️"
+    elif wmo_code in [71, 73, 75, 77]:
+        return "❄️"
+    elif wmo_code in [80, 81, 82]:
+        return "🌦️"
+    elif wmo_code in [85, 86]:
+        return "🌨️"
+    elif wmo_code in [95, 96, 99]:
+        return "⛈️"
+    else:
+        return "🌡️"
+
+
+def fetch_openmeteo_10day_forecast(lat: float, lon: float) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fetch 10-day hourly deterministic forecast & daily aggregates from Open-Meteo."""
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
         "longitude": lon,
         "hourly": "temperature_2m,relative_humidity_2m,dew_point_2m,surface_pressure,wind_speed_10m,wind_direction_10m,shortwave_radiation,direct_normal_irradiance,diffuse_radiation",
+        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max",
         "wind_speed_unit": "ms",
         "forecast_days": 10,
         "timezone": "UTC"
     }
     resp = requests.get(url, params=params, timeout=15)
     resp.raise_for_status()
-    data = resp.json()["hourly"]
-
+    payload = resp.json()
+    
+    data = payload["hourly"]
     df = pd.DataFrame({
         "timestamp": pd.to_datetime(data["time"]),
         "temp_forecast": data["temperature_2m"],
@@ -41,7 +67,20 @@ def fetch_openmeteo_10day_forecast(lat: float, lon: float) -> pd.DataFrame:
     
     # Convert pressure from hPa to Pa
     df["pressure_forecast"] = df["pressure_forecast"] * 100.0
-    return df
+    
+    daily_data = payload["daily"]
+    daily_df = pd.DataFrame({
+        "date": pd.to_datetime(daily_data["time"]),
+        "weather_code": daily_data["weather_code"],
+        "temp_max": daily_data["temperature_2m_max"],
+        "temp_min": daily_data["temperature_2m_min"],
+        "precip_sum": daily_data["precipitation_sum"],
+        "precip_prob": daily_data["precipitation_probability_max"]
+    })
+    
+    daily_df["emoji"] = daily_df["weather_code"].apply(get_weather_emoji)
+    
+    return df, daily_df
 
 
 def build_forecast_epw_dataframe(forecast_df: pd.DataFrame) -> pd.DataFrame:

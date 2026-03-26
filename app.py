@@ -9227,21 +9227,24 @@ def render_short_term_prediction_page():
 
     st.session_state.setdefault("short_forecast", None)
     st.session_state.setdefault("short_forecast_bias", None)
+    st.session_state.setdefault("short_forecast_daily", None)
 
     if st.button("Fetch 10-Day NWP Forecast", type="primary"):
         with st.spinner(f"Querying Open-Meteo API for {float(lat):.3f}, {float(lon):.3f}…"):
             try:
-                forecast_df = fc.fetch_openmeteo_10day_forecast(float(lat), float(lon))
+                forecast_df, daily_df = fc.fetch_openmeteo_10day_forecast(float(lat), float(lon))
                 epw_clim_short = fc.load_epw_climatology(cdf)
                 bias_df = fc.compare_forecast_to_epw(forecast_df, epw_clim_short)
                 st.session_state["short_forecast"] = forecast_df
                 st.session_state["short_forecast_bias"] = bias_df
+                st.session_state["short_forecast_daily"] = daily_df
                 st.success("Successfully loaded 10-Day Forecast.")
             except Exception as exc:
                 st.error(f"Failed to fetch forecast from Open-Meteo API: {exc}")
 
     forecast_df = st.session_state.get("short_forecast")
     bias_df = st.session_state.get("short_forecast_bias")
+    daily_df = st.session_state.get("short_forecast_daily")
     
     if forecast_df is None or forecast_df.empty:
         st.info("Click the button above to generate a 10-day forecast.")
@@ -9265,7 +9268,69 @@ def render_short_term_prediction_page():
         m2.metric(f"{format_threshold_label(focus_threshold)} hours", f"{overheating_hours}")
         m3.metric("Mean Δ forecast vs EPW", format_temperature_delta(delta_mean) if not np.isnan(delta_mean) else "—")
 
-        st.markdown("#### Forecast outlook")
+        m3.metric("Mean Δ forecast vs EPW", format_temperature_delta(delta_mean) if not np.isnan(delta_mean) else "—")
+
+        if daily_df is not None and not daily_df.empty:
+            st.markdown("#### 10-Day Outlook")
+            cards_html = f"""
+            <style>
+            .weather-scroller {{
+                display: flex;
+                overflow-x: auto;
+                gap: 12px;
+                padding: 10px 4px 20px 4px;
+                scrollbar-width: thin;
+            }}
+            .weather-scroller::-webkit-scrollbar {{
+                height: 6px;
+            }}
+            .weather-scroller::-webkit-scrollbar-thumb {{
+                background-color: rgba(156, 163, 175, 0.5);
+                border-radius: 4px;
+            }}
+            .weather-card {{
+                flex: 0 0 auto;
+                width: 100px;
+                background: rgba(30, 41, 59, 0.5);
+                border: 1px solid rgba(255,255,255,0.1);
+                border-radius: 12px;
+                padding: 12px 8px;
+                text-align: center;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: space-between;
+                min-height: 140px;
+            }}
+            .wc-day {{ font-size: 0.9rem; font-weight: 600; color: #e2e8f0; margin-bottom: 4px; }}
+            .wc-icon {{ font-size: 2rem; margin: 4px 0; }}
+            .wc-temps {{ font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-top: 4px; }}
+            .wc-temps span {{ color: #94a3b8; font-weight: 500; font-size: 0.85rem; margin-left: 6px; }}
+            .wc-precip {{ font-size: 0.75rem; color: #60a5fa; margin-top: 6px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 2px; }}
+            </style>
+            <div class="weather-scroller">
+            """
+            import datetime
+            for _, row in daily_df.iterrows():
+                dt = pd.to_datetime(row['date'])
+                day_name = dt.strftime('%a') if dt.date() != datetime.datetime.now().date() else "Today"
+                emoji = row['emoji']
+                tmax = int(round(row['temp_max']))
+                tmin = int(round(row['temp_min']))
+                precip = int(row['precip_prob'])
+                precip_html = f"<div class='wc-precip'>💧 {precip}%</div>" if precip > 0 else "<div class='wc-precip' style='opacity:0'>💧 0%</div>"
+                cards_html += f"""
+                <div class="weather-card">
+                    <div class="wc-day">{day_name}</div>
+                    <div class="wc-icon">{emoji}</div>
+                    <div class="wc-temps">{tmax}°<span>{tmin}°</span></div>
+                    {precip_html}
+                </div>
+                """
+            cards_html += "</div>"
+            st.markdown(cards_html, unsafe_allow_html=True)
+
+        st.markdown("#### Hourly Detail")
         st.plotly_chart(
             fc.plot_forecast(forecast_df, recent_history=history_series),
             use_container_width=True,
