@@ -223,23 +223,25 @@ def summarize_peak_event(df_forecast: pd.DataFrame) -> Optional[dict]:
     }
 
 
-def plot_bias(df_bias: pd.DataFrame) -> go.Figure:
+def plot_bias(df: pd.DataFrame) -> go.Figure:
+    """Plot difference between forecast and EPW."""
     fig = go.Figure()
-    if df_bias.empty:
-        fig.update_layout(title="No bias data available", template="plotly_dark")
-        return fig
     fig.add_trace(go.Bar(
-        x=df_bias["timestamp"],
-        y=df_bias["epw_temp_bias_forecast"],
-        marker_color="#f97316",
-        name="Forecast - EPW"
+        x=df.index,
+        y=df["epw_temp_bias_forecast"],
+        marker_color=np.where(df['epw_temp_bias_forecast'] > 0, '#ef4444', '#3b82f6'),
+        name="Bias (Forecast - EPW)"
     ))
     fig.update_layout(
-        height=300,
+        title="Hourly Temperature Bias (Next 10 Days)",
+        yaxis_title="Delta (°C)",
         margin=dict(l=0, r=0, t=40, b=0),
-        yaxis_title="ΔT (°C)",
-        template="plotly_dark"
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#f8fafc")
     )
+    fig.update_xaxes(showgrid=False, linecolor="rgba(255,255,255,0.2)")
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
     return fig
 
 

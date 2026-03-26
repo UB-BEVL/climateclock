@@ -9268,7 +9268,11 @@ def render_short_term_prediction_page():
         m2.metric(f"{format_threshold_label(focus_threshold)} hours", f"{overheating_hours}")
         m3.metric("Mean Δ forecast vs EPW", format_temperature_delta(delta_mean) if not np.isnan(delta_mean) else "—")
 
-        m3.metric("Mean Δ forecast vs EPW", format_temperature_delta(delta_mean) if not np.isnan(delta_mean) else "—")
+        if daily_df is not None and not daily_df.empty:
+            hdd, cdd = fc.calculate_degree_days(daily_df, base_temp=18.0)
+            e1, e2 = st.columns(2)
+            e1.metric("Heating Degree Days (Base 18°C)", f"{hdd:.1f} °C-days")
+            e2.metric("Cooling Degree Days (Base 18°C)", f"{cdd:.1f} °C-days")
 
         if daily_df is not None and not daily_df.empty:
             st.markdown("#### 10-Day Outlook")
@@ -9346,6 +9350,9 @@ def render_short_term_prediction_page():
             st.caption(f"Peak around {ts_label}: {format_temperature(peak['temp'])}.")
 
         st.info("Forecasts are sourced from Open-Meteo leveraging deterministic ECMWF/GFS outputs.")
+
+        st.markdown("#### Solar Potential & Irradiance")
+        st.plotly_chart(fc.plot_solar_potential(forecast_df), use_container_width=True)
 
         st.markdown("#### EPW vs forecast bias")
         st.plotly_chart(fc.plot_bias(bias_df if bias_df is not None else pd.DataFrame()), use_container_width=True)
