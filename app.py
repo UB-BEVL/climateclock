@@ -14,6 +14,14 @@ from streamlit_plotly_events import plotly_events
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+# Backward compatibility for st.fragment in Streamlit < 1.37.0
+if not hasattr(st, "fragment"):
+    if hasattr(st, "experimental_fragment"):
+        st.fragment = st.experimental_fragment
+    else:
+        st.fragment = lambda func: func
+
 import pydeck as pdk
 import plotly.graph_objects as go
 import plotly.express as px
