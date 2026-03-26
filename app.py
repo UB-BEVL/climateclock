@@ -9253,7 +9253,7 @@ def render_short_term_prediction_page():
         delta_mean = float(delta_series.mean()) if not delta_series.empty else np.nan
 
         # Optionally show recent sensor history if loaded
-        sensor_hourly = fc.load_sensor_data()
+        sensor_hourly = ls.load_sensor_data()
         history_series = None
         if not sensor_hourly.empty and "temperature" in sensor_hourly.columns:
             recent = sensor_hourly["temperature"].dropna().tail(24*7) # Last 7 days
