@@ -48,6 +48,10 @@ def compute_utci_approx(
 
     # Compute a simplified outdoor MRT using the Thorsson (2007) approach.
     # Uses GHI from EPW if available, otherwise falls back to Ta.
+    # NOTE: EPW 'glohorrad' is global horizontal, *not* direct-beam radiation.
+    # This overpredicts MRT during hours with high diffuse fraction.
+    # For a defensible paper, consider pvlib's MRT module or cite Thorsson (2007)
+    # explicitly and note the standing-person assumption.
     if 'glohorrad' in df.columns:
         ghi = df['glohorrad'].to_numpy(dtype=float)
         # Stefan-Boltzmann: mrt ~ Ta + solar_gain_term
@@ -78,7 +82,9 @@ def compute_utci_approx(
             - 0.015 * Ta * vp / 100.0 - 0.00025 * vp * ws
         )
 
-    return pd.Series(utci_vals, index=df.index, name="UTCI")
+    series = pd.Series(utci_vals, index=df.index, name="UTCI")
+    series.attrs["used_fallback"] = _utci_used_fallback
+    return series
 
 
 def compute_pmv(
@@ -200,8 +206,14 @@ def build_adaptive_band(
     daily = temp_series.resample("1D").mean().dropna()
     if daily.empty:
         return pd.DataFrame(columns=["low", "high"], index=temp_series.index)
+    # EWMA with alpha=0.2 is an approximation of the ASHRAE 55-2023 prevailing
+    # mean outdoor temperature (7-day weighted running mean).  The exact ASHRAE
+    # definition uses specific day-weights; the EWMA is analytically close but
+    # not identical.  Cite this approximation when publishing.
     trm = daily.ewm(alpha=alpha, adjust=False).mean()
     t_comf = (0.31 * trm + 17.8).clip(-30, 60)
+    # Per ASHRAE 55: 90% acceptability = ±2.5°C (tighter),
+    #                80% acceptability = ±3.5°C (wider).
     if acceptability >= 0.9:
         span = 2.5
     else:
@@ -353,7 +365,9 @@ def compute_degree_metrics(
     df: pd.DataFrame,
     temp_col: str = "drybulb",
     base_heat: float = 18.0,
-    base_cool: float = 26.0,
+    base_cool: float = 26.0,  # NOTE: Non-standard. ASHRAE/NOAA use 18.3°C for CDD.
+                               # Using 26°C as a thermal-comfort threshold, not an
+                               # energy-accounting base.  Justify in paper.
     freq: str = "D",
 ) -> pd.DataFrame:
     if temp_col not in df:

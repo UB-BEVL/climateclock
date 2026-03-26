@@ -299,6 +299,8 @@ def calculate_degree_days(daily_df: pd.DataFrame, base_temp: float = 18.0) -> tu
     cdd_total = 0.0
 
     for _, row in daily_df.iterrows():
+        # Simplified NOAA method: T_mean = (T_max + T_min) / 2.
+        # Bias is typically ±0.5 per day vs integration-based methods.
         tmean = (row["temp_max"] + row["temp_min"]) / 2.0
         if tmean < base_temp:
             hdd_total += (base_temp - tmean)
@@ -316,7 +318,7 @@ def plot_solar_potential(df: pd.DataFrame) -> go.Figure:
 
     # Filled area for Global Horizontal Irradiance (GHI)
     fig.add_trace(go.Scatter(
-        x=df.index,
+        x=df["timestamp"],
         y=df["ghi_forecast"],
         mode="lines",
         name="Global Horizontal (GHI)",
@@ -327,7 +329,7 @@ def plot_solar_potential(df: pd.DataFrame) -> go.Figure:
 
     # Line for Direct Normal Irradiance (DNI)
     fig.add_trace(go.Scatter(
-        x=df.index,
+        x=df["timestamp"],
         y=df["dni_forecast"],
         mode="lines",
         name="Direct Normal (DNI)",
@@ -336,7 +338,7 @@ def plot_solar_potential(df: pd.DataFrame) -> go.Figure:
 
     # Line for Diffuse Horizontal Irradiance (DHI)
     fig.add_trace(go.Scatter(
-        x=df.index,
+        x=df["timestamp"],
         y=df["dhi_forecast"],
         mode="lines",
         name="Diffuse Horizontal (DHI)",

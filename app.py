@@ -855,7 +855,7 @@ def read_epw_with_schema(epw_bytes_or_path: Union[bytes, str, Path]):
     notes.extend(continuity_notes)
 
     # Memory downcasting: keep EPW weather columns as float32.
-    _downcast_float32(df)
+    df = _downcast_float32(df)
 
     return header, df, notes
 
@@ -895,7 +895,7 @@ def build_clima_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     cdf["month"] = cdf.index.month; cdf["day"] = cdf.index.day; cdf["hour"] = cdf.index.hour; cdf["doy"] = cdf.index.dayofyear
 
     # Memory downcasting: derived weather metrics can stay float32.
-    _downcast_float32(cdf)
+    cdf = _downcast_float32(cdf)
     return cdf
 
 
@@ -1019,12 +1019,7 @@ def read_epw_from_zip_bytes(zip_bytes: bytes) -> bytes:
 def compose_epw_text(header: dict, df: pd.DataFrame) -> bytes:
     # Rebuild an EPW text blob from header metadata and a data frame.
 
-    def _format_cell(value):
-        if pd.isna(value):
-            return ""
-        if isinstance(value, (float, np.floating)):
-            return f"{value:.6f}".rstrip("0").rstrip(".")
-        return str(value)
+    # (_format_cell removed — unused dead code; _fmt below is used instead)
 
     def _fmt(value, precision=6):
         if value is None:
@@ -1210,7 +1205,7 @@ def _enforce_epw_hourly_profile(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[st
         target_index = pd.date_range(
             start=pd.Timestamp(reference_year, 1, 1, 0, 0, 0),
             periods=8760,
-            freq="H",
+            freq="h",
         )
         df = df.reindex(target_index)
         float_cols = df.select_dtypes(include=[np.floating]).columns
@@ -1238,7 +1233,8 @@ def _enforce_epw_hourly_profile(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[st
 #===================="""
 
 
-@st.cache_data(show_spinner=False)
+# NOTE: Do NOT cache run_controller — it reads/mutates session state indirectly
+# and caching causes stale results when the same inputs recur.
 def run_controller(
     *,
     cdf_present: bool,
@@ -1980,14 +1976,7 @@ def render_sidebar_filters(epw_loaded: bool) -> None:
                 
         # Only recompute comfort if the adjusted cdf actually changed.
         # Use a hash of the relevant parameters as a cache key.
-        import hashlib, pickle
-        _key_params = (
-            st.session_state.get('apply_uhi_bias'),
-            st.session_state.get('uhi_bias_delta'),
-            st.session_state.get('month_range'),
-            st.session_state.get('last_loaded_station_id'),
-        )
-        _pkg_key = hashlib.md5(pickle.dumps(_key_params)).hexdigest()
+        _pkg_key = f"{st.session_state.get('apply_uhi_bias')}_{st.session_state.get('uhi_bias_delta')}_{st.session_state.get('month_range')}_{st.session_state.get('last_loaded_station_id')}"
         if st.session_state.get('_comfort_pkg_key') != _pkg_key:
             st.session_state.comfort_pkg = build_comfort_package(cdf_adjusted)
             st.session_state['_comfort_pkg_key'] = _pkg_key
@@ -2169,7 +2158,8 @@ def _station_df_signature(stations: pd.DataFrame) -> str:
     subset = stations[cols].copy()
     for c in cols:
         subset[c] = subset[c].fillna("")
-    return str(pd.util.hash_pandas_object(subset, index=False).sum())
+    import hashlib as _hl
+    return _hl.sha256(subset.to_csv(index=False).encode()).hexdigest()
 
 
 def _build_station_map_figure(stations: pd.DataFrame, map_height: int) -> go.Figure:
@@ -2722,13 +2712,13 @@ def find_column_by_fuzzy_match(df: pd.DataFrame, keywords: List[str], exclude_co
     """Find a column in df by fuzzy matching against keywords (case-insensitive, substring)."""
     if exclude_cols is None:
         exclude_cols = []
-    col_lower = [c.lower() for c in df.columns if c not in exclude_cols]
+    # Build a mapping from lowercase name to original name (filtered)
+    col_map = {c.lower(): c for c in df.columns if c not in exclude_cols}
     for keyword in keywords:
         kw_lower = keyword.lower()
-        for col in col_lower:
-            if kw_lower in col or col in kw_lower:
-                # Return the original column name (not lowercase version)
-                return df.columns[col_lower.index(col)]
+        for col_low, col_orig in col_map.items():
+            if kw_lower in col_low or col_low in kw_lower:
+                return col_orig
     return None
 
 
@@ -3217,850 +3207,850 @@ def render_dashboard_page():
     effective_page = st.session_state.get("nav_page")
     if cdf is None: return
 
-    if True: # Dashboard Page
-        import plotly.express as px
-        st.markdown("### 📊 Dashboard")
-        st.caption(
-            "Start here for a quick health check: tabs bundle location context, thermal comfort, "
-            "and data quality so you can understand what the climate looks like and whether the EPW "
-            "inputs are trustworthy before diving deeper."
-        )
+    # Dashboard Page
+    import plotly.express as px
+    st.markdown("### 📊 Dashboard")
+    st.caption(
+        "Start here for a quick health check: tabs bundle location context, thermal comfort, "
+        "and data quality so you can understand what the climate looks like and whether the EPW "
+        "inputs are trustworthy before diving deeper."
+    )
 
-        loc = header["location"]
-        overview_tab, comfort_tab, diagnostics_tab, heatmaps_tab, temp_hum_tab, di_tab, utci_tab, pmv_tab, solar_tab, psych_tab, wind_tab, raw_data_tab = st.tabs([
-            "Overview & Stats",
-            "Comfort & Loads",
-            "Data Quality",
-            "Heatmaps",
-            "Temp & Humidity",
-            "DI",
-            "UTCI",
-            "PMV",
-            "Solar Analysis",
-            "Psychrometrics",
-            "Wind",
-            "Raw Data",
-        ])
+    loc = header["location"]
+    overview_tab, comfort_tab, diagnostics_tab, heatmaps_tab, temp_hum_tab, di_tab, utci_tab, pmv_tab, solar_tab, psych_tab, wind_tab, raw_data_tab = st.tabs([
+        "Overview & Stats",
+        "Comfort & Loads",
+        "Data Quality",
+        "Heatmaps",
+        "Temp & Humidity",
+        "DI",
+        "UTCI",
+        "PMV",
+        "Solar Analysis",
+        "Psychrometrics",
+        "Wind",
+        "Raw Data",
+    ])
 
-        with overview_tab:
-            st.markdown("### 📊 Climate Overview")
-            st.caption("Get a high-level sense of the site's climate, from its coordinates to the typical temperature, humidity, wind, and solar character.")
-            st.markdown(f"## 📍 {loc.get('city')}, {loc.get('state_province')} — {loc.get('country')}")
+    with overview_tab:
+        st.markdown("### 📊 Climate Overview")
+        st.caption("Get a high-level sense of the site's climate, from its coordinates to the typical temperature, humidity, wind, and solar character.")
+        st.markdown(f"## 📍 {loc.get('city')}, {loc.get('state_province')} — {loc.get('country')}")
 
-            c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4, c5 = st.columns(5)
 
-            def _fmt(val, f):
-                try:
-                    return f(float(val))
-                except Exception:
-                    return str(val)
-
-            c1.metric("🌐 Latitude", _fmt(loc.get("latitude"), lambda v: f"{v:.5f}°"))
-            c2.metric("🌐 Longitude", _fmt(loc.get("longitude"), lambda v: f"{v:.5f}°"))
-            c3.metric("🕐 TZ (hrs from UTC)", _fmt(loc.get("timezone"), lambda v: f"{v:+.1f}"))
-            c4.metric("⛰️ Elevation (m)", _fmt(loc.get("elevation_m"), lambda v: f"{v:.1f}"))
-            c5.metric("🏷️ WMO", str(loc.get("wmo")))
-
-            st.markdown("### 📈 Annual Climate Statistics")
-            c1, c2, c3, c4 = st.columns(4)
-            if "drybulb" in cdf:
-                c1.metric("🌡️ Avg Temperature", format_temperature(cdf['drybulb'].mean()))
-            if "relhum" in cdf:
-                c2.metric("💧 Avg Humidity", f"{cdf['relhum'].mean():.0f} %")
-            if "windspd" in cdf:
-                c3.metric("💨 Avg Wind Speed", f"{cdf['windspd'].mean():.1f} m/s")
-            if "glohorrad" in cdf:
-                c4.metric("☀️ Avg Solar Rad", f"{cdf['glohorrad'].mean():.0f} W/m²")
-
-            # Seasonal breakdown (Winter, Spring, Summer, Fall)
-            season_months = {
-                "Winter (Dec-Feb)": [12, 1, 2],
-                "Spring (Mar-May)": [3, 4, 5],
-                "Summer (Jun-Aug)": [6, 7, 8],
-                "Fall (Sep-Nov)": [9, 10, 11],
-            }
-
-            def _season_mean(series: pd.Series, months: List[int]):
-                if series is None or series.empty:
-                    return np.nan
-                mask = series.index.month.isin(months)
-                if not mask.any():
-                    return np.nan
-                return float(series.loc[mask].mean())
-
-            seasonal_rows = []
-            for season_label, months in season_months.items():
-                seasonal_rows.append({
-                    "Season": season_label,
-                    "Avg Temp (°C)": _season_mean(cdf.get("drybulb"), months),
-                    "Avg Humidity (%)": _season_mean(cdf.get("relhum"), months),
-                    "Avg Wind (m/s)": _season_mean(cdf.get("windspd"), months),
-                    "Avg Solar (W/m²)": _season_mean(cdf.get("glohorrad"), months),
-                })
-
-            seasonal_df = pd.DataFrame(seasonal_rows).set_index("Season")
-            seasonal_df = seasonal_df.map(lambda v: "—" if pd.isna(v) else (f"{v:.1f}" if isinstance(v, float) else v))
-            st.markdown("#### Seasonal snapshot")
-            st.table(seasonal_df)
-
+        def _fmt(val, f):
             try:
-                tmin, tmax = cdf.index.min(), cdf.index.max()
-                n_hours = len(cdf)
-                st.caption(
-                    f"Data window: **{tmin:%b %d, %Y} — {tmax:%b %d, %Y}**  ·  Records: **{n_hours:,}** hours"
-                )
+                return f(float(val))
             except Exception:
-                pass
+                return str(val)
 
-            def _month_name(m: int) -> str:
-                try:
-                    return pd.Timestamp(2001, int(m), 1).strftime("%B")
-                except Exception:
-                    return f"Month {m}"
+        c1.metric("🌐 Latitude", _fmt(loc.get("latitude"), lambda v: f"{v:.5f}°"))
+        c2.metric("🌐 Longitude", _fmt(loc.get("longitude"), lambda v: f"{v:.5f}°"))
+        c3.metric("🕐 TZ (hrs from UTC)", _fmt(loc.get("timezone"), lambda v: f"{v:+.1f}"))
+        c4.metric("⛰️ Elevation (m)", _fmt(loc.get("elevation_m"), lambda v: f"{v:.1f}"))
+        c5.metric("🏷️ WMO", str(loc.get("wmo")))
 
-            highlights: List[str] = []
-            if "drybulb" in cdf and not cdf["drybulb"].dropna().empty:
-                temp_series = cdf["drybulb"].dropna()
-                monthly_means = temp_series.groupby(temp_series.index.month).mean()
-                daily_highs = temp_series.resample("1D").max().dropna()
-                monthly_highs = daily_highs.groupby(daily_highs.index.month).mean()
-                daily_lows = temp_series.resample("1D").min().dropna()
-                monthly_lows = daily_lows.groupby(daily_lows.index.month).mean()
-                daily_means = temp_series.resample("1D").mean().dropna()
-                hdd_daily = (18.0 - daily_means).clip(lower=0)
-                monthly_hdd = hdd_daily.groupby(hdd_daily.index.month).sum()
+        st.markdown("### 📈 Annual Climate Statistics")
+        c1, c2, c3, c4 = st.columns(4)
+        if "drybulb" in cdf:
+            c1.metric("🌡️ Avg Temperature", format_temperature(cdf['drybulb'].mean()))
+        if "relhum" in cdf:
+            c2.metric("💧 Avg Humidity", f"{cdf['relhum'].mean():.0f} %")
+        if "windspd" in cdf:
+            c3.metric("💨 Avg Wind Speed", f"{cdf['windspd'].mean():.1f} m/s")
+        if "glohorrad" in cdf:
+            c4.metric("☀️ Avg Solar Rad", f"{cdf['glohorrad'].mean():.0f} W/m²")
 
-                if not monthly_means.empty:
-                    warm_month = int(monthly_means.idxmax())
-                    warm_label = _month_name(warm_month)
-                    warm_high = monthly_highs.get(warm_month, monthly_means.loc[warm_month])
-                    highlights.append(
-                        f"{warm_label} is the warmest month, with typical daytime highs near {format_temperature(warm_high)}."
-                    )
+        # Seasonal breakdown (Winter, Spring, Summer, Fall)
+        season_months = {
+            "Winter (Dec-Feb)": [12, 1, 2],
+            "Spring (Mar-May)": [3, 4, 5],
+            "Summer (Jun-Aug)": [6, 7, 8],
+            "Fall (Sep-Nov)": [9, 10, 11],
+        }
 
-                    cold_month = int(monthly_means.idxmin())
-                    cold_label = _month_name(cold_month)
-                    cold_low = monthly_lows.get(cold_month, monthly_means.loc[cold_month])
-                    hdd_val = monthly_hdd.get(cold_month)
-                    if pd.isna(hdd_val):
-                        highlights.append(
-                            f"{cold_label} is when winters bite hardest, with overnight lows around {format_temperature(cold_low)}."
-                        )
-                    else:
-                        highlights.append(
-                            f"{cold_label} brings overnight lows near {format_temperature(cold_low)} and roughly {hdd_val:.0f} heating degree days (base 18 °C)."
-                        )
+        def _season_mean(series: pd.Series, months: List[int]):
+            if series is None or series.empty:
+                return np.nan
+            mask = series.index.month.isin(months)
+            if not mask.any():
+                return np.nan
+            return float(series.loc[mask].mean())
 
-            if "relhum" in cdf and not cdf["relhum"].dropna().empty:
-                rh_mean = cdf["relhum"].mean()
-                highlights.append(f"Annual mean humidity hovers around {rh_mean:.0f}% — generally a moderate moisture profile.")
+        seasonal_rows = []
+        for season_label, months in season_months.items():
+            seasonal_rows.append({
+                "Season": season_label,
+                "Avg Temp (°C)": _season_mean(cdf.get("drybulb"), months),
+                "Avg Humidity (%)": _season_mean(cdf.get("relhum"), months),
+                "Avg Wind (m/s)": _season_mean(cdf.get("windspd"), months),
+                "Avg Solar (W/m²)": _season_mean(cdf.get("glohorrad"), months),
+            })
 
-            if highlights:
-                st.markdown("#### 💡 Key takeaways")
-                st.markdown("\n".join(f"- {text}" for text in highlights))
-        with comfort_tab:
-            st.markdown("### 😌 Thermal Comfort & Loads")
-            st.caption("Explore how often indoor comfort bands are met, where overheating or cold stress creep in, and how heating/cooling loads shift through the year.")
-            comfort_pkg = st.session_state.get("comfort_pkg", {}) or {}
-            comfort_annual_base = comfort_pkg.get("comfort_annual")
-            comfort_monthly_base = comfort_pkg.get("comfort_monthly")
-            loads_annual = comfort_pkg.get("loads_annual")
-            di_series = comfort_pkg.get("di")
-            utci_series = comfort_pkg.get("utci")
-            heat_index_series = comfort_pkg.get("heat_index")
-            humidex_series = comfort_pkg.get("humidex")
-            focus_threshold = int(st.session_state.get("custom_overheat_threshold", 30))
-            prefer_adaptive = bool(st.session_state.get("prefer_adaptive_comfort", False))
+        seasonal_df = pd.DataFrame(seasonal_rows).set_index("Season")
+        seasonal_df = seasonal_df.map(lambda v: "—" if pd.isna(v) else (f"{v:.1f}" if isinstance(v, float) else v))
+        st.markdown("#### Seasonal snapshot")
+        st.table(seasonal_df)
 
-            def _build_occupancy_mask(idx: pd.DatetimeIndex, mode: str) -> pd.Series:
-                if mode == "24/7":
-                    return pd.Series(True, index=idx)
-                if mode == "Daytime (07-22)":
-                    arr = (idx.hour >= 7) & (idx.hour < 22)
-                    return pd.Series(arr, index=idx)
-                if mode == "Workday (Mon-Fri 9-17)":
-                    arr = ((idx.dayofweek < 5) & (idx.hour >= 9) & (idx.hour < 17))
-                    return pd.Series(arr, index=idx)
-                return pd.Series(True, index=idx)
+        try:
+            tmin, tmax = cdf.index.min(), cdf.index.max()
+            n_hours = len(cdf)
+            st.caption(
+                f"Data window: **{tmin:%b %d, %Y} — {tmax:%b %d, %Y}**  ·  Records: **{n_hours:,}** hours"
+            )
+        except Exception:
+            pass
 
-            with st.expander("⚙️ Comfort analysis settings", expanded=False):
-                comfort_mode = st.radio(
-                    "Comfort band",
-                    ["Fixed 18–26 °C", "Adaptive (ASHRAE 55)"],
-                    index=1 if prefer_adaptive else 0,
-                    horizontal=True,
+        def _month_name(m: int) -> str:
+            try:
+                return pd.Timestamp(2001, int(m), 1).strftime("%B")
+            except Exception:
+                return f"Month {m}"
+
+        highlights: List[str] = []
+        if "drybulb" in cdf and not cdf["drybulb"].dropna().empty:
+            temp_series = cdf["drybulb"].dropna()
+            monthly_means = temp_series.groupby(temp_series.index.month).mean()
+            daily_highs = temp_series.resample("1D").max().dropna()
+            monthly_highs = daily_highs.groupby(daily_highs.index.month).mean()
+            daily_lows = temp_series.resample("1D").min().dropna()
+            monthly_lows = daily_lows.groupby(daily_lows.index.month).mean()
+            daily_means = temp_series.resample("1D").mean().dropna()
+            hdd_daily = (18.0 - daily_means).clip(lower=0)
+            monthly_hdd = hdd_daily.groupby(hdd_daily.index.month).sum()
+
+            if not monthly_means.empty:
+                warm_month = int(monthly_means.idxmax())
+                warm_label = _month_name(warm_month)
+                warm_high = monthly_highs.get(warm_month, monthly_means.loc[warm_month])
+                highlights.append(
+                    f"{warm_label} is the warmest month, with typical daytime highs near {format_temperature(warm_high)}."
                 )
-                adaptive_band = None
-                comfort_band = (18.0, 26.0)
-                if comfort_mode == "Fixed 18–26 °C":
-                    comfort_band = st.slider(
-                        "Comfort temperature band (°C)",
-                        min_value=-10.0,
-                        max_value=40.0,
-                        value=(18.0, 26.0),
-                        step=0.5,
+
+                cold_month = int(monthly_means.idxmin())
+                cold_label = _month_name(cold_month)
+                cold_low = monthly_lows.get(cold_month, monthly_means.loc[cold_month])
+                hdd_val = monthly_hdd.get(cold_month)
+                if pd.isna(hdd_val):
+                    highlights.append(
+                        f"{cold_label} is when winters bite hardest, with overnight lows around {format_temperature(cold_low)}."
                     )
                 else:
-                    if "drybulb" not in cdf.columns:
-                        st.warning("Adaptive comfort requires dry-bulb data; falling back to fixed band.")
-                    else:
-                        acceptability = st.radio("Adaptive acceptability", ["80%", "90%"], horizontal=True)
-                        acc_value = 0.9 if acceptability == "90%" else 0.8
-                        adaptive_band = ce.build_adaptive_band(cdf["drybulb"], acceptability=acc_value)
-                        comfort_band = None
+                    highlights.append(
+                        f"{cold_label} brings overnight lows near {format_temperature(cold_low)} and roughly {hdd_val:.0f} heating degree days (base 18 °C)."
+                    )
 
-                occupancy_mode = st.selectbox(
-                    "Occupancy schedule",
-                    ["24/7", "Daytime (07-22)", "Workday (Mon-Fri 9-17)"],
-                    index=0,
+        if "relhum" in cdf and not cdf["relhum"].dropna().empty:
+            rh_mean = cdf["relhum"].mean()
+            highlights.append(f"Annual mean humidity hovers around {rh_mean:.0f}% — generally a moderate moisture profile.")
+
+        if highlights:
+            st.markdown("#### 💡 Key takeaways")
+            st.markdown("\n".join(f"- {text}" for text in highlights))
+    with comfort_tab:
+        st.markdown("### 😌 Thermal Comfort & Loads")
+        st.caption("Explore how often indoor comfort bands are met, where overheating or cold stress creep in, and how heating/cooling loads shift through the year.")
+        comfort_pkg = st.session_state.get("comfort_pkg", {}) or {}
+        comfort_annual_base = comfort_pkg.get("comfort_annual")
+        comfort_monthly_base = comfort_pkg.get("comfort_monthly")
+        loads_annual = comfort_pkg.get("loads_annual")
+        di_series = comfort_pkg.get("di")
+        utci_series = comfort_pkg.get("utci")
+        heat_index_series = comfort_pkg.get("heat_index")
+        humidex_series = comfort_pkg.get("humidex")
+        focus_threshold = int(st.session_state.get("custom_overheat_threshold", 30))
+        prefer_adaptive = bool(st.session_state.get("prefer_adaptive_comfort", False))
+
+        def _build_occupancy_mask(idx: pd.DatetimeIndex, mode: str) -> pd.Series:
+            if mode == "24/7":
+                return pd.Series(True, index=idx)
+            if mode == "Daytime (07-22)":
+                arr = (idx.hour >= 7) & (idx.hour < 22)
+                return pd.Series(arr, index=idx)
+            if mode == "Workday (Mon-Fri 9-17)":
+                arr = ((idx.dayofweek < 5) & (idx.hour >= 9) & (idx.hour < 17))
+                return pd.Series(arr, index=idx)
+            return pd.Series(True, index=idx)
+
+        with st.expander("⚙️ Comfort analysis settings", expanded=False):
+            comfort_mode = st.radio(
+                "Comfort band",
+                ["Fixed 18–26 °C", "Adaptive (ASHRAE 55)"],
+                index=1 if prefer_adaptive else 0,
+                horizontal=True,
+            )
+            adaptive_band = None
+            comfort_band = (18.0, 26.0)
+            if comfort_mode == "Fixed 18–26 °C":
+                comfort_band = st.slider(
+                    "Comfort temperature band (°C)",
+                    min_value=-10.0,
+                    max_value=40.0,
+                    value=(18.0, 26.0),
+                    step=0.5,
                 )
-                occupancy_mask = None if occupancy_mode == "24/7" else _build_occupancy_mask(cdf.index, occupancy_mode)
-
-                hot_thresholds = st.multiselect(
-                    "Overheating thresholds (°C)",
-                    options=list(range(24, 41)),
-                    default=[28, 30],
-                    help="Counts hours above each selected dry-bulb threshold.",
-                )
-                if not hot_thresholds:
-                    hot_thresholds = [28, 30]
-                if focus_threshold not in hot_thresholds:
-                    hot_thresholds.append(focus_threshold)
-                hot_thresholds = sorted(set(int(th) for th in hot_thresholds))
-                cold_thresholds = st.multiselect(
-                    "Cold stress thresholds (°C)",
-                    options=list(range(-20, 11)),
-                    default=[0],
-                    help="Counts hours below each selected dry-bulb threshold.",
-                )
-                percentiles_on = st.checkbox("Show percentile diagnostics", value=True)
-
-            comfort_annual = comfort_annual_base
-            comfort_monthly = comfort_monthly_base
-            percentiles = (0.9, 0.95) if percentiles_on else None
-            try:
-                comfort_dyn_a = ce.summarize_comfort(
-                    cdf,
-                    di_series,
-                    utci_series,
-                    freq="A",
-                    comfort_band=comfort_band,
-                    adaptive_band=adaptive_band,
-                    overheating_thresholds=hot_thresholds,
-                    cold_thresholds=cold_thresholds,
-                    percentiles=percentiles,
-                    occupancy_mask=occupancy_mask,
-                )
-                if comfort_dyn_a is not None and not comfort_dyn_a.empty:
-                    comfort_annual = comfort_dyn_a
-            except Exception:
-                pass
-
-            try:
-                comfort_dyn_m = ce.summarize_comfort(
-                    cdf,
-                    di_series,
-                    utci_series,
-                    freq="M",
-                    comfort_band=comfort_band,
-                    adaptive_band=adaptive_band,
-                    overheating_thresholds=hot_thresholds,
-                    cold_thresholds=cold_thresholds,
-                    percentiles=percentiles,
-                    occupancy_mask=occupancy_mask,
-                )
-                if comfort_dyn_m is not None and not comfort_dyn_m.empty:
-                    comfort_monthly = comfort_dyn_m
-            except Exception:
-                pass
-
-            def _fmt_hours(val: float) -> str:
-                return "—" if pd.isna(val) else f"{float(val):.0f} h"
-
-            def _fmt_value(val: float, suffix: str = "") -> str:
-                return "—" if pd.isna(val) else f"{float(val):.0f}{suffix}"
-
-            if comfort_annual is None or comfort_annual.empty:
-                st.info("Comfort insights unlock automatically when dry-bulb, humidity, and wind speed data are available.")
             else:
-                latest = comfort_annual.iloc[-1]
-                comfort_pct = latest.get("fraction_in_comfort_band", np.nan)
-                comfort_hours = latest.get("hours_in_comfort_band", np.nan)
-                total_hours = latest.get("hours_total", np.nan)
-                di_discomfort = latest.get("hours_di_discomfort", np.nan)
-                utci_heat = latest.get("hours_utci_heat_stress", np.nan)
-                utci_cold = latest.get("hours_utci_cold_stress", np.nan)
-                hot_cols = sorted([c for c in latest.index if c.startswith("overheating_hours_")])
-                cold_cols = sorted([c for c in latest.index if c.startswith("cold_hours_below_")])
-                focus_col = f"overheating_hours_{focus_threshold}C"
-                if focus_col in hot_cols:
-                    hot_cols.remove(focus_col)
-                    hot_cols.insert(0, focus_col)
+                if "drybulb" not in cdf.columns:
+                    st.warning("Adaptive comfort requires dry-bulb data; falling back to fixed band.")
+                else:
+                    acceptability = st.radio("Adaptive acceptability", ["80%", "90%"], horizontal=True)
+                    acc_value = 0.9 if acceptability == "90%" else 0.8
+                    adaptive_band = ce.build_adaptive_band(cdf["drybulb"], acceptability=acc_value)
+                    comfort_band = None
 
-                comfort_value = "—" if pd.isna(comfort_pct) else f"{comfort_pct * 100:.1f} %"
-                comfort_delta = None
-                if not pd.isna(comfort_hours) and not pd.isna(total_hours):
-                    comfort_delta = f"{comfort_hours:.0f}/{total_hours:.0f} h"
+            occupancy_mode = st.selectbox(
+                "Occupancy schedule",
+                ["24/7", "Daytime (07-22)", "Workday (Mon-Fri 9-17)"],
+                index=0,
+            )
+            occupancy_mask = None if occupancy_mode == "24/7" else _build_occupancy_mask(cdf.index, occupancy_mode)
 
-                mc1, mc2, mc3 = st.columns(3)
-                mc1.metric("Comfort compliance", comfort_value, delta=comfort_delta)
+            hot_thresholds = st.multiselect(
+                "Overheating thresholds (°C)",
+                options=list(range(24, 41)),
+                default=[28, 30],
+                help="Counts hours above each selected dry-bulb threshold.",
+            )
+            if not hot_thresholds:
+                hot_thresholds = [28, 30]
+            if focus_threshold not in hot_thresholds:
+                hot_thresholds.append(focus_threshold)
+            hot_thresholds = sorted(set(int(th) for th in hot_thresholds))
+            cold_thresholds = st.multiselect(
+                "Cold stress thresholds (°C)",
+                options=list(range(-20, 11)),
+                default=[0],
+                help="Counts hours below each selected dry-bulb threshold.",
+            )
+            percentiles_on = st.checkbox("Show percentile diagnostics", value=True)
 
-                di_available = di_series is not None and not getattr(di_series, "empty", True)
-                utci_available = utci_series is not None and not getattr(utci_series, "empty", True)
+        comfort_annual = comfort_annual_base
+        comfort_monthly = comfort_monthly_base
+        percentiles = (0.9, 0.95) if percentiles_on else None
+        try:
+            comfort_dyn_a = ce.summarize_comfort(
+                cdf,
+                di_series,
+                utci_series,
+                freq="A",
+                comfort_band=comfort_band,
+                adaptive_band=adaptive_band,
+                overheating_thresholds=hot_thresholds,
+                cold_thresholds=cold_thresholds,
+                percentiles=percentiles,
+                occupancy_mask=occupancy_mask,
+            )
+            if comfort_dyn_a is not None and not comfort_dyn_a.empty:
+                comfort_annual = comfort_dyn_a
+        except Exception:
+            pass
 
-                di_value = _fmt_hours(di_discomfort)
-                utci_value = _fmt_hours(utci_heat)
-                delta_cold = None if pd.isna(utci_cold) else f"Cold: {utci_cold:.0f} h"
+        try:
+            comfort_dyn_m = ce.summarize_comfort(
+                cdf,
+                di_series,
+                utci_series,
+                freq="M",
+                comfort_band=comfort_band,
+                adaptive_band=adaptive_band,
+                overheating_thresholds=hot_thresholds,
+                cold_thresholds=cold_thresholds,
+                percentiles=percentiles,
+                occupancy_mask=occupancy_mask,
+            )
+            if comfort_dyn_m is not None and not comfort_dyn_m.empty:
+                comfort_monthly = comfort_dyn_m
+        except Exception:
+            pass
 
-                mc2.metric("DI discomfort", di_value)
-                mc3.metric("UTCI heat stress", utci_value, delta=delta_cold)
+        def _fmt_hours(val: float) -> str:
+            return "—" if pd.isna(val) else f"{float(val):.0f} h"
 
-                if not di_available:
-                    mc2.caption("Needs dry-bulb and relative humidity to compute DI.")
-                if not utci_available:
-                    mc3.caption("Needs dry-bulb, relative humidity, and wind speed for UTCI.")
+        def _fmt_value(val: float, suffix: str = "") -> str:
+            return "—" if pd.isna(val) else f"{float(val):.0f}{suffix}"
 
-                hot_display = []
-                for col in hot_cols[:2]:
-                    thresh = col.replace("overheating_hours_", "").replace("C", "")
+        if comfort_annual is None or comfort_annual.empty:
+            st.info("Comfort insights unlock automatically when dry-bulb, humidity, and wind speed data are available.")
+        else:
+            latest = comfort_annual.iloc[-1]
+            comfort_pct = latest.get("fraction_in_comfort_band", np.nan)
+            comfort_hours = latest.get("hours_in_comfort_band", np.nan)
+            total_hours = latest.get("hours_total", np.nan)
+            di_discomfort = latest.get("hours_di_discomfort", np.nan)
+            utci_heat = latest.get("hours_utci_heat_stress", np.nan)
+            utci_cold = latest.get("hours_utci_cold_stress", np.nan)
+            hot_cols = sorted([c for c in latest.index if c.startswith("overheating_hours_")])
+            cold_cols = sorted([c for c in latest.index if c.startswith("cold_hours_below_")])
+            focus_col = f"overheating_hours_{focus_threshold}C"
+            if focus_col in hot_cols:
+                hot_cols.remove(focus_col)
+                hot_cols.insert(0, focus_col)
+
+            comfort_value = "—" if pd.isna(comfort_pct) else f"{comfort_pct * 100:.1f} %"
+            comfort_delta = None
+            if not pd.isna(comfort_hours) and not pd.isna(total_hours):
+                comfort_delta = f"{comfort_hours:.0f}/{total_hours:.0f} h"
+
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric("Comfort compliance", comfort_value, delta=comfort_delta)
+
+            di_available = di_series is not None and not getattr(di_series, "empty", True)
+            utci_available = utci_series is not None and not getattr(utci_series, "empty", True)
+
+            di_value = _fmt_hours(di_discomfort)
+            utci_value = _fmt_hours(utci_heat)
+            delta_cold = None if pd.isna(utci_cold) else f"Cold: {utci_cold:.0f} h"
+
+            mc2.metric("DI discomfort", di_value)
+            mc3.metric("UTCI heat stress", utci_value, delta=delta_cold)
+
+            if not di_available:
+                mc2.caption("Needs dry-bulb and relative humidity to compute DI.")
+            if not utci_available:
+                mc3.caption("Needs dry-bulb, relative humidity, and wind speed for UTCI.")
+
+            hot_display = []
+            for col in hot_cols[:2]:
+                thresh = col.replace("overheating_hours_", "").replace("C", "")
+                try:
+                    thresh_c = float(thresh)
+                except ValueError:
+                    thresh_c = float(focus_threshold)
+                hot_display.append((f"{format_threshold_label(thresh_c)} hours", latest.get(col, np.nan)))
+            if hot_display:
+                oc_cols = st.columns(len(hot_display))
+                for col_obj, (label, value) in zip(oc_cols, hot_display):
+                    col_obj.metric(label, _fmt_hours(value))
+            if cold_cols:
+                cc_cols = st.columns(min(len(cold_cols), 2))
+                for col_obj, col_name in zip(cc_cols, cold_cols[:2]):
+                    thresh = col_name.replace("cold_hours_below_", "").replace("C", "")
+                    try:
+                        thresh_c = float(thresh)
+                    except ValueError:
+                        thresh_c = 0.0
+                    col_obj.metric(f"{format_threshold_label(thresh_c, direction='<')} hours", _fmt_hours(latest.get(col_name, np.nan)))
+
+            if occupancy_mode != "24/7":
+                st.caption(f"Comfort metrics filtered to {occupancy_mode.lower()} hours.")
+            if comfort_mode != "Fixed 18–26 °C":
+                st.caption("Adaptive comfort band follows ASHRAE 55's running-mean method—great for naturally ventilated spaces.")
+            st.caption(
+                f"Focus threshold: tracking hours above {format_threshold_label(focus_threshold, direction='>')} per the Customize Analysis panel."
+            )
+
+            if loads_annual is not None and not loads_annual.empty:
+                loads_latest = loads_annual.iloc[-1]
+                l1, l2 = st.columns(2)
+                l1.metric(
+                    "Heating degree days",
+                    _fmt_value(loads_latest.get("heating_degree_days", np.nan)),
+                    delta=_fmt_value(loads_latest.get("heating_degree_hours", np.nan), " h")
+                )
+                l2.metric(
+                    "Cooling degree days",
+                    _fmt_value(loads_latest.get("cooling_degree_days", np.nan)),
+                    delta=_fmt_value(loads_latest.get("cooling_degree_hours", np.nan), " h")
+                )
+
+            if comfort_monthly is not None and not comfort_monthly.empty:
+                # Collapse multi-year monthly rows into one row per calendar month to avoid zig-zag lines
+                monthly = comfort_monthly.copy()
+                month_numbers = monthly.index.month
+
+                agg_spec = {}
+                for col in monthly.columns:
+                    if col.startswith("fraction_in_comfort_band"):
+                        agg_spec[col] = "mean"
+                    else:
+                        agg_spec[col] = "sum"
+
+                monthly_grouped = monthly.copy()
+                monthly_grouped["month_num"] = month_numbers
+                monthly_grouped = monthly_grouped.groupby("month_num").agg(agg_spec)
+                monthly_grouped = monthly_grouped.reindex(range(1, 13))
+
+                # Fill gaps for hour counts; keep comfort fraction as-is so missing months stay blank
+                for col in monthly_grouped.columns:
+                    if not col.startswith("fraction_in_comfort_band"):
+                        monthly_grouped[col] = monthly_grouped[col].fillna(0)
+
+                monthly_grouped.index = [pd.Timestamp(2001, int(m), 1).strftime("%b") for m in monthly_grouped.index]
+
+                fig_comfort = make_subplots(specs=[[{"secondary_y": True}]])
+                for idx, col_name in enumerate(hot_cols[:2]):
+                    thresh = col_name.replace("overheating_hours_", "").replace("C", "")
                     try:
                         thresh_c = float(thresh)
                     except ValueError:
                         thresh_c = float(focus_threshold)
-                    hot_display.append((f"{format_threshold_label(thresh_c)} hours", latest.get(col, np.nan)))
-                if hot_display:
-                    oc_cols = st.columns(len(hot_display))
-                    for col_obj, (label, value) in zip(oc_cols, hot_display):
-                        col_obj.metric(label, _fmt_hours(value))
-                if cold_cols:
-                    cc_cols = st.columns(min(len(cold_cols), 2))
-                    for col_obj, col_name in zip(cc_cols, cold_cols[:2]):
-                        thresh = col_name.replace("cold_hours_below_", "").replace("C", "")
-                        try:
-                            thresh_c = float(thresh)
-                        except ValueError:
-                            thresh_c = 0.0
-                        col_obj.metric(f"{format_threshold_label(thresh_c, direction='<')} hours", _fmt_hours(latest.get(col_name, np.nan)))
+                    fig_comfort.add_bar(
+                        name=format_threshold_label(thresh_c),
+                        x=monthly_grouped.index,
+                        y=monthly_grouped.get(col_name, pd.Series(index=monthly_grouped.index)).fillna(0),
+                        marker_color="#fb923c" if idx == 0 else "#f97316",
+                        opacity=0.6 if idx == 1 else 0.8,
+                        secondary_y=False,
+                    )
 
-                if occupancy_mode != "24/7":
-                    st.caption(f"Comfort metrics filtered to {occupancy_mode.lower()} hours.")
-                if comfort_mode != "Fixed 18–26 °C":
-                    st.caption("Adaptive comfort band follows ASHRAE 55's running-mean method—great for naturally ventilated spaces.")
-                st.caption(
-                    f"Focus threshold: tracking hours above {format_threshold_label(focus_threshold, direction='>')} per the Customize Analysis panel."
+                if "hours_utci_heat_stress" in monthly_grouped:
+                    fig_comfort.add_bar(
+                        name="UTCI heat stress",
+                        x=monthly_grouped.index,
+                        y=monthly_grouped["hours_utci_heat_stress"].fillna(0),
+                        marker_color="#ef4444",
+                        opacity=0.5,
+                        secondary_y=False,
+                    )
+
+                if "fraction_in_comfort_band" in monthly_grouped:
+                    fig_comfort.add_scatter(
+                        name="Comfort %",
+                        x=monthly_grouped.index,
+                        y=(monthly_grouped["fraction_in_comfort_band"] * 100),
+                        mode="lines+markers",
+                        line=dict(color="#34d399", width=2.5),
+                        marker=dict(size=6),
+                        secondary_y=True,
+                    )
+
+                fig_comfort.update_layout(
+                    bargap=0.2,
+                    hovermode="x unified",
+                    margin=dict(l=0, r=0, t=30, b=0),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.12, xanchor="left", x=0),
                 )
+                fig_comfort.update_yaxes(title_text="Hours", secondary_y=False)
+                fig_comfort.update_yaxes(title_text="Comfort %", range=[0, 100], secondary_y=True)
+                st.plotly_chart(fig_comfort, use_container_width=True)
 
-                if loads_annual is not None and not loads_annual.empty:
-                    loads_latest = loads_annual.iloc[-1]
-                    l1, l2 = st.columns(2)
-                    l1.metric(
-                        "Heating degree days",
-                        _fmt_value(loads_latest.get("heating_degree_days", np.nan)),
-                        delta=_fmt_value(loads_latest.get("heating_degree_hours", np.nan), " h")
+            # Point-in-time probe: inspect weather and comfort metrics together at a chosen hour
+            with st.expander("Point-in-time probe", expanded=False):
+                if len(cdf.index):
+                    available_dates = sorted(pd.to_datetime(cdf.index.date).unique())
+                    default_date = available_dates[0]
+                    chosen_date = st.date_input(
+                        "Date",
+                        value=default_date,
+                        min_value=available_dates[0],
+                        max_value=available_dates[-1],
                     )
-                    l2.metric(
-                        "Cooling degree days",
-                        _fmt_value(loads_latest.get("cooling_degree_days", np.nan)),
-                        delta=_fmt_value(loads_latest.get("cooling_degree_hours", np.nan), " h")
+                    chosen_hour = st.slider("Hour (0–23)", 0, 23, 14)
+                    ts = pd.Timestamp(year=chosen_date.year, month=chosen_date.month, day=chosen_date.day, hour=int(chosen_hour))
+                    idx_tz = getattr(cdf.index, "tz", None)
+                    if idx_tz is not None:
+                        ts = ts.tz_localize(idx_tz, nonexistent="shift_forward", ambiguous="NaT")
+                    nearest_idx = cdf.index.get_indexer([ts], method="nearest")
+                    if nearest_idx[0] != -1:
+                        snap = cdf.iloc[nearest_idx[0]]
+                        snap_di = di_series.iloc[nearest_idx[0]] if di_series is not None and not getattr(di_series, "empty", True) else np.nan
+                        snap_utci = utci_series.iloc[nearest_idx[0]] if utci_series is not None and not getattr(utci_series, "empty", True) else np.nan
+                        snap_rows = [
+                            ("Dry-bulb (°C)", format_temperature(snap.get("drybulb"))),
+                            ("Rel humidity (%)", "—" if pd.isna(snap.get("relhum")) else f"{snap.get('relhum'):.0f} %"),
+                            ("Wind speed (m/s)", "—" if pd.isna(snap.get("windspd")) else f"{snap.get('windspd'):.1f}"),
+                            ("DI", "—" if pd.isna(snap_di) else f"{snap_di:.1f}"),
+                            ("UTCI (°C)", "—" if pd.isna(snap_utci) else f"{snap_utci:.1f}"),
+                            ("Heat index (°C)", "—" if heat_index_series is None or pd.isna(heat_index_series.iloc[nearest_idx[0]]) else f"{heat_index_series.iloc[nearest_idx[0]]:.1f}"),
+                            ("Humidex (°C)", "—" if humidex_series is None or pd.isna(humidex_series.iloc[nearest_idx[0]]) else f"{humidex_series.iloc[nearest_idx[0]]:.1f}"),
+                        ]
+                        snap_df = pd.DataFrame(snap_rows, columns=["Metric", "Value"]).set_index("Metric")
+                        st.table(snap_df)
+                    else:
+                        st.info("No data available for that selection.")
+
+            if percentiles_on and not comfort_annual.empty:
+                pct_cols = [c for c in latest.index if c.startswith("temp_p") or c.startswith("di_p") or c.startswith("utci_p")]
+                pct_series = latest[pct_cols].dropna()
+                hi_pct = None
+                hum_pct = None
+                if heat_index_series is not None and not heat_index_series.empty:
+                    hi_src = heat_index_series
+                    if occupancy_mask is not None:
+                        occ = occupancy_mask.reindex(hi_src.index).fillna(False)
+                        hi_src = hi_src.loc[occ]
+                    hi_pct = hi_src.quantile(0.95)
+                if humidex_series is not None and not humidex_series.empty:
+                    hum_src = humidex_series
+                    if occupancy_mask is not None:
+                        occ = occupancy_mask.reindex(hum_src.index).fillna(False)
+                        hum_src = hum_src.loc[occ]
+                    hum_pct = hum_src.quantile(0.95)
+                with st.expander("Percentile & feels-like diagnostics", expanded=False):
+                    if not pct_series.empty:
+                        st.write(pct_series.rename(lambda c: c.replace("_", " ")))
+                    hi_text = (
+                        f"Heat index 95th percentile: {format_temperature(hi_pct)}"
+                        if hi_pct is not None else "Heat index data unavailable."
                     )
-
-                if comfort_monthly is not None and not comfort_monthly.empty:
-                    # Collapse multi-year monthly rows into one row per calendar month to avoid zig-zag lines
-                    monthly = comfort_monthly.copy()
-                    month_numbers = monthly.index.month
-
-                    agg_spec = {}
-                    for col in monthly.columns:
-                        if col.startswith("fraction_in_comfort_band"):
-                            agg_spec[col] = "mean"
-                        else:
-                            agg_spec[col] = "sum"
-
-                    monthly_grouped = monthly.copy()
-                    monthly_grouped["month_num"] = month_numbers
-                    monthly_grouped = monthly_grouped.groupby("month_num").agg(agg_spec)
-                    monthly_grouped = monthly_grouped.reindex(range(1, 13))
-
-                    # Fill gaps for hour counts; keep comfort fraction as-is so missing months stay blank
-                    for col in monthly_grouped.columns:
-                        if not col.startswith("fraction_in_comfort_band"):
-                            monthly_grouped[col] = monthly_grouped[col].fillna(0)
-
-                    monthly_grouped.index = [pd.Timestamp(2001, int(m), 1).strftime("%b") for m in monthly_grouped.index]
-
-                    fig_comfort = make_subplots(specs=[[{"secondary_y": True}]])
-                    for idx, col_name in enumerate(hot_cols[:2]):
-                        thresh = col_name.replace("overheating_hours_", "").replace("C", "")
-                        try:
-                            thresh_c = float(thresh)
-                        except ValueError:
-                            thresh_c = float(focus_threshold)
-                        fig_comfort.add_bar(
-                            name=format_threshold_label(thresh_c),
-                            x=monthly_grouped.index,
-                            y=monthly_grouped.get(col_name, pd.Series(index=monthly_grouped.index)).fillna(0),
-                            marker_color="#fb923c" if idx == 0 else "#f97316",
-                            opacity=0.6 if idx == 1 else 0.8,
-                            secondary_y=False,
-                        )
-
-                    if "hours_utci_heat_stress" in monthly_grouped:
-                        fig_comfort.add_bar(
-                            name="UTCI heat stress",
-                            x=monthly_grouped.index,
-                            y=monthly_grouped["hours_utci_heat_stress"].fillna(0),
-                            marker_color="#ef4444",
-                            opacity=0.5,
-                            secondary_y=False,
-                        )
-
-                    if "fraction_in_comfort_band" in monthly_grouped:
-                        fig_comfort.add_scatter(
-                            name="Comfort %",
-                            x=monthly_grouped.index,
-                            y=(monthly_grouped["fraction_in_comfort_band"] * 100),
-                            mode="lines+markers",
-                            line=dict(color="#34d399", width=2.5),
-                            marker=dict(size=6),
-                            secondary_y=True,
-                        )
-
-                    fig_comfort.update_layout(
-                        bargap=0.2,
-                        hovermode="x unified",
-                        margin=dict(l=0, r=0, t=30, b=0),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.12, xanchor="left", x=0),
+                    hum_text = (
+                        f"Humidex 95th percentile: {format_temperature(hum_pct)}"
+                        if hum_pct is not None else "Humidex data unavailable."
                     )
-                    fig_comfort.update_yaxes(title_text="Hours", secondary_y=False)
-                    fig_comfort.update_yaxes(title_text="Comfort %", range=[0, 100], secondary_y=True)
-                    st.plotly_chart(fig_comfort, use_container_width=True)
+                    st.caption(f"{hi_text}\n\n{hum_text}")
 
-                # Point-in-time probe: inspect weather and comfort metrics together at a chosen hour
-                with st.expander("Point-in-time probe", expanded=False):
-                    if len(cdf.index):
-                        available_dates = sorted(pd.to_datetime(cdf.index.date).unique())
-                        default_date = available_dates[0]
-                        chosen_date = st.date_input(
-                            "Date",
-                            value=default_date,
-                            min_value=available_dates[0],
-                            max_value=available_dates[-1],
-                        )
-                        chosen_hour = st.slider("Hour (0–23)", 0, 23, 14)
-                        ts = pd.Timestamp(year=chosen_date.year, month=chosen_date.month, day=chosen_date.day, hour=int(chosen_hour))
-                        idx_tz = getattr(cdf.index, "tz", None)
-                        if idx_tz is not None:
-                            ts = ts.tz_localize(idx_tz, nonexistent="shift_forward", ambiguous="NaT")
-                        nearest_idx = cdf.index.get_indexer([ts], method="nearest")
-                        if nearest_idx[0] != -1:
-                            snap = cdf.iloc[nearest_idx[0]]
-                            snap_di = di_series.iloc[nearest_idx[0]] if di_series is not None and not getattr(di_series, "empty", True) else np.nan
-                            snap_utci = utci_series.iloc[nearest_idx[0]] if utci_series is not None and not getattr(utci_series, "empty", True) else np.nan
-                            snap_rows = [
-                                ("Dry-bulb (°C)", format_temperature(snap.get("drybulb"))),
-                                ("Rel humidity (%)", "—" if pd.isna(snap.get("relhum")) else f"{snap.get('relhum'):.0f} %"),
-                                ("Wind speed (m/s)", "—" if pd.isna(snap.get("windspd")) else f"{snap.get('windspd'):.1f}"),
-                                ("DI", "—" if pd.isna(snap_di) else f"{snap_di:.1f}"),
-                                ("UTCI (°C)", "—" if pd.isna(snap_utci) else f"{snap_utci:.1f}"),
-                                ("Heat index (°C)", "—" if heat_index_series is None or pd.isna(heat_index_series.iloc[nearest_idx[0]]) else f"{heat_index_series.iloc[nearest_idx[0]]:.1f}"),
-                                ("Humidex (°C)", "—" if humidex_series is None or pd.isna(humidex_series.iloc[nearest_idx[0]]) else f"{humidex_series.iloc[nearest_idx[0]]:.1f}"),
-                            ]
-                            snap_df = pd.DataFrame(snap_rows, columns=["Metric", "Value"]).set_index("Metric")
-                            st.table(snap_df)
-                        else:
-                            st.info("No data available for that selection.")
+    with diagnostics_tab:
+        st.markdown("### 📋 Data completeness (non-null coverage)")
+        st.caption("Quickly confirm which weather variables are fully populated and which ones have gaps before trusting downstream analytics.")
+        null_ct = cdf.isna().sum()
+        cov_pct = ((1 - null_ct / len(cdf)) * 100).round(1)
 
-                if percentiles_on and not comfort_annual.empty:
-                    pct_cols = [c for c in latest.index if c.startswith("temp_p") or c.startswith("di_p") or c.startswith("utci_p")]
-                    pct_series = latest[pct_cols].dropna()
-                    hi_pct = None
-                    hum_pct = None
-                    if heat_index_series is not None and not heat_index_series.empty:
-                        hi_src = heat_index_series
-                        if occupancy_mask is not None:
-                            occ = occupancy_mask.reindex(hi_src.index).fillna(False)
-                            hi_src = hi_src.loc[occ]
-                        hi_pct = hi_src.quantile(0.95)
-                    if humidex_series is not None and not humidex_series.empty:
-                        hum_src = humidex_series
-                        if occupancy_mask is not None:
-                            occ = occupancy_mask.reindex(hum_src.index).fillna(False)
-                            hum_src = hum_src.loc[occ]
-                        hum_pct = hum_src.quantile(0.95)
-                    with st.expander("Percentile & feels-like diagnostics", expanded=False):
-                        if not pct_series.empty:
-                            st.write(pct_series.rename(lambda c: c.replace("_", " ")))
-                        hi_text = (
-                            f"Heat index 95th percentile: {format_temperature(hi_pct)}"
-                            if hi_pct is not None else "Heat index data unavailable."
-                        )
-                        hum_text = (
-                            f"Humidex 95th percentile: {format_temperature(hum_pct)}"
-                            if hum_pct is not None else "Humidex data unavailable."
-                        )
-                        st.caption(f"{hi_text}\n\n{hum_text}")
+        cov_df = (
+            pd.DataFrame({"Coverage %": cov_pct, "Missing": null_ct})
+            .sort_values("Coverage %", ascending=True)
+            .head(12)
+        )
 
-        with diagnostics_tab:
-            st.markdown("### 📋 Data completeness (non-null coverage)")
-            st.caption("Quickly confirm which weather variables are fully populated and which ones have gaps before trusting downstream analytics.")
-            null_ct = cdf.isna().sum()
-            cov_pct = ((1 - null_ct / len(cdf)) * 100).round(1)
+        if (cov_df["Coverage %"] == 100).all():
+            st.success("All shown columns are complete (100% coverage).")
+        st.dataframe(cov_df, use_container_width=True)
 
-            cov_df = (
-                pd.DataFrame({"Coverage %": cov_pct, "Missing": null_ct})
-                .sort_values("Coverage %", ascending=True)
-                .head(12)
-            )
+        # Diagnostics tab: keep Data Quality content only (heatmaps moved to the Heatmaps tab)
+        st.caption("Data quality diagnostics shown above. Use the Heatmaps tab to explore annual diurnal resource heatmaps.")
 
-            if (cov_df["Coverage %"] == 100).all():
-                st.success("All shown columns are complete (100% coverage).")
-            st.dataframe(cov_df, use_container_width=True)
-
-            # Diagnostics tab: keep Data Quality content only (heatmaps moved to the Heatmaps tab)
-            st.caption("Data quality diagnostics shown above. Use the Heatmaps tab to explore annual diurnal resource heatmaps.")
-
-        # ========== HEATMAPS TAB CONTENT ==========
-        with heatmaps_tab:
-            st.divider()
-            st.divider()
-            
-            # Dynamic header with location
+    # ========== HEATMAPS TAB CONTENT ==========
+    with heatmaps_tab:
+        st.divider()
+        st.divider()
+        
+        # Dynamic header with location
 
 
-            import json
+        import json
 
-            # Default thresholds
-            default_thresholds = {
-                "solar": [100.0, 300.0, 500.0, 700.0],
-                "humidity": [40.0, 60.0, 80.0],
-                "wind": [1.5, 4.5],
-            }
+        # Default thresholds
+        default_thresholds = {
+            "solar": [100.0, 300.0, 500.0, 700.0],
+            "humidity": [40.0, 60.0, 80.0],
+            "wind": [1.5, 4.5],
+        }
 
-            # Initialize/persist thresholds in session_state
-            if "heatmap_thresholds" not in st.session_state:
-                st.session_state["heatmap_thresholds"] = default_thresholds.copy()
+        # Initialize/persist thresholds in session_state
+        if "heatmap_thresholds" not in st.session_state:
+            st.session_state["heatmap_thresholds"] = default_thresholds.copy()
 
-            thresholds_state = st.session_state["heatmap_thresholds"]
+        thresholds_state = st.session_state["heatmap_thresholds"]
 
-            def _labels_from_thresholds(ths: list[float], suffix: str) -> list[str]:
-                labels = []
-                if not ths:
-                    return labels
-                labels.append(f"<{ths[0]:g}{suffix}")
-                for a, b in zip(ths, ths[1:]):
-                    labels.append(f"{a:g}–{b:g}{suffix}")
-                labels.append(f">{ths[-1]:g}{suffix}")
+        def _labels_from_thresholds(ths: list[float], suffix: str) -> list[str]:
+            labels = []
+            if not ths:
                 return labels
+            labels.append(f"<{ths[0]:g}{suffix}")
+            for a, b in zip(ths, ths[1:]):
+                labels.append(f"{a:g}–{b:g}{suffix}")
+            labels.append(f">{ths[-1]:g}{suffix}")
+            return labels
 
-            invalid_thresholds = False
+        invalid_thresholds = False
 
-            with st.expander("Legend & Thresholds", expanded=False):
-                c_reset = st.columns([3,1])[1]
-                if c_reset.button("Reset thresholds to defaults"):
-                    st.session_state["heatmap_thresholds"] = default_thresholds.copy()
-                    st.experimental_rerun()
+        with st.expander("Legend & Thresholds", expanded=False):
+            c_reset = st.columns([3,1])[1]
+            if c_reset.button("Reset thresholds to defaults"):
+                st.session_state["heatmap_thresholds"] = default_thresholds.copy()
+                _rerun()
 
-                c_s1, c_s2, c_s3, c_s4 = st.columns(4)
-                solar_t1 = c_s1.number_input("Solar t1 (W/m²)", value=float(thresholds_state["solar"][0]), step=50.0, key="solar_t1")
-                solar_t2 = c_s2.number_input("Solar t2", value=float(thresholds_state["solar"][1]), step=50.0, key="solar_t2")
-                solar_t3 = c_s3.number_input("Solar t3", value=float(thresholds_state["solar"][2]), step=50.0, key="solar_t3")
-                solar_t4 = c_s4.number_input("Solar t4", value=float(thresholds_state["solar"][3]), step=50.0, key="solar_t4")
-                solar_thresholds = [solar_t1, solar_t2, solar_t3, solar_t4]
+            c_s1, c_s2, c_s3, c_s4 = st.columns(4)
+            solar_t1 = c_s1.number_input("Solar t1 (W/m²)", value=float(thresholds_state["solar"][0]), step=50.0, key="solar_t1")
+            solar_t2 = c_s2.number_input("Solar t2", value=float(thresholds_state["solar"][1]), step=50.0, key="solar_t2")
+            solar_t3 = c_s3.number_input("Solar t3", value=float(thresholds_state["solar"][2]), step=50.0, key="solar_t3")
+            solar_t4 = c_s4.number_input("Solar t4", value=float(thresholds_state["solar"][3]), step=50.0, key="solar_t4")
+            solar_thresholds = [solar_t1, solar_t2, solar_t3, solar_t4]
 
-                c_h1, c_h2, c_h3 = st.columns(3)
-                hum_t1 = c_h1.number_input("Humidity t1 (%)", value=float(thresholds_state["humidity"][0]), step=5.0, key="hum_t1")
-                hum_t2 = c_h2.number_input("Humidity t2", value=float(thresholds_state["humidity"][1]), step=5.0, key="hum_t2")
-                hum_t3 = c_h3.number_input("Humidity t3", value=float(thresholds_state["humidity"][2]), step=5.0, key="hum_t3")
-                humidity_thresholds = [hum_t1, hum_t2, hum_t3]
+            c_h1, c_h2, c_h3 = st.columns(3)
+            hum_t1 = c_h1.number_input("Humidity t1 (%)", value=float(thresholds_state["humidity"][0]), step=5.0, key="hum_t1")
+            hum_t2 = c_h2.number_input("Humidity t2", value=float(thresholds_state["humidity"][1]), step=5.0, key="hum_t2")
+            hum_t3 = c_h3.number_input("Humidity t3", value=float(thresholds_state["humidity"][2]), step=5.0, key="hum_t3")
+            humidity_thresholds = [hum_t1, hum_t2, hum_t3]
 
-                c_w1, c_w2 = st.columns(2)
-                wind_t1 = c_w1.number_input("Wind t1 (m/s)", value=float(thresholds_state["wind"][0]), step=0.5, key="wind_t1")
-                wind_t2 = c_w2.number_input("Wind t2", value=float(thresholds_state["wind"][1]), step=0.5, key="wind_t2")
-                wind_thresholds = [wind_t1, wind_t2]
+            c_w1, c_w2 = st.columns(2)
+            wind_t1 = c_w1.number_input("Wind t1 (m/s)", value=float(thresholds_state["wind"][0]), step=0.5, key="wind_t1")
+            wind_t2 = c_w2.number_input("Wind t2", value=float(thresholds_state["wind"][1]), step=0.5, key="wind_t2")
+            wind_thresholds = [wind_t1, wind_t2]
 
-                def _is_strictly_increasing(vals):
-                    return all(vals[i] < vals[i+1] for i in range(len(vals)-1))
+            def _is_strictly_increasing(vals):
+                return all(vals[i] < vals[i+1] for i in range(len(vals)-1))
 
-                if not (_is_strictly_increasing(solar_thresholds) and _is_strictly_increasing(humidity_thresholds) and _is_strictly_increasing(wind_thresholds)):
-                    invalid_thresholds = True
-                    st.error("Thresholds must be strictly increasing for each metric.")
-                else:
-                    thresholds_state["solar"] = solar_thresholds
-                    thresholds_state["humidity"] = humidity_thresholds
-                    thresholds_state["wind"] = wind_thresholds
-
-            if invalid_thresholds:
-                st.info("Adjust thresholds to continue.")
+            if not (_is_strictly_increasing(solar_thresholds) and _is_strictly_increasing(humidity_thresholds) and _is_strictly_increasing(wind_thresholds)):
+                invalid_thresholds = True
+                st.error("Thresholds must be strictly increasing for each metric.")
             else:
-                location_label = get_clean_city_name()
-                st.markdown(f"<h3>{location_label} – Annual Diurnal Resource Heatmaps</h3>", unsafe_allow_html=True)
-                st.caption("Adjust legend thresholds to explore how different performance ranges appear across the year.")
-                # Continuous heatmap helper: aggregate first (mean/median), keep thresholds for hover/legend only
-                def _build_pivot_with_thresholds(df: pd.DataFrame, col: str, metric_label: str, thresholds: list[float], units_suffix: str, palette_metric: str, agg: str = "mean", raw_col: str = None):
-                    series = pd.to_numeric(df[col], errors="coerce")
-                    series = series.dropna()
-                    if series.empty:
-                        return pd.DataFrame(), {"error": f"No valid data for {metric_label}"}
+                thresholds_state["solar"] = solar_thresholds
+                thresholds_state["humidity"] = humidity_thresholds
+                thresholds_state["wind"] = wind_thresholds
 
-                    work = pd.DataFrame({"val": series})
-                    if raw_col:
-                        work["raw"] = pd.to_numeric(df[raw_col], errors="coerce")
-                    else:
-                        work["raw"] = work["val"]
-                        
-                    work["hod"] = work.index.hour
-                    work["doy"] = work.index.dayofyear
+        if invalid_thresholds:
+            st.info("Adjust thresholds to continue.")
+        else:
+            location_label = get_clean_city_name()
+            st.markdown(f"<h3>{location_label} – Annual Diurnal Resource Heatmaps</h3>", unsafe_allow_html=True)
+            st.caption("Adjust legend thresholds to explore how different performance ranges appear across the year.")
+            # Continuous heatmap helper: aggregate first (mean/median), keep thresholds for hover/legend only
+            def _build_pivot_with_thresholds(df: pd.DataFrame, col: str, metric_label: str, thresholds: list[float], units_suffix: str, palette_metric: str, agg: str = "mean", raw_col: str = None):
+                series = pd.to_numeric(df[col], errors="coerce")
+                series = series.dropna()
+                if series.empty:
+                    return pd.DataFrame(), {"error": f"No valid data for {metric_label}"}
 
-                    aggfunc = "median" if agg == "median" else "mean"
-                    pivot_raw = work.pivot_table(index="hod", columns="doy", values="val", aggfunc=aggfunc)
-                    pivot_raw = pivot_raw.reindex(index=range(24), columns=range(1, 367))
-                    
-                    # For labels, we use the RAW values to bin against thresholds
-                    # We need to aggregate raw values same way to match the grid cells?
-                    # Or do we bin the aggregated raw values? 
-                    # If we bin the raw values, we get mode? 
-                    # Simpler: Aggregate the RAW values too, then bin.
-                    pivot_val_for_labels = work.pivot_table(index="hod", columns="doy", values="raw", aggfunc=aggfunc)
-                    pivot_val_for_labels = pivot_val_for_labels.reindex(index=range(24), columns=range(1, 367))
-
-                    # Thresholds for interpretation (hover/legend), not for coloring
-                    bins = [-np.inf] + thresholds + [np.inf]
-                    labels = _labels_from_thresholds(thresholds, units_suffix)
-                    
-                    cat = pd.cut(pivot_val_for_labels.values.flatten(), bins=bins, labels=labels, right=False)
-                    label_grid = pd.Series(cat).astype(object).values.reshape(pivot_raw.shape)
-
-                    colors_default, _ = get_color_scale_for_metric(palette_metric)
-                    colors = colors_default[: len(labels)]
-
-                    info = {
-                        "metric": metric_label,
-                        "col": col,
-                        "labels": labels,
-                        "colors": colors,
-                        "thresholds": thresholds,
-                        "hover_labels": label_grid,
-                    }
-                    return pivot_raw, info
-
-                heatmap_dict = {}
-                
-                # Add Dry Bulb Temperature first
-                db_col = get_metric_column(cdf, ["dry_bulb_temperature", "drybulb", "temp", "db"])
-                if db_col:
-                    # Note: We pass [] for thresholds to let defaults or custom thresholds handling kick in
-                    # But _build_pivot_with_thresholds expects a list. 
-                    # If thresholds_state has 'drybulb', use it, else empty.
-                    # We will assume "Dry Bulb Temperature" uses the color scale "drybulb" or "thermal" which is standard.
-                    # We pass agg="mean".
-                    db_thresholds = [10.0, 20.0, 26.6, 35.0]
-                    
-                    # Prepare categorical bins for heatmap values (0, 1, 2...)
-                    # Correct bin edges: -100, 10, 20, 26.6, 35, 100
-                    db_bins = [-100, 10.0, 20.0, 26.6, 35.0, 100.0] 
-                    db_series = cdf[db_col]
-                    cdf["db_cat"] = pd.cut(db_series, bins=db_bins, labels=[0, 1, 2, 3, 4], include_lowest=True, right=False).astype(float)
-
-                    pivot_binned, info = _build_pivot_with_thresholds(
-                        cdf, "db_cat", "Dry Bulb Temperature", db_thresholds, "°C", "drybulb", agg="mean", raw_col=db_col
-                    )
-                    if not pivot_binned.empty:
-                        heatmap_dict["Dry Bulb Temperature"] = (pivot_binned, info)
-
-                solar_col = get_metric_column(cdf, ["glohorrad", "global_horizontal_radiation", "solar"])
-                if solar_col:
-                    # Bin Solar into categories 0..4 for discrete coloring
-                    # 0:<100, 1:100-300, 2:300-500, 3:500-700, 4:>700
-                    # Ensure we handle values >= 0
-                    s_series = cdf[solar_col].clip(lower=0)
-                    sb = [0.0, 100.0, 300.0, 500.0, 700.0, s_series.max() + 1.0]
-                    # If max < 700, ensure bins cover it
-                    if sb[-1] <= 700.0: sb[-1] = 9999.0
-                    
-                    cdf["solar_cat"] = pd.cut(s_series, bins=sb, labels=[0, 1, 2, 3, 4], include_lowest=True, right=False).astype(float)
-                    
-                    # Pass "solar_cat" for the heatmap values, but RAW solar_col for labels
-                    pivot_binned, info = _build_pivot_with_thresholds(
-                        cdf, "solar_cat", "Solar Radiation", thresholds_state["solar"], " W/m²", "solar", agg="mean", raw_col=solar_col
-                    )
-                    if not pivot_binned.empty:
-                        heatmap_dict["Solar Radiation"] = (pivot_binned, info)
-
-                rh_col = get_metric_column(cdf, ["relative_humidity", "relhum", "rh"])
-                if rh_col:
-                    pivot_binned, info = _build_pivot_with_thresholds(cdf, rh_col, "Humidity", thresholds_state["humidity"], "%", "humidity", agg="mean")
-                    if not pivot_binned.empty:
-                        heatmap_dict["Humidity"] = (pivot_binned, info)
-
-                wind_col = get_metric_column(cdf, ["windspd", "wind_speed", "wspd"])
-                if wind_col:
-                    # Bin wind speed into categories 0, 1, 2 for proper discrete coloring
-                    # <1.5 (0), 1.5-4.5 (1), >4.5 (2)
-                    wb = [0.0, 1.5, 4.5, cdf[wind_col].max() + 1.0]
-                    if wb[-1] <= 4.5: wb[-1] = 999.0
-                    
-                    cdf["wind_cat"] = pd.cut(cdf[wind_col], bins=wb, labels=[0, 1, 2], include_lowest=True, right=False).astype(float)
-                    
-                    # Pass "wind_cat" for heatmap, RAW wind_col for labels
-                    pivot_binned, info = _build_pivot_with_thresholds(
-                        cdf, "wind_cat", "Wind Speed", thresholds_state["wind"], " m/s", "wind", agg="median", raw_col=wind_col
-                    )
-                    if not pivot_binned.empty:
-                        heatmap_dict["Wind Speed"] = (pivot_binned, info)
-
-                # NEW: Wind Direction heatmap (sector mode per hod/doy)
-                if "wind_direction" in cdf.columns or "winddir" in cdf.columns or "wind_dir" in cdf.columns:
-                    dir_col = get_metric_column(cdf, ["wind_direction", "winddir", "wind_dir", "wd", "wdir"])
-                    if dir_col:
-                        dir_series = pd.to_numeric(cdf[dir_col], errors="coerce")
-                        dir_series = dir_series.mask(dir_series >= 999)  # drop 999 sentinels
-                        dir_series = dir_series.dropna()
-                        if not dir_series.empty:
-                            work_dir = pd.DataFrame({"val": dir_series})
-                            work_dir["hod"] = work_dir.index.hour
-                            work_dir["doy"] = work_dir.index.dayofyear
-
-                            sector_names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-                            sector_edges = [22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5]
-
-                            def dir_to_sector_code(deg: float) -> float:
-                                if pd.isna(deg):
-                                    return np.nan
-                                d = deg % 360.0
-                                if d >= 337.5 or d < 22.5:
-                                    return 0
-                                elif d < 67.5:
-                                    return 1
-                                elif d < 112.5:
-                                    return 2
-                                elif d < 157.5:
-                                    return 3
-                                elif d < 202.5:
-                                    return 4
-                                elif d < 247.5:
-                                    return 5
-                                elif d < 292.5:
-                                    return 6
-                                else:
-                                    return 7
-
-                            work_dir["sector"] = work_dir["val"].apply(dir_to_sector_code)
-                            work_dir = work_dir.dropna(subset=["sector"])
-
-                            def sector_mode(s: pd.Series) -> float:
-                                if s.empty:
-                                    return np.nan
-                                m = s.mode()
-                                return m.iat[0] if not m.empty else np.nan
-
-                            sector_mode_series = (
-                                work_dir.groupby(["hod", "doy"])["sector"].agg(lambda s: s.mode().iat[0] if not s.mode().empty else np.nan)
-                            )
-                            pivot_dir = sector_mode_series.unstack("doy")
-                            pivot_dir = pivot_dir.reindex(index=range(24), columns=range(1, 367))
-
-                            dir_colors = ["#4c6fff", "#3fb3ff", "#36d1a8", "#8bd36b", "#f6c445", "#f08c42", "#e15b9a", "#9d6bff"]
-                            # map codes back to compass labels for hover
-                            label_grid = pivot_dir.map(lambda v: sector_names[int(v)] if pd.notna(v) else np.nan).values
-
-                            info_dir = {
-                                "metric": "Wind Direction",
-                                "col": dir_col,
-                                "labels": sector_names,
-                                "colors": dir_colors,
-                                "thresholds": [],
-                                "hover_labels": label_grid,
-                                "show_colorscale": False,  # compass legend rendered separately
-                                "colorbar": None,
-                            }
-                            heatmap_dict["Wind Direction"] = (pivot_dir, info_dir)
-
-                if not heatmap_dict:
-                    st.info("No metric data available for heatmap generation.")
+                work = pd.DataFrame({"val": series})
+                if raw_col:
+                    work["raw"] = pd.to_numeric(df[raw_col], errors="coerce")
                 else:
-                    fig = build_diurnal_heatmap_figure(heatmap_dict, cdf, header)
-                    if fig:
-                        st.plotly_chart(fig, use_container_width=False, config={"responsive": False})
+                    work["raw"] = work["val"]
+                    
+                work["hod"] = work.index.hour
+                work["doy"] = work.index.dayofyear
 
-                        # Downloads reflecting current thresholds
-                        city_clean = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
-                        clean_loc = city_clean
-                        c1d, c2d = st.columns(2)
-                        with c1d:
-                            try:
-                                svg_bytes = fig.to_image(format="svg", scale=2, width=1200, height=800)
-                                st.download_button(label="📥 Download heatmaps as SVG", data=svg_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.svg", mime="image/svg+xml")
-                            except Exception:
-                                html_bytes = fig.to_html(include_plotlyjs='cdn').encode('utf-8')
-                                st.download_button(label="📥 Download heatmaps (HTML)", data=html_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.html", mime="text/html")
+                aggfunc = "median" if agg == "median" else "mean"
+                pivot_raw = work.pivot_table(index="hod", columns="doy", values="val", aggfunc=aggfunc)
+                pivot_raw = pivot_raw.reindex(index=range(24), columns=range(1, 367))
+                
+                # For labels, we use the RAW values to bin against thresholds
+                # We need to aggregate raw values same way to match the grid cells?
+                # Or do we bin the aggregated raw values? 
+                # If we bin the raw values, we get mode? 
+                # Simpler: Aggregate the RAW values too, then bin.
+                pivot_val_for_labels = work.pivot_table(index="hod", columns="doy", values="raw", aggfunc=aggfunc)
+                pivot_val_for_labels = pivot_val_for_labels.reindex(index=range(24), columns=range(1, 367))
 
-                        with c2d:
-                            try:
-                                export_df = cdf.copy()
-                                long_records = []
-                                thresholds_json = json.dumps(thresholds_state)
-                                for strip_name, (pivot_binned, info) in heatmap_dict.items():
-                                    col = info.get('col')
-                                    if not col or col not in export_df.columns:
-                                        continue
-                                    s = pd.to_numeric(export_df[col], errors="coerce").dropna()
-                                    if s.empty:
-                                        continue
-                                    thresholds_list = info.get("thresholds", [])
-                                    bins = [-np.inf] + thresholds_list + [np.inf]
-                                    labels = info.get("labels", [])
-                                    if len(labels) != len(bins) - 1:
-                                        labels = _labels_from_thresholds(thresholds_list, "")
-                                    assert len(labels) == len(bins) - 1, (len(labels), len(bins))
-                                    cat = pd.cut(s, bins=bins, labels=labels, right=False)
-                                    for ts, val, bl in zip(cat.index, s.values, cat.astype(object).values):
-                                        long_records.append({
-                                            'datetime': ts.isoformat(),
-                                            'variable': strip_name,
-                                            'value': float(val),
-                                            'bin_label': bl if pd.notna(bl) else None,
-                                            'month': int(ts.month),
-                                            'hour': int(ts.hour),
-                                            'thresholds': thresholds_json,
-                                        })
+                # Thresholds for interpretation (hover/legend), not for coloring
+                bins = [-np.inf] + thresholds + [np.inf]
+                labels = _labels_from_thresholds(thresholds, units_suffix)
+                
+                cat = pd.cut(pivot_val_for_labels.values.flatten(), bins=bins, labels=labels, right=False)
+                label_grid = pd.Series(cat).astype(object).values.reshape(pivot_raw.shape)
 
-                                if not long_records:
-                                    st.caption("No long-format data available for CSV export.")
-                                else:
-                                    long_df = pd.DataFrame(long_records)
-                                    csv_bytes = long_df.to_csv(index=False).encode('utf-8')
-                                    st.download_button(label="📥 Download heatmap data (CSV)", data=csv_bytes, file_name=f"{clean_loc}_diurnal_heatmaps_data.csv", mime="text/csv")
-                            except Exception as e:
-                                st.caption(f"CSV export failed: {str(e)[:80]}")
-                    else:
-                        st.warning("Could not generate heatmap figure from available data.")
+                colors_default, _ = get_color_scale_for_metric(palette_metric)
+                colors = colors_default[: len(labels)]
 
-        with temp_hum_tab:
-            render_trends_page()
-            render_temperature_page()
-            render_heatmap_page()
-            render_humidity_page()
+                info = {
+                    "metric": metric_label,
+                    "col": col,
+                    "labels": labels,
+                    "colors": colors,
+                    "thresholds": thresholds,
+                    "hover_labels": label_grid,
+                }
+                return pivot_raw, info
+
+            heatmap_dict = {}
             
-        with di_tab:
-            render_di_page()
-            
-        with utci_tab:
-            render_utci_page()
-            
-        with pmv_tab:
-            render_pmv_page()
-            
-        with solar_tab:
-            render_solar_page()
-            
-        with psych_tab:
-            render_psychrometrics_page()
-            
-        with wind_tab:
-            render_wind_page()
-            
-        with raw_data_tab:
-            render_raw_data_page()
+            # Add Dry Bulb Temperature first
+            db_col = get_metric_column(cdf, ["dry_bulb_temperature", "drybulb", "temp", "db"])
+            if db_col:
+                # Note: We pass [] for thresholds to let defaults or custom thresholds handling kick in
+                # But _build_pivot_with_thresholds expects a list. 
+                # If thresholds_state has 'drybulb', use it, else empty.
+                # We will assume "Dry Bulb Temperature" uses the color scale "drybulb" or "thermal" which is standard.
+                # We pass agg="mean".
+                db_thresholds = [10.0, 20.0, 26.6, 35.0]
+                
+                # Prepare categorical bins for heatmap values (0, 1, 2...)
+                # Correct bin edges: -100, 10, 20, 26.6, 35, 100
+                db_bins = [-100, 10.0, 20.0, 26.6, 35.0, 100.0] 
+                db_series = cdf[db_col]
+                cdf["db_cat"] = pd.cut(db_series, bins=db_bins, labels=[0, 1, 2, 3, 4], include_lowest=True, right=False).astype(float)
+
+                pivot_binned, info = _build_pivot_with_thresholds(
+                    cdf, "db_cat", "Dry Bulb Temperature", db_thresholds, "°C", "drybulb", agg="mean", raw_col=db_col
+                )
+                if not pivot_binned.empty:
+                    heatmap_dict["Dry Bulb Temperature"] = (pivot_binned, info)
+
+            solar_col = get_metric_column(cdf, ["glohorrad", "global_horizontal_radiation", "solar"])
+            if solar_col:
+                # Bin Solar into categories 0..4 for discrete coloring
+                # 0:<100, 1:100-300, 2:300-500, 3:500-700, 4:>700
+                # Ensure we handle values >= 0
+                s_series = cdf[solar_col].clip(lower=0)
+                sb = [0.0, 100.0, 300.0, 500.0, 700.0, s_series.max() + 1.0]
+                # If max < 700, ensure bins cover it
+                if sb[-1] <= 700.0: sb[-1] = 9999.0
+                
+                cdf["solar_cat"] = pd.cut(s_series, bins=sb, labels=[0, 1, 2, 3, 4], include_lowest=True, right=False).astype(float)
+                
+                # Pass "solar_cat" for the heatmap values, but RAW solar_col for labels
+                pivot_binned, info = _build_pivot_with_thresholds(
+                    cdf, "solar_cat", "Solar Radiation", thresholds_state["solar"], " W/m²", "solar", agg="mean", raw_col=solar_col
+                )
+                if not pivot_binned.empty:
+                    heatmap_dict["Solar Radiation"] = (pivot_binned, info)
+
+            rh_col = get_metric_column(cdf, ["relative_humidity", "relhum", "rh"])
+            if rh_col:
+                pivot_binned, info = _build_pivot_with_thresholds(cdf, rh_col, "Humidity", thresholds_state["humidity"], "%", "humidity", agg="mean")
+                if not pivot_binned.empty:
+                    heatmap_dict["Humidity"] = (pivot_binned, info)
+
+            wind_col = get_metric_column(cdf, ["windspd", "wind_speed", "wspd"])
+            if wind_col:
+                # Bin wind speed into categories 0, 1, 2 for proper discrete coloring
+                # <1.5 (0), 1.5-4.5 (1), >4.5 (2)
+                wb = [0.0, 1.5, 4.5, cdf[wind_col].max() + 1.0]
+                if wb[-1] <= 4.5: wb[-1] = 999.0
+                
+                cdf["wind_cat"] = pd.cut(cdf[wind_col], bins=wb, labels=[0, 1, 2], include_lowest=True, right=False).astype(float)
+                
+                # Pass "wind_cat" for heatmap, RAW wind_col for labels
+                pivot_binned, info = _build_pivot_with_thresholds(
+                    cdf, "wind_cat", "Wind Speed", thresholds_state["wind"], " m/s", "wind", agg="median", raw_col=wind_col
+                )
+                if not pivot_binned.empty:
+                    heatmap_dict["Wind Speed"] = (pivot_binned, info)
+
+            # NEW: Wind Direction heatmap (sector mode per hod/doy)
+            if "wind_direction" in cdf.columns or "winddir" in cdf.columns or "wind_dir" in cdf.columns:
+                dir_col = get_metric_column(cdf, ["wind_direction", "winddir", "wind_dir", "wd", "wdir"])
+                if dir_col:
+                    dir_series = pd.to_numeric(cdf[dir_col], errors="coerce")
+                    dir_series = dir_series.mask(dir_series >= 999)  # drop 999 sentinels
+                    dir_series = dir_series.dropna()
+                    if not dir_series.empty:
+                        work_dir = pd.DataFrame({"val": dir_series})
+                        work_dir["hod"] = work_dir.index.hour
+                        work_dir["doy"] = work_dir.index.dayofyear
+
+                        sector_names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+                        sector_edges = [22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5]
+
+                        def dir_to_sector_code(deg: float) -> float:
+                            if pd.isna(deg):
+                                return np.nan
+                            d = deg % 360.0
+                            if d >= 337.5 or d < 22.5:
+                                return 0
+                            elif d < 67.5:
+                                return 1
+                            elif d < 112.5:
+                                return 2
+                            elif d < 157.5:
+                                return 3
+                            elif d < 202.5:
+                                return 4
+                            elif d < 247.5:
+                                return 5
+                            elif d < 292.5:
+                                return 6
+                            else:
+                                return 7
+
+                        work_dir["sector"] = work_dir["val"].apply(dir_to_sector_code)
+                        work_dir = work_dir.dropna(subset=["sector"])
+
+                        def sector_mode(s: pd.Series) -> float:
+                            if s.empty:
+                                return np.nan
+                            m = s.mode()
+                            return m.iat[0] if not m.empty else np.nan
+
+                        sector_mode_series = (
+                            work_dir.groupby(["hod", "doy"])["sector"].agg(lambda s: s.mode().iat[0] if not s.mode().empty else np.nan)
+                        )
+                        pivot_dir = sector_mode_series.unstack("doy")
+                        pivot_dir = pivot_dir.reindex(index=range(24), columns=range(1, 367))
+
+                        dir_colors = ["#4c6fff", "#3fb3ff", "#36d1a8", "#8bd36b", "#f6c445", "#f08c42", "#e15b9a", "#9d6bff"]
+                        # map codes back to compass labels for hover
+                        label_grid = pivot_dir.map(lambda v: sector_names[int(v)] if pd.notna(v) else np.nan).values
+
+                        info_dir = {
+                            "metric": "Wind Direction",
+                            "col": dir_col,
+                            "labels": sector_names,
+                            "colors": dir_colors,
+                            "thresholds": [],
+                            "hover_labels": label_grid,
+                            "show_colorscale": False,  # compass legend rendered separately
+                            "colorbar": None,
+                        }
+                        heatmap_dict["Wind Direction"] = (pivot_dir, info_dir)
+
+            if not heatmap_dict:
+                st.info("No metric data available for heatmap generation.")
+            else:
+                fig = build_diurnal_heatmap_figure(heatmap_dict, cdf, header)
+                if fig:
+                    st.plotly_chart(fig, use_container_width=False, config={"responsive": False})
+
+                    # Downloads reflecting current thresholds
+                    city_clean = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
+                    clean_loc = city_clean
+                    c1d, c2d = st.columns(2)
+                    with c1d:
+                        try:
+                            svg_bytes = fig.to_image(format="svg", scale=2, width=1200, height=800)
+                            st.download_button(label="📥 Download heatmaps as SVG", data=svg_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.svg", mime="image/svg+xml")
+                        except Exception:
+                            html_bytes = fig.to_html(include_plotlyjs='cdn').encode('utf-8')
+                            st.download_button(label="📥 Download heatmaps (HTML)", data=html_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.html", mime="text/html")
+
+                    with c2d:
+                        try:
+                            export_df = cdf.copy()
+                            long_records = []
+                            thresholds_json = json.dumps(thresholds_state)
+                            for strip_name, (pivot_binned, info) in heatmap_dict.items():
+                                col = info.get('col')
+                                if not col or col not in export_df.columns:
+                                    continue
+                                s = pd.to_numeric(export_df[col], errors="coerce").dropna()
+                                if s.empty:
+                                    continue
+                                thresholds_list = info.get("thresholds", [])
+                                bins = [-np.inf] + thresholds_list + [np.inf]
+                                labels = info.get("labels", [])
+                                if len(labels) != len(bins) - 1:
+                                    labels = _labels_from_thresholds(thresholds_list, "")
+                                assert len(labels) == len(bins) - 1, (len(labels), len(bins))
+                                cat = pd.cut(s, bins=bins, labels=labels, right=False)
+                                for ts, val, bl in zip(cat.index, s.values, cat.astype(object).values):
+                                    long_records.append({
+                                        'datetime': ts.isoformat(),
+                                        'variable': strip_name,
+                                        'value': float(val),
+                                        'bin_label': bl if pd.notna(bl) else None,
+                                        'month': int(ts.month),
+                                        'hour': int(ts.hour),
+                                        'thresholds': thresholds_json,
+                                    })
+
+                            if not long_records:
+                                st.caption("No long-format data available for CSV export.")
+                            else:
+                                long_df = pd.DataFrame(long_records)
+                                csv_bytes = long_df.to_csv(index=False).encode('utf-8')
+                                st.download_button(label="📥 Download heatmap data (CSV)", data=csv_bytes, file_name=f"{clean_loc}_diurnal_heatmaps_data.csv", mime="text/csv")
+                        except Exception as e:
+                            st.caption(f"CSV export failed: {str(e)[:80]}")
+                else:
+                    st.warning("Could not generate heatmap figure from available data.")
+
+    with temp_hum_tab:
+        render_trends_page()
+        render_temperature_page()
+        render_heatmap_page()
+        render_humidity_page()
+        
+    with di_tab:
+        render_di_page()
+        
+    with utci_tab:
+        render_utci_page()
+        
+    with pmv_tab:
+        render_pmv_page()
+        
+    with solar_tab:
+        render_solar_page()
+        
+    with psych_tab:
+        render_psychrometrics_page()
+        
+    with wind_tab:
+        render_wind_page()
+        
+    with raw_data_tab:
+        render_raw_data_page()
 
 # ====================== TEMPERATURE & HUMIDITY (CLEAN) ======================
 
@@ -5026,7 +5016,7 @@ def render_solar_page():
         # Local times from 0..23 at whole hours
         idx = pd.date_range(
             start=pd.Timestamp(date.date(), tz=site.tz),
-            periods=24, freq="H", tz=site.tz
+            periods=24, freq="h", tz=site.tz
         )
         solpos = pvlib.solarposition.get_solarposition(
             idx, site.lat, site.lon, altitude=site.elev_m
@@ -5112,7 +5102,7 @@ def render_solar_page():
 
         # temperature mode (cool→blue, warm→red). Use Plotly's RdYlBu_r range.
         import matplotlib
-        cmap = matplotlib.cm.get_cmap("RdYlBu_r")
+        cmap = matplotlib.colormaps["RdYlBu_r"]
         # clamp to [-10, 35] for stable scale
         t = max(-10.0, min(35.0, float(temp_c)))
         val = (t + 10.0) / 45.0
@@ -7007,7 +6997,7 @@ def render_psychrometrics_page():
     needed = ["drybulb", "relhum"]
     if not all(k in cdf.columns for k in needed):
         st.info("This EPW is missing required fields for the psychrometric plot.")
-        st.stop()
+        return
 
     # Pressure: median of atmos_pressure if present, else 101.325 kPa
     if "atmos_pressure" in cdf and cdf["atmos_pressure"].notna().any():
@@ -7024,7 +7014,7 @@ def render_psychrometrics_page():
         
     if dfp.empty:
         st.info("No points to plot.")
-        st.stop()
+        return
 
     # Compute scatter values (absolute humidity g/kg)
     T_pts = dfp["drybulb"].to_numpy(float)

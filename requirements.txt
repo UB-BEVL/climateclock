@@ -1,5 +1,8 @@
 streamlit==1.39.0
 streamlit-plotly-events==0.0.6
+# NOTE: streamlit-aggrid 0.3.4.post3 was last tested against Streamlit 1.25;
+# it may produce silent import warnings with Streamlit 1.39+.
+# The app gracefully falls back to st.dataframe when AgGrid is unavailable.
 streamlit-aggrid==0.3.4.post3
 pandas==2.2.2
 numpy==1.26.4

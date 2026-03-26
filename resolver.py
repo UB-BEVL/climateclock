@@ -4,14 +4,19 @@ from typing import Optional
 import math
 import pandas as pd
 
+try:
+    from geopy.geocoders import Nominatim
+except ImportError:
+    Nominatim = None  # type: ignore[assignment,misc]
+
 @dataclass
 class QueryPoint:
     lat: float
     lon: float
 
 def geocode(query: str, user_agent: str = "epw-catalog") -> Optional[QueryPoint]:
-    # Import here so it works even if you install geopy later in the session
-    from geopy.geocoders import Nominatim
+    if Nominatim is None:
+        raise ImportError("geopy is required for geocoding. Install it with: pip install geopy")
     geocoder = Nominatim(user_agent=user_agent, timeout=10)
     loc = geocoder.geocode(query)
     if not loc:

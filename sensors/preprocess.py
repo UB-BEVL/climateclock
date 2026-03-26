@@ -76,7 +76,14 @@ def _mad(series: pd.Series) -> float:
 
 
 def sigma_clip_df(df: pd.DataFrame, cols: Iterable[str], sigma: float = 4.0) -> pd.DataFrame:
-    """Clip outliers in specified columns using median±sigma*MAD."""
+    """Clip outliers in specified columns using median±sigma*MAD.
+
+    NOTE: Weather data is strongly autocorrelated (hour N ≈ hour N+1).
+    A global MAD doesn't account for this; a true outlier will also
+    distort the median of neighboring windows, attenuating the clip.
+    For paper-grade sensor validation, consider a sliding-window MAD
+    rather than this single-pass global approach.
+    """
     if df.empty:
         return df.copy()
     out = df.copy()
