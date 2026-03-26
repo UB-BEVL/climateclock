@@ -102,6 +102,23 @@ def build_forecast_epw_dataframe(forecast_df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def load_epw_climatology(cdf: pd.DataFrame) -> pd.DataFrame:
+    """Extract baseline EPW temperatures to compute forecast bias by day-of-year and hour."""
+    if cdf is None or cdf.empty or "drybulb" not in cdf:
+        return pd.DataFrame(columns=["doy", "hour", "epw_temp"])
+        
+    df = cdf.copy()
+    if pd.api.types.is_datetime64_any_dtype(df.index):
+        df["doy"] = df.index.dayofyear
+        df["hour"] = df.index.hour
+    else:
+        df["doy"] = df.get("day_of_year", df.index // 24 + 1)
+        df["hour"] = df.get("hour", df.index % 24)
+        
+    df["epw_temp"] = df["drybulb"]
+    return df[["doy", "hour", "epw_temp"]].drop_duplicates(["doy", "hour"])
+
+
 def compare_forecast_to_epw(df_forecast: pd.DataFrame, df_epw_clim: pd.DataFrame) -> pd.DataFrame:
     if df_forecast.empty or df_epw_clim.empty:
         return pd.DataFrame()
