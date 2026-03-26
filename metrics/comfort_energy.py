@@ -274,6 +274,12 @@ def summarize_comfort(
     if df.empty:
         return pd.DataFrame()
 
+    # Pandas >= 2.2.0 specific date-offset alias upgrades
+    if freq == "A" or freq == "Y":
+        freq = "YE"
+    elif freq == "M":
+        freq = "ME"
+
     data = pd.DataFrame(index=df.index)
     data["temp"] = df.get("drybulb")
     data["relhum"] = df.get("relhum")
