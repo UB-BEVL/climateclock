@@ -239,8 +239,12 @@ def build_sensor_climatology(df: pd.DataFrame) -> pd.DataFrame:
     if "wind_dir" in annotated.columns:
         agg_dict["wind_dir"] = _circular_mean
 
-    grouped = annotated.groupby(["doy", "hour"], as_index=False).agg(agg_dict)
+    grouped = annotated.groupby(['doy', 'hour'], as_index=False).agg(agg_dict)
     
+    count_col = 'temperature' if 'temperature' in annotated.columns else list(agg_dict.keys())[0]
+    counts = annotated.groupby(['doy', 'hour'])[count_col].count().reset_index()
+    counts.columns = ['doy', 'hour', 'sample_count']
+    grouped = grouped.merge(counts, on=['doy', 'hour'], how='left')
     # Dynamically build rename dict based on which columns were aggregated
     rename_dict = {}
     if "temperature" in grouped.columns:

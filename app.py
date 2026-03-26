@@ -89,8 +89,6 @@ def convert_threshold_for_display(temp_c: float) -> float:
 
 
 # ========== UI COMPONENTS ==========
-
-# ========== UI COMPONENTS ==========
 from contextlib import contextmanager
 import time
 
@@ -101,7 +99,7 @@ def cloud_loader(message: str = "Loading…"):
         f"""
         <div style="
             position: fixed;
-            right: 16px;s
+            right: 16px;    
             top: 16px;
             z-index: 9999;
             padding: 6px 10px;
@@ -338,19 +336,21 @@ except Exception:
 
 
 def _downcast_float32(df: Optional[pd.DataFrame], cols: Optional[Iterable[str]] = None) -> Optional[pd.DataFrame]:
-    """Downcast selected float columns to float32 to reduce memory footprint."""
+    """Downcast selected float columns to float32 to reduce memory footprint.
+    Does NOT modify the input dataframe.
+    """
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return df
+    out = df.copy()
     if cols is None:
-        cols = df.select_dtypes(include=[np.floating]).columns.tolist()
+        cols = out.select_dtypes(include=[np.floating]).columns.tolist()
     for c in cols:
-        if c in df.columns:
+        if c in out.columns:
             try:
-                df[c] = df[c].astype(np.float32)
+                out[c] = out[c].astype(np.float32)
             except Exception:
                 pass
-    return df
-
+    return out
 
 def render_virtualized_table(
     df: pd.DataFrame,
@@ -417,7 +417,6 @@ def fix_station_url(url: str) -> List[str]:
             fixed_url = "/".join(parts[:-1] + [fixed_station])
             alternatives.append(fixed_url)
 
-        alternatives.append(url.upper())
         alternatives.append(url.lower())
 
     return list(dict.fromkeys(alternatives))
@@ -793,8 +792,10 @@ PVLIB_COLUMN_MAP = {
 def _parse_location(line: str):
     parts = [p.strip() for p in line.split(",")] + [""]*10
     def fnum(x):
-        try: return float(x) if x != "" else None
-        except: return None
+        try:
+            return float(x) if x != "" else None
+        except (ValueError, TypeError):
+            return None
     return dict(
         city=parts[1], state_province=parts[2], country=parts[3], source=parts[4], wmo=parts[5],
         latitude=fnum(parts[6]), longitude=fnum(parts[7]),
@@ -868,9 +869,18 @@ def build_clima_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     wx["sat_press"] = es
     wx["vap_press"] = es*(RH/100.0)
     wx["abs_hum"]   = 216.7 * wx["vap_press"] / (T + 273.15)
-    wx["twb"] = (T*np.arctan(0.151977*np.sqrt(RH+8.313659))
-                 + np.arctan(T+RH) - np.arctan(RH-1.676331)
-                 + 0.00391838*(RH**1.5)*np.arctan(0.023101*RH) - 4.686035)
+        # Stull (2011) J. Appl. Meteorol. Climatol. 50(11): valid range T: 5-45°C, RH: 5-99%
+    T_clamp = T.clip(5, 45)   # clamp for formula validity
+    RH_clamp = RH.clip(5, 99)
+    wx['twb'] = (T_clamp * np.arctan(0.151977 * np.sqrt(RH_clamp + 8.313659))
+                 + np.arctan(T_clamp + RH_clamp)
+                 - np.arctan(RH_clamp - 1.676331)
+                 + 0.00391838 * (RH_clamp**1.5) * np.arctan(0.023101 * RH_clamp)
+                 - 4.686035)
+    # Mask out-of-range results with NaN instead of producing bad values
+    out_of_range = (T < 5) | (T > 45) | (RH < 5) | (RH > 99)
+    wx.loc[out_of_range, 'twb'] = np.nan
+
     P = wx["atmos_pressure"].fillna(101325.0) if "atmos_pressure" in wx else pd.Series(101325.0, index=wx.index)
     Pv = wx["vap_press"]
     wx["w"] = 0.62198 * Pv / (P - Pv)
@@ -929,6 +939,12 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
     if {"drybulb", "relhum", "windspd"}.issubset(cdf.columns):
         try:
             utci = ce.compute_utci_approx(cdf)
+    # import warnings
+    # with warnings.catch_warnings(record=True) as w:
+    #     warnings.simplefilter('always')
+    #     utci = ce.compute_utci_approx(cdf)
+    #     if w: st.warning(str(w[-1].message))
+
             package["utci"] = utci
         except Exception:
             utci = None
@@ -984,12 +1000,16 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
 
 # -------------------- Optional: helpers for ZIP/URL --------------------
 def read_epw_from_zip_bytes(zip_bytes: bytes) -> bytes:
-    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as z:
-        epws = [m for m in z.namelist() if m.lower().endswith(".epw")]
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as z:
+        epws = [m for m in z.namelist() if m.lower().endswith('.epw')]
+        if not epws:
+            raise ValueError(
+                'The uploaded ZIP file contains no EPW weather files. '
+                'Please upload a ZIP that includes a .epw file.'
+            )
         epws.sort(key=lambda m: z.getinfo(m).file_size, reverse=True)
         with z.open(epws[0]) as f:
             return f.read()
-
 
 def compose_epw_text(header: dict, df: pd.DataFrame) -> bytes:
     # Rebuild an EPW text blob from header metadata and a data frame.
@@ -1036,10 +1056,20 @@ def compose_epw_text(header: dict, df: pd.DataFrame) -> bytes:
         header.get("comments2", ""),
     ]
 
-    row_strings = [
-        ",".join(_format_cell(row[col]) for col in EPW_COLUMNS)
-        for _, row in df[EPW_COLUMNS].iterrows()
-    ]
+    def _fmt_series(series: pd.Series) -> pd.Series:
+        """Vectorized formatter for a single column."""
+        result = series.copy().astype(str)
+        float_mask = series.apply(lambda x: isinstance(x, (float, np.floating)))
+        result[float_mask] = series[float_mask].apply(
+            lambda v: '' if pd.isna(v) else f'{v:.6f}'.rstrip('0').rstrip('.')
+        )
+        result[series.isna()] = ''
+        return result
+
+    formatted = pd.DataFrame({
+        col: _fmt_series(df[col]) for col in EPW_COLUMNS
+    })
+    row_strings = formatted.apply(lambda row: ','.join(row), axis=1).tolist()
     data_csv = "\n".join(row_strings) + "\n"
     epw_text = "\n".join(header_lines) + "\n" + data_csv
     return epw_text.encode("latin-1", errors="replace")
@@ -1745,9 +1775,15 @@ def _encode_image_to_base64(path: Union[str, Path]) -> str:
         return ""
 
 
-BASE_DIR = Path(__file__).parent
-LOGO_PRIMARY = _encode_image_to_base64(BASE_DIR / "assets" / "bevl_framework.png")
-LOGO_SECONDARY = _encode_image_to_base64(BASE_DIR / "assets" / "ub_framework.png")
+@st.cache_resource
+def _load_logos() -> tuple[str, str]:
+    """Load and base64-encode logos once per process lifetime."""
+    base = Path(__file__).parent
+    primary   = _encode_image_to_base64(base / 'assets' / 'bevl_framework.png')
+    secondary = _encode_image_to_base64(base / 'assets' / 'ub_framework.png')
+    return primary, secondary
+
+LOGO_PRIMARY, LOGO_SECONDARY = _load_logos()
 
 
 
@@ -1782,9 +1818,10 @@ def get_clean_city_name() -> str:
         name = sel.get("name", "")
         if name and "_" in name:
             parts = name.split("_")
-            # Heuristic: 2nd or 3rd part often City. 
-            # If ISO_City.WMO -> "USA_SanFrancisco.724940"
-            pass
+            if len(parts) >= 3:
+                city_part = parts[2].split(".")[0]
+                if city_part:
+                    return city_part.replace("-", " ").strip()
 
     # 2. Try header metadata (EPW)
     header = ss.get("header", {})
@@ -1826,7 +1863,7 @@ def render_header():
         unsafe_allow_html=True,
     )
 
-# render_header()  <-- Muted, called in main() now
+
 
 # ========== SIDEBAR WITH IMPROVED UX ==========
 def render_landing_hero():
@@ -1930,13 +1967,25 @@ def render_sidebar_filters(epw_loaded: bool) -> None:
         # 2. Apply Month Range Filter (if valid datetime index)
         m_range = st.session_state.get("month_range", (1, 12))
         if m_range != (1, 12):
-            if cdf_adjusted.index.tz is None: # Naive or just plain DatetimeIndex
-                cdf_adjusted = cdf_adjusted[(cdf_adjusted.index.month >= m_range[0]) & (cdf_adjusted.index.month <= m_range[1])]
-            else:
-                cdf_adjusted = cdf_adjusted[(cdf_adjusted.index.month >= m_range[0]) & (cdf_adjusted.index.month <= m_range[1])]
+            # Apply month filter — works for both tz-aware and tz-naive indexes
+            mask = ((cdf_adjusted.index.month >= m_range[0])
+                    & (cdf_adjusted.index.month <= m_range[1]))
+            cdf_adjusted = cdf_adjusted[mask]
+
                 
-        st.session_state.cdf = cdf_adjusted
-        st.session_state.comfort_pkg = build_comfort_package(cdf_adjusted)
+        # Only recompute comfort if the adjusted cdf actually changed.
+        # Use a hash of the relevant parameters as a cache key.
+        import hashlib, pickle
+        _key_params = (
+            st.session_state.get('apply_uhi_bias'),
+            st.session_state.get('uhi_bias_delta'),
+            st.session_state.get('month_range'),
+            st.session_state.get('last_loaded_station_id'),
+        )
+        _pkg_key = hashlib.md5(pickle.dumps(_key_params)).hexdigest()
+        if st.session_state.get('_comfort_pkg_key') != _pkg_key:
+            st.session_state.comfort_pkg = build_comfort_package(cdf_adjusted)
+            st.session_state['_comfort_pkg_key'] = _pkg_key
 
     if epw_loaded:
         st.markdown("### 📊 Quick Stats")
@@ -9548,88 +9597,8 @@ def render_future_climate_page():
                 st.dataframe(future_df[preview_cols].tail(168), use_container_width=True, height=260)
 
 
-# ========== FOOTER ==========
-st.markdown(
-    """
-    <style>
-        .footer-content {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            flex-wrap: wrap;
-            gap: 2rem;
-            padding: 2rem 0;
-            border-top: 1px solid #333;
-        }
-        .footer-column {
-            flex: 1;
-            min-width: 200px;
-        }
-        .footer-column h4 {
-            margin-bottom: 1rem;
-            color: #ffffff;
-        }
-        .footer-column ul {
-            list-style: none;
-            padding: 0;
-        }
-        .footer-links a {
-            color: #66b2ff;
-            text-decoration: none;
-            margin-right: 1rem;
-            font-size: 0.9rem;
-        }
-        .footer-bottom {
-            text-align: center;
-            padding-top: 1.5rem;
-            margin-top: 1rem;
-            border-top: 1px solid #222;
-            font-size: 0.8rem;
-            color: #888;
-        }
-    </style>
-    <footer>
-        <div class="footer-content">
-            <div class="footer-column">
-                <h4>Features</h4>
-                <ul>
-                    <li>🌍 10,000+ Global Stations</li>
-                    <li>📊 Advanced Analytics</li>
-                    <li>☀️ Solar Path Analysis</li>
-                    <li>📈 Psychrometric Charts</li>
-                </ul>
-                <div class="footer-links">
-                    <a href="https://github.com/UB-BEVL/climateclock/blob/main/README.md" target="_blank">Documentation</a>
-                    <a href="https://github.com/UB-BEVL/climateclock/blob/main/app.py" target="_blank">GitHub</a>
-                    <a href="mailto:maetman@buffalo.edu">Contact</a>
-                </div>
-            </div>
-            <div class="footer-column">
-                <h4>Data Sources</h4>
-                <p>Climate.OneBuilding.Org</p>
-                <p>ASHRAE Standards</p>
-                <p>EnergyPlus Weather Files</p>
-                <p>NOAA & NCEI (live)</p>
-            </div>
-            <div class="footer-column">
-                <h4>Built by BEVL Lab</h4>
-                <p>Environmental Virtual Lab</p>
-                <p>Version 2.0</p>
-                <p>Professional Weather Intelligence</p>
-            </div>
-        </div>
-        <div class="footer-bottom">
-            <p>Data sources: Climate.OneBuilding.Org, ASHRAE · Built by BEVL Lab</p>
-            <p>© 2025 BEVL Lab. Research & Academic Use.</p>
-        </div>
-    </footer>
-    """,
-    unsafe_allow_html=True,
-)
-##EPW_hour[h] = mean(EPW values at hour h across the whole EPW year)
+# Module level footer removed as it rendered before page content.
 
-##Sensor_hour[h] = mean(sensor values at hour h across the sensor’s available dates)
-# ... (Functions defined above: render_header, render_sidebar, render_select_station_page, render_dashboard_page, etc.) ...
 
 def main():
     """Main execution loop for the Weather Analysis App."""
