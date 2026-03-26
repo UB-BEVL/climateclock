@@ -2538,7 +2538,7 @@ def handle_epw_upload(uploaded_file, picker_key: str = "sidebar") -> Optional[by
 
 
 # Kick off station preload as soon as the script starts so the map is ready on first paint
-_PRELOADED_STATIONS = load_station_index_for_map()
+_PRELOADED_STATIONS = None
 
 # Strict routing: only one page renders per run.
 controller_page = st.session_state.get("active_page", "select_station")
