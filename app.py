@@ -9,7 +9,6 @@ import requests
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Tuple, Optional, Union
 import re
-from streamlit_plotly_events import plotly_events
 # third-party
 import numpy as np
 import pandas as pd
@@ -3072,7 +3071,7 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
         if info["metric"] == "Wind Direction":
              pivot_plot = pd.DataFrame(pivot_plot_slice).copy() # Already smoothed sectors 0-7
         else:
-            pivot_plot = pd.DataFrame(pivot_plot_slice).copy().rolling(window=5, axis=1, center=True, min_periods=1).mean()
+            pivot_plot = pd.DataFrame(pivot_plot_slice).copy().T.rolling(window=5, center=True, min_periods=1).mean().T
 
         hover_labels = info.get("hover_labels")
         if hover_labels is not None:
@@ -3302,7 +3301,7 @@ def render_dashboard_page():
                 })
 
             seasonal_df = pd.DataFrame(seasonal_rows).set_index("Season")
-            seasonal_df = seasonal_df.applymap(lambda v: "—" if pd.isna(v) else (f"{v:.1f}" if isinstance(v, float) else v))
+            seasonal_df = seasonal_df.map(lambda v: "—" if pd.isna(v) else (f"{v:.1f}" if isinstance(v, float) else v))
             st.markdown("#### Seasonal snapshot")
             st.table(seasonal_df)
 
@@ -3964,7 +3963,7 @@ def render_dashboard_page():
 
                             dir_colors = ["#4c6fff", "#3fb3ff", "#36d1a8", "#8bd36b", "#f6c445", "#f08c42", "#e15b9a", "#9d6bff"]
                             # map codes back to compass labels for hover
-                            label_grid = pivot_dir.applymap(lambda v: sector_names[int(v)] if pd.notna(v) else np.nan).values
+                            label_grid = pivot_dir.map(lambda v: sector_names[int(v)] if pd.notna(v) else np.nan).values
 
                             info_dir = {
                                 "metric": "Wind Direction",
@@ -4464,7 +4463,7 @@ def render_trends_page():
         return dict(
             type="date",
             ticklabelmode="period",
-            ticklabelstandoff=6, ticks="outside", ticklen=6,
+            ticks="outside", ticklen=6,
             showgrid=True, gridcolor="rgba(255,255,255,0.08)",
             showline=True, linewidth=1.1, linecolor="rgba(255,255,255,0.35)",
             tickfont=dict(size=12), tickangle=0
@@ -4525,7 +4524,7 @@ def render_trends_page():
         automargin=True,              # let Plotly grow the left margin if needed
         showticklabels=True,          # make sure labels are drawn
         tickfont=dict(size=12, color="rgba(240,240,240,0.96)"),  # visible on dark bg
-        ticks="outside", ticklen=6, ticklabelstandoff=8,
+        ticks="outside", ticklen=6,
         showgrid=True, gridcolor="rgba(255,255,255,0.08)",
         showline=True, linecolor="rgba(255,255,255,0.38)", linewidth=1.1,
         dtick=5,
@@ -4540,7 +4539,7 @@ def render_trends_page():
         automargin=True,
         showticklabels=True,         # <- force tick labels
         tickfont=dict(size=12, color="rgba(240,240,240,0.96)"),
-        ticks="outside", ticklen=6, ticklabelstandoff=8,
+        ticks="outside", ticklen=6,
         showgrid=True, gridcolor="rgba(255,255,255,0.08)",
         showline=True, linecolor="rgba(255,255,255,0.38)", linewidth=1.1,
         range=[0, 100], dtick=10,
