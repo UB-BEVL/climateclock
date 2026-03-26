@@ -9218,8 +9218,9 @@ def render_short_term_prediction_page():
         st.info("Please load an EPW file first to establish the geographic location for the forecast.")
         return
         
-    lat = base_header.get("latitude")
-    lon = base_header.get("longitude")
+    loc = base_header.get("location", {}) if isinstance(base_header, dict) else {}
+    lat = loc.get("latitude")
+    lon = loc.get("longitude")
     if lat is None or lon is None:
         st.error("EPW header is missing latitude/longitude coordinates required for the NWP lookup.")
         return
