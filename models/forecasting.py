@@ -226,19 +226,38 @@ def summarize_peak_event(df_forecast: pd.DataFrame) -> Optional[dict]:
 def plot_bias(df: pd.DataFrame) -> go.Figure:
     """Plot difference between forecast and EPW."""
     fig = go.Figure()
+    
+    if df.empty or "epw_temp_bias_forecast" not in df.columns:
+        return fig
+
+    # Split into positive (hotter forecast) and negative (colder forecast) bias
+    pos_mask = df["epw_temp_bias_forecast"] > 0
+    neg_mask = df["epw_temp_bias_forecast"] <= 0
+
+    # Hotter than EPW
     fig.add_trace(go.Bar(
-        x=df.index,
-        y=df["epw_temp_bias_forecast"],
-        marker_color=np.where(df['epw_temp_bias_forecast'] > 0, '#ef4444', '#3b82f6'),
-        name="Bias (Forecast - EPW)"
+        x=df.index[pos_mask],
+        y=df.loc[pos_mask, "epw_temp_bias_forecast"],
+        marker_color='#ef4444',  # Red
+        name="Forecast Hotter (+)"
     ))
+
+    # Colder than EPW
+    fig.add_trace(go.Bar(
+        x=df.index[neg_mask],
+        y=df.loc[neg_mask, "epw_temp_bias_forecast"],
+        marker_color='#3b82f6',  # Blue
+        name="Forecast Colder (-)"
+    ))
+
     fig.update_layout(
         title="Hourly Temperature Bias (Next 10 Days)",
         yaxis_title="Delta (°C)",
         margin=dict(l=0, r=0, t=40, b=0),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#f8fafc")
+        font=dict(color="#f8fafc"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     fig.update_xaxes(showgrid=False, linecolor="rgba(255,255,255,0.2)")
     fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.1)")

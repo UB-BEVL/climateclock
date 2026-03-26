@@ -3811,7 +3811,7 @@ def render_dashboard_page():
                     work["hod"] = work.index.hour
                     work["doy"] = work.index.dayofyear
 
-                    aggfunc = np.median if agg == "median" else "mean"
+                    aggfunc = "median" if agg == "median" else "mean"
                     pivot_raw = work.pivot_table(index="hod", columns="doy", values="val", aggfunc=aggfunc)
                     pivot_raw = pivot_raw.reindex(index=range(24), columns=range(1, 367))
                     
@@ -9202,6 +9202,8 @@ def render_raw_data_page():
 
 def render_short_term_prediction_page():
     import models.forecasting as fc
+    import importlib
+    importlib.reload(fc)
     page = st.session_state.get("nav_page")
     cdf = st.session_state.get("cdf")
     
