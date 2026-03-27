@@ -6625,7 +6625,7 @@ def render_solar_page():
     # (A) Monthly arcs for the 21st of each month (daily path; points hourly)
     for m in range(month_range[0], month_range[1] + 1):
         day = 21 if m != 2 else 20  # avoid Feb-31 style pitfalls
-        ts_local = pd.date_range(pd.Timestamp(year, m, day, tz=tz), periods=24, freq="1H")
+        ts_local = pd.date_range(pd.Timestamp(year, m, day, tz=tz), periods=24, freq="1h")
         az, alt, _ = solar_pos(ts_local.tz_convert("UTC"))
         mask = alt > 0
         if not mask.any():
