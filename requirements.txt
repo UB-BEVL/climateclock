@@ -15,5 +15,3 @@ pythermalcomfort==2.5.3
 geopy==2.4.1
 scipy>=1.11
 kaleido==0.2.1
-
-
