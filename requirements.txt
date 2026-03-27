@@ -1,6 +1,5 @@
 streamlit==1.39.0
 streamlit-plotly-events==0.0.6
-streamlit-aggrid==0.3.4.post3
 pandas==2.2.2
 numpy==1.26.4
 plotly==5.22.0
@@ -14,4 +13,4 @@ pycountry==23.12.11
 pythermalcomfort==2.5.3
 geopy==2.4.1
 scipy>=1.11
-kaleido==0.2.1
+kaleido==0.1.0.post1
