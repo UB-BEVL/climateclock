@@ -19,7 +19,12 @@ if not hasattr(st, "fragment"):
     if hasattr(st, "experimental_fragment"):
         st.fragment = st.experimental_fragment
     else:
-        st.fragment = lambda func: func
+        # Fallback: no-op decorator that avoids SessionInfo errors
+        def _noop_fragment(func=None, *, run_every=None):
+            if func is not None:
+                return func
+            return lambda f: f
+        st.fragment = _noop_fragment
 
 import pydeck as pdk
 import plotly.graph_objects as go
@@ -777,6 +782,7 @@ PVLIB_COLUMN_MAP = {
     "dir_nor_illum": "dirnorillum",
     "dif_hor_illum": "difhorillum",
     "zenith_luminance": "zenlum",
+    "wind_direction": "winddir",
     "wind_dir": "winddir",
     "wind_speed": "windspd",
     "total_sky_cover": "totskycvr",
@@ -2938,7 +2944,7 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
             ),
             "Wind Speed": (
                 [0, 1.5, 4.5, 999], 
-                ["#ffffff", "#ffffff", "#74c476"], 
+                ["#bde0fe", "#ffffff", "#74c476"], 
                 ["<1.5 m/s", "1.5-4.5 m/s", ">4.5 m/s"] 
             ),
             "Wind Direction": (
@@ -2958,7 +2964,7 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
             bounds, colors, ticks = discrete_scales[strip_name]
             
             # Special handling for Categorical Bins (Wind Speed, Solar, Wind Direction, Dry Bulb)
-            if strip_name in ["Wind Speed", "Solar Radiation", "Wind Direction", "Dry Bulb Temperature"]:
+            if strip_name in ["Wind Speed", "Solar Radiation", "Wind Direction", "Dry Bulb Temperature", "Humidity"]:
                 # Categorical Logic
                 n = len(colors)
                 zmin = 0
@@ -3129,6 +3135,12 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
                 high_wind_hours = np.sum(pivot_plot_slice.values == 2)
                 pct = (high_wind_hours / total_valid_hours) * 100
                 description = f"({pct:.1f}% of hours > 4.5 m/s)"
+            elif strip_name == "Humidity":
+                # RH comfort zone: 30-70% maps to bin index 1 (middle bin)
+                comf_rh_hours = np.sum(pivot_plot_slice.values == 1)
+                pct = (comf_rh_hours / total_valid_hours) * 100
+                comf_rh_hours_int = int(comf_rh_hours)
+                description = f"({comf_rh_hours_int} hours / {pct:.1f}% in Comfort Zone 30–70%)"
 
         # Add Title Annotation BELOW the heatmap
         fig.add_annotation(
@@ -3231,6 +3243,33 @@ def render_dashboard_page():
         "Wind",
         "Raw Data",
     ])
+
+    # ---- Tab persistence: auto-click the last active tab on rerun (fixes fullscreen exit) ----
+    st.markdown("""
+    <script>
+    (function() {
+        const KEY = 'bevl_dashboard_tab';
+        // Restore stored tab on page load
+        function restoreTab() {
+            const idx = sessionStorage.getItem(KEY);
+            if (idx !== null && idx !== '0') {
+                const tabs = parent.document.querySelectorAll('button[data-baseweb="tab"]');
+                if (tabs && tabs.length > parseInt(idx)) {
+                    tabs[parseInt(idx)].click();
+                }
+            }
+        }
+        // Listen for tab clicks and store the index
+        function attachListeners() {
+            const tabs = parent.document.querySelectorAll('button[data-baseweb="tab"]');
+            tabs.forEach((tab, i) => {
+                tab.addEventListener('click', () => sessionStorage.setItem(KEY, i));
+            });
+        }
+        setTimeout(() => { attachListeners(); restoreTab(); }, 500);
+    })();
+    </script>
+    """, unsafe_allow_html=True)
 
     with overview_tab:
         st.markdown("### 📊 Climate Overview")
@@ -3878,7 +3917,11 @@ def render_dashboard_page():
 
             rh_col = get_metric_column(cdf, ["relative_humidity", "relhum", "rh"])
             if rh_col:
-                pivot_binned, info = _build_pivot_with_thresholds(cdf, rh_col, "Humidity", thresholds_state["humidity"], "%", "humidity", agg="mean")
+                # Pre-bin humidity into categories for consistent handling
+                rh_series = cdf[rh_col].clip(0, 100)
+                rh_bins = [0.0, 30.0, 70.0, 100.01]  # <30, 30-70, >70
+                cdf["rh_cat"] = pd.cut(rh_series, bins=rh_bins, labels=[0, 1, 2], include_lowest=True, right=False).astype(float)
+                pivot_binned, info = _build_pivot_with_thresholds(cdf, "rh_cat", "Humidity", thresholds_state["humidity"], "%", "humidity", agg="mean", raw_col=rh_col)
                 if not pivot_binned.empty:
                     heatmap_dict["Humidity"] = (pivot_binned, info)
 
@@ -3900,6 +3943,7 @@ def render_dashboard_page():
 
             # NEW: Wind Direction heatmap (sector mode per hod/doy)
             if "wind_direction" in cdf.columns or "winddir" in cdf.columns or "wind_dir" in cdf.columns:
+              try:
                 dir_col = get_metric_column(cdf, ["wind_direction", "winddir", "wind_dir", "wd", "wdir"])
                 if dir_col:
                     dir_series = pd.to_numeric(cdf[dir_col], errors="coerce")
@@ -3947,7 +3991,7 @@ def render_dashboard_page():
                             work_dir.groupby(["hod", "doy"])["sector"].agg(lambda s: s.mode().iat[0] if not s.mode().empty else np.nan)
                         )
                         pivot_dir = sector_mode_series.unstack("doy")
-                        pivot_dir = pivot_dir.reindex(index=range(24), columns=range(1, 367))
+                        pivot_dir = pivot_dir.reindex(index=range(24), columns=range(1, 366))
 
                         dir_colors = ["#4c6fff", "#3fb3ff", "#36d1a8", "#8bd36b", "#f6c445", "#f08c42", "#e15b9a", "#9d6bff"]
                         # map codes back to compass labels for hover
@@ -3964,6 +4008,8 @@ def render_dashboard_page():
                             "colorbar": None,
                         }
                         heatmap_dict["Wind Direction"] = (pivot_dir, info_dir)
+              except Exception:
+                  pass  # Silently skip wind direction heatmap if it fails
 
             if not heatmap_dict:
                 st.info("No metric data available for heatmap generation.")
@@ -4748,7 +4794,7 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
         st.info(f"No data for {title_suffix}.")
         return
     mat_df = tmp.pivot_table(index="doy", columns="hour", values="val", aggfunc="mean")
-    mat_df = mat_df.reindex(index=range(1, 367), columns=range(24))
+    mat_df = mat_df.reindex(index=range(1, 366), columns=range(24))
     mat_val = mat_df.values
     mat_cat = np.full(mat_val.shape, np.nan)
     colors = []
@@ -4766,12 +4812,20 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
         dscale.append([bvals[i+1], colors[i]])
     fig = go.Figure()
     hovertext = np.full(mat_val.shape, "", dtype=object)
-    for doy_i in range(366):
+    n_doys = mat_val.shape[0]
+    ref_year = 2021  # Non-leap reference year for DOY→date conversion
+    for doy_i in range(n_doys):
+        try:
+            dt = pd.Timestamp(ref_year, 1, 1) + pd.Timedelta(days=doy_i)
+            date_str = dt.strftime("%m/%d")
+        except Exception:
+            date_str = f"Day {doy_i+1}"
         for hr_i in range(24):
             v = mat_val[doy_i, hr_i]
             c = int(mat_cat[doy_i, hr_i]) if not np.isnan(mat_cat[doy_i, hr_i]) else -1
+            time_str = f"{hr_i:02d}:00:00"
             if c != -1:
-                hovertext[doy_i, hr_i] = f"Day {doy_i+1}, Hour {hr_i}<br>Val: {v:.1f}<br>{labels[c]}"
+                hovertext[doy_i, hr_i] = f"{date_str} {time_str}<br>Val: {v:.1f}<br>{labels[c]}"
     fig.add_trace(go.Heatmap(
         x=mat_df.index, y=mat_df.columns,
         z=mat_cat.T,
@@ -4790,9 +4844,9 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
         ))
     month_days = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
     month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    fig.update_xaxes(tickvals=month_days, ticktext=month_names, ticklen=5, range=[0.5, 366.5])
+    fig.update_xaxes(tickvals=month_days, ticktext=month_names, ticklen=5, range=[0.5, 365.5])
     fig.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"], autorange="reversed", ticklen=5, range=[-0.5, 23.5])
-    fig.update_layout(height=450, margin=dict(t=30, b=40, l=50, r=20), legend=dict(y=1, yanchor="top", x=1.02, xanchor="left", traceorder="reversed"))
+    fig.update_layout(height=450, margin=dict(t=30, b=40, l=50, r=20), legend=dict(y=1, yanchor="top", x=1.02, xanchor="left", traceorder="reversed"), plot_bgcolor="#ffffff")
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
     st.plotly_chart(fig, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{clean_loc}_{col}_{key_suffix}", "format": "png"}, "displayModeBar": True})
     d1, d2 = st.columns(2)
@@ -4882,9 +4936,24 @@ def render_pmv_page():
     
     pmv_df = st.session_state.get("comfort_pkg", {}).get("pmv")
     
-    if pmv_df is None or pmv_df.empty:
-        st.info("PMV index could not be computed. Ensure dry-bulb temperature, relative humidity, and wind speed are present.")
-        return
+    if pmv_df is None or (hasattr(pmv_df, 'empty') and pmv_df.empty):
+        # Try computing PMV on the fly and show specific error
+        missing = [c for c in ("drybulb", "relhum", "windspd") if c not in cdf.columns]
+        if missing:
+            st.info(f"PMV index could not be computed. Missing columns: {', '.join(missing)}. Ensure dry-bulb temperature, relative humidity, and wind speed are present.")
+        else:
+            try:
+                pmv_df = ce.compute_pmv(cdf)
+                if pmv_df is not None and not pmv_df.empty:
+                    st.session_state.setdefault("comfort_pkg", {})["pmv"] = pmv_df
+                else:
+                    st.info("PMV index returned empty results. The pythermalcomfort library may need to be installed or updated.")
+                    return
+            except Exception as exc:
+                st.error(f"PMV computation failed: {exc}")
+                return
+        if pmv_df is None or (hasattr(pmv_df, 'empty') and pmv_df.empty):
+            return
         
     temp_df = cdf.copy()
     temp_df["pmv_index"] = pmv_df
@@ -6811,7 +6880,87 @@ def render_solar_page():
 
 
 
-# Cloud Coverage Frequencies 
+    # Solar Irradiance Components (GHI, DNI, DHI) — above cloud coverage
+    import plotly.express as px
+    st.markdown("---")
+    st.markdown("#### Solar Irradiance — GHI / DNI / DHI")
+    st.caption("Annual overlay of Global Horizontal (GHI), Direct Normal (DNI), and Diffuse Horizontal (DHI) irradiance — identical layout to the Short-Term Prediction tab.")
+
+    _ghi_col = get_metric_column(cdf, ["glohorrad", "ghi", "global_horizontal", "global_horiz", "solar", "radiation"])
+    _dhi_col = get_metric_column(cdf, ["difhorrad", "dhi", "diffuse_horizontal", "dif_hor_rad"])
+    _dni_col = get_metric_column(cdf, ["dirnorrad", "dni", "direct_normal", "dir_nor_rad"])
+
+    if _ghi_col or _dhi_col or _dni_col:
+        # Combined overlay line chart (daily means)
+        fig_solar = go.Figure()
+        _month_days = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+        _month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+        if _ghi_col:
+            _ghi_s = pd.to_numeric(cdf[_ghi_col], errors="coerce").dropna()
+            if not _ghi_s.empty:
+                _ghi_doy = pd.DataFrame({'doy': _ghi_s.index.dayofyear, 'val': _ghi_s.values})
+                _ghi_d = _ghi_doy.groupby('doy')['val'].mean()
+                fig_solar.add_trace(go.Scatter(
+                    x=_ghi_d.index, y=_ghi_d.values,
+                    mode="lines", name="Global Horizontal (GHI)",
+                    line=dict(color="#fbbf24", width=2),
+                    fill="tozeroy", fillcolor="rgba(251, 191, 36, 0.2)"
+                ))
+        if _dni_col:
+            _dni_s = pd.to_numeric(cdf[_dni_col], errors="coerce").dropna()
+            if not _dni_s.empty:
+                _dni_doy = pd.DataFrame({'doy': _dni_s.index.dayofyear, 'val': _dni_s.values})
+                _dni_d = _dni_doy.groupby('doy')['val'].mean()
+                fig_solar.add_trace(go.Scatter(
+                    x=_dni_d.index, y=_dni_d.values,
+                    mode="lines", name="Direct Normal (DNI)",
+                    line=dict(color="#f97316", width=2, dash="dot")
+                ))
+        if _dhi_col:
+            _dhi_s = pd.to_numeric(cdf[_dhi_col], errors="coerce").dropna()
+            if not _dhi_s.empty:
+                _dhi_doy = pd.DataFrame({'doy': _dhi_s.index.dayofyear, 'val': _dhi_s.values})
+                _dhi_d = _dhi_doy.groupby('doy')['val'].mean()
+                fig_solar.add_trace(go.Scatter(
+                    x=_dhi_d.index, y=_dhi_d.values,
+                    mode="lines", name="Diffuse Horizontal (DHI)",
+                    line=dict(color="#60a5fa", width=2, dash="dash")
+                ))
+
+        fig_solar.update_layout(
+            title="Solar Radiation — Annual Daily Means (W/m²)",
+            yaxis_title="Irradiance (W/m²)", xaxis_title="",
+            height=360, margin=dict(l=0, r=0, t=40, b=0),
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#f8fafc"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        fig_solar.update_xaxes(showgrid=False, linecolor="rgba(255,255,255,0.2)",
+                               tickmode="array",
+                               tickvals=[1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335],
+                               ticktext=['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
+        fig_solar.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
+        st.plotly_chart(fig_solar, use_container_width=True)
+
+        # Individual heatmaps for DHI and DNI
+        for _irr_label, _irr_col, _irr_scale, _irr_cname in [
+            ("DHI — Diffuse Horizontal Irradiance", _dhi_col, "Blues", "DHI (W/m²)"),
+            ("DNI — Direct Normal Irradiance", _dni_col, "YlOrRd", "DNI (W/m²)"),
+        ]:
+            if _irr_col:
+                _tmp_irr = pd.DataFrame({"doy": cdf.index.dayofyear, "hour": cdf.index.hour, "val": cdf[_irr_col]}).dropna()
+                if not _tmp_irr.empty:
+                    _mat_irr = _tmp_irr.pivot_table(index="hour", columns="doy", values="val", aggfunc="mean").sort_index()
+                    _fig_irr = px.imshow(_mat_irr.values, origin="lower", aspect="auto",
+                                    labels=dict(x="Day of Year", y="Hour", color=_irr_cname),
+                                    title=f"Annual heatmap — {_irr_label}",
+                                    height=360, color_continuous_scale=_irr_scale)
+                    _fig_irr.update_xaxes(tickvals=_month_days, ticktext=_month_names, side="bottom")
+                    _fig_irr.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"])
+                    st.plotly_chart(_fig_irr, use_container_width=True)
+
+    # Cloud Coverage Frequencies 
     st.markdown("---")
     st.markdown("#### Cloud coverage")
     if "totskycvr" not in cdf:
@@ -6922,15 +7071,19 @@ def render_solar_page():
             "hour": cdf.index.hour,
             "val": cdf[vcol]
         }).dropna()
-        mat = tmp.pivot_table(index="doy", columns="hour", values="val", aggfunc="mean").sort_index()
+        mat = tmp.pivot_table(index="hour", columns="doy", values="val", aggfunc="mean").sort_index()
         scale = "RdYlBu_r" if ("Wh/m²" in vlabel or "Dry-bulb" in vlabel) else "Blues"
         fig_hm = px.imshow(mat.values, origin="lower", aspect="auto",
-                        labels=dict(x="Hour", y="Day of year", color=vlabel),
+                        labels=dict(x="Day of Year", y="Hour", color=vlabel),
                         title=f"Annual heatmap — {vlabel}",
                         height=360, color_continuous_scale=scale)
         fig_hm.update_xaxes(side="bottom")
+        # Add month labels on x-axis
+        month_days = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+        month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        fig_hm.update_xaxes(tickvals=month_days, ticktext=month_names)
+        fig_hm.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"])
         st.plotly_chart(fig_hm, use_container_width=True)
-
 
 
 def render_psychrometrics_page():
@@ -7283,7 +7436,7 @@ def create_wind_rose(df):
     df = df.copy()
 
     # Get proper columns for wind speed and direction:
-    wind_spd_col = get_metric_column(df, ["wind_speed", "windspeed", "ws", "wspd"])
+    wind_spd_col = get_metric_column(df, ["wind_speed", "windspeed", "windspd", "ws", "wspd"])
     wind_dir_col = get_metric_column(df, ["wind_direction", "winddir", "wd", "wdir", "wind_dir"])
 
     if not wind_spd_col or not wind_dir_col:
@@ -7370,7 +7523,7 @@ def render_wind_page():
     st.markdown(f"<h3>{location_label} – Wind Analysis</h3>", unsafe_allow_html=True)
     st.caption("Understand prevalent wind patterns, magnitude, and directional distribution across the selected period.")
     
-    wind_spd_col = get_metric_column(cdf, ["wind_speed", "windspeed", "ws", "wspd"])
+    wind_spd_col = get_metric_column(cdf, ["wind_speed", "windspeed", "windspd", "ws", "wspd"])
     wind_dir_col = get_metric_column(cdf, ["wind_direction", "winddir", "wd", "wdir", "wind_dir"])
 
     if not wind_spd_col or not wind_dir_col:
@@ -7378,6 +7531,11 @@ def render_wind_page():
         return
 
     df_clean = cdf.dropna(subset=[wind_spd_col, wind_dir_col])
+    # Debug: show column info to help diagnose wind data issues
+    if not df_clean.empty:
+        spd_vals = pd.to_numeric(df_clean[wind_spd_col], errors='coerce')
+        dir_vals = pd.to_numeric(df_clean[wind_dir_col], errors='coerce')
+        st.caption(f"Wind data: speed col='{wind_spd_col}' (range {spd_vals.min():.1f}–{spd_vals.max():.1f} m/s), dir col='{wind_dir_col}' (range {dir_vals.min():.0f}–{dir_vals.max():.0f}°), {len(df_clean)} records")
     if df_clean.empty:
         st.warning("All wind records are empty or invalid.")
         return

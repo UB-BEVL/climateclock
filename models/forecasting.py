@@ -224,42 +224,56 @@ def summarize_peak_event(df_forecast: pd.DataFrame) -> Optional[dict]:
 
 
 def plot_bias(df: pd.DataFrame) -> go.Figure:
-    """Plot difference between forecast and EPW."""
+    """Plot daily mean difference between forecast and EPW."""
     fig = go.Figure()
-    
+
     if df.empty or "epw_temp_bias_forecast" not in df.columns:
         return fig
 
+    # Ensure we have a timestamp column for grouping
+    if "timestamp" not in df.columns:
+        return fig
+
+    # Aggregate to daily mean bias
+    work = df[["timestamp", "epw_temp_bias_forecast"]].dropna()
+    work["date"] = pd.to_datetime(work["timestamp"]).dt.date
+    daily = work.groupby("date")["epw_temp_bias_forecast"].mean().reset_index()
+    daily.columns = ["date", "bias"]
+    daily["date"] = pd.to_datetime(daily["date"])
+
     # Split into positive (hotter forecast) and negative (colder forecast) bias
-    pos_mask = df["epw_temp_bias_forecast"] > 0
-    neg_mask = df["epw_temp_bias_forecast"] <= 0
+    pos_mask = daily["bias"] > 0
+    neg_mask = daily["bias"] <= 0
 
     # Hotter than EPW
     fig.add_trace(go.Bar(
-        x=df.index[pos_mask],
-        y=df.loc[pos_mask, "epw_temp_bias_forecast"],
+        x=daily.loc[pos_mask, "date"],
+        y=daily.loc[pos_mask, "bias"],
         marker_color='#ef4444',  # Red
         name="Forecast Hotter (+)"
     ))
 
     # Colder than EPW
     fig.add_trace(go.Bar(
-        x=df.index[neg_mask],
-        y=df.loc[neg_mask, "epw_temp_bias_forecast"],
+        x=daily.loc[neg_mask, "date"],
+        y=daily.loc[neg_mask, "bias"],
         marker_color='#3b82f6',  # Blue
         name="Forecast Colder (-)"
     ))
 
     fig.update_layout(
-        title="Hourly Temperature Bias (Next 10 Days)",
+        title="Daily Mean Temperature Bias (Next 10 Days)",
+        xaxis_title="Day",
         yaxis_title="Delta (°C)",
         margin=dict(l=0, r=0, t=40, b=0),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#f8fafc"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        bargap=0.3,
     )
-    fig.update_xaxes(showgrid=False, linecolor="rgba(255,255,255,0.2)")
+    fig.update_xaxes(showgrid=False, linecolor="rgba(255,255,255,0.2)",
+                     tickformat="%b %d", dtick="D1")
     fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
     return fig
 

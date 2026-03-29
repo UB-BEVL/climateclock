@@ -103,7 +103,13 @@ def compute_pmv(
     if missing:
         raise KeyError(f"Cannot compute PMV, missing columns: {missing}")
 
-    from pythermalcomfort.models.pmv_ppd_ashrae import pmv_ppd_ashrae
+    try:
+        from pythermalcomfort.models import pmv_ppd as _pmv_func
+    except ImportError:
+        try:
+            from pythermalcomfort.models.pmv_ppd_ashrae import pmv_ppd_ashrae as _pmv_func
+        except ImportError:
+            raise ImportError("Could not import PMV function from pythermalcomfort. Please install or update: pip install pythermalcomfort>=2.5")
     import numpy as np
 
     # ASHRAE 55 Table C1 seasonal clo values
@@ -128,7 +134,7 @@ def compute_pmv(
     mrt = Ta
 
     try:
-        results = pmv_ppd_ashrae(tdb=Ta, tr=mrt, vr=ws, rh=RH, met=met, clo=clo_arr, limit_inputs=False)
+        results = _pmv_func(tdb=Ta, tr=mrt, vr=ws, rh=RH, met=met, clo=clo_arr, limit_inputs=False)
         pmv_vals = results.pmv
     except Exception:
         pmv_vals = np.full(len(df), np.nan)
