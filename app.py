@@ -7518,9 +7518,10 @@ def create_wind_rose(df):
     df = df.copy()
 
     # Get proper columns for wind speed and direction:
-    wind_spd_col = get_metric_column(df, ["wind_speed", "windspeed", "windspd", "ws", "wspd"])
-    wind_dir_col = get_metric_column(df, ["wind_direction", "winddir", "wd", "wdir", "wind_dir"])
-
+    #wind_spd_col = get_metric_column(df, ["wind_speed", "windspeed", "windspd", "ws", "wspd"])
+    #wind_dir_col = get_metric_column(df, ["wind_direction", "winddir", "wd", "wdir", "wind_dir"])
+    wind_spd_col = next((c for c in df.columns if "wind" in c.lower() and "sp" in c.lower()), None)
+    wind_dir_col = next((c for c in df.columns if "wind" in c.lower() and "dir" in c.lower()), None)
     if not wind_spd_col or not wind_dir_col:
         return None
 
@@ -7605,9 +7606,10 @@ def render_wind_page():
     st.markdown(f"<h3>{location_label} – Wind Analysis</h3>", unsafe_allow_html=True)
     st.caption("Understand prevalent wind patterns, magnitude, and directional distribution across the selected period.")
     
-    wind_spd_col = get_metric_column(cdf, ["wind_speed", "windspeed", "windspd", "ws", "wspd"])
-    wind_dir_col = get_metric_column(cdf, ["wind_direction", "winddir", "wd", "wdir", "wind_dir"])
-
+    #wind_spd_col = get_metric_column(cdf, ["wind_speed", "windspeed", "windspd", "ws", "wspd"])
+    #wind_dir_col = get_metric_column(cdf, ["wind_direction", "winddir", "wd", "wdir", "wind_dir"])
+    wind_spd_col = next((c for c in cdf.columns if "wind" in c.lower() and "sp" in c.lower()), None)
+    wind_dir_col = next((c for c in cdf.columns if "wind" in c.lower() and "dir" in c.lower()), None)
     if not wind_spd_col or not wind_dir_col:
         st.warning(f"This EPW file is missing required wind columns (Speed or Direction). Cannot generate Wind Rose.")
         return
