@@ -30,6 +30,22 @@ import platform as _platform
 
 import streamlit.runtime.scriptrunner as _sr
 
+
+_COMPASS_TO_DEG = {
+    "N": 0, "NNE": 22.5, "NE": 45, "ENE": 67.5,
+    "E": 90, "ESE": 112.5, "SE": 135, "SSE": 157.5,
+    "S": 180, "SSW": 202.5, "SW": 225, "WSW": 247.5,
+    "W": 270, "WNW": 292.5, "NW": 315, "NNW": 337.5,
+}
+
+def _normalize_wind_dir(series: pd.Series) -> pd.Series:
+    raw = series.astype(str).str.strip().str.upper()
+    num = pd.to_numeric(raw, errors="coerce")
+    txt = raw.map(_COMPASS_TO_DEG)
+    out = num.fillna(txt)
+    out = out.mask(out >= 999)
+    return out % 360
+
 def _session_is_ready() -> bool:
     try:
         ctx = _sr.get_script_run_ctx()
@@ -3979,8 +3995,6 @@ def render_dashboard_page():
 
             wind_col = get_metric_column(cdf, ["windspd", "wind_speed", "wspd"])
             if wind_col:
-                # Bin wind speed into categories 0, 1, 2 for proper discrete coloring
-                # <1.5 (0), 1.5-4.5 (1), >4.5 (2)
                 wb = [0.0, 1.5, 4.5, cdf[wind_col].max() + 1.0]
                 if wb[-1] <= 4.5: wb[-1] = 999.0
                 
@@ -3992,72 +4006,57 @@ def render_dashboard_page():
                 )
                 if not pivot_binned.empty:
                     heatmap_dict["Wind Speed"] = (pivot_binned, info)
-
-            # NEW: Wind Direction heatmap (sector mode per hod/doy)
-            if "wind_direction" in cdf.columns or "winddir" in cdf.columns or "wind_dir" in cdf.columns:
-              try:
-                dir_col = get_metric_column(cdf, ["wind_direction", "winddir", "wind_dir", "wd", "wdir"])
-                if dir_col:
-                    #dir_series = pd.to_numeric(cdf[dir_col], errors="coerce")
+            _wd_col = next((c for c in cdf.columns if "wind" in c.lower() and "dir" in c.lower()), None)
+            if _wd_col:
+                try:
+                    dir_col = _wd_col
                     _COMPASS_TO_DEG = {
                         "N": 0, "NNE": 22.5, "NE": 45, "ENE": 67.5,
                         "E": 90, "ESE": 112.5, "SE": 135, "SSE": 157.5,
                         "S": 180, "SSW": 202.5, "SW": 225, "WSW": 247.5,
                         "W": 270, "WNW": 292.5, "NW": 315, "NNW": 337.5,
                     }
-                    _raw = cdf[dir_col].astype(str).str.strip().str.upper()
-                    _mapped = _raw.map(_COMPASS_TO_DEG)
-                    dir_series = pd.to_numeric(_raw, errors="coerce").fillna(_mapped)
-
-                    dir_series = dir_series.mask(dir_series >= 999)  # drop 999 sentinels
+                    raw_dir = cdf[dir_col].astype(str).str.strip().str.upper()
+                    dir_series_num = pd.to_numeric(raw_dir, errors="coerce")
+                    dir_series_txt = raw_dir.map(_COMPASS_TO_DEG)
+                    dir_series = dir_series_num.fillna(dir_series_txt)
+                    dir_series = dir_series.mask(dir_series >= 999)
                     dir_series = dir_series.dropna()
+
                     if not dir_series.empty:
                         work_dir = pd.DataFrame({"val": dir_series})
                         work_dir["hod"] = work_dir.index.hour
                         work_dir["doy"] = work_dir.index.dayofyear
 
                         sector_names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-                        sector_edges = [22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5]
 
                         def dir_to_sector_code(deg: float) -> float:
-                            if pd.isna(deg):
-                                return np.nan
+                            if pd.isna(deg): return np.nan
                             d = deg % 360.0
-                            if d >= 337.5 or d < 22.5:
-                                return 0
-                            elif d < 67.5:
-                                return 1
-                            elif d < 112.5:
-                                return 2
-                            elif d < 157.5:
-                                return 3
-                            elif d < 202.5:
-                                return 4
-                            elif d < 247.5:
-                                return 5
-                            elif d < 292.5:
-                                return 6
-                            else:
-                                return 7
+                            if d >= 337.5 or d < 22.5: return 0
+                            elif d < 67.5: return 1
+                            elif d < 112.5: return 2
+                            elif d < 157.5: return 3
+                            elif d < 202.5: return 4
+                            elif d < 247.5: return 5
+                            elif d < 292.5: return 6
+                            else: return 7
 
                         work_dir["sector"] = work_dir["val"].apply(dir_to_sector_code)
                         work_dir = work_dir.dropna(subset=["sector"])
 
-                        def sector_mode(s: pd.Series) -> float:
-                            if s.empty:
-                                return np.nan
-                            m = s.mode()
-                            return m.iat[0] if not m.empty else np.nan
-
                         sector_mode_series = (
-                            work_dir.groupby(["hod", "doy"])["sector"].agg(lambda s: s.mode().iat[0] if not s.mode().empty else np.nan)
+                            work_dir.groupby(["hod", "doy"])["sector"]
+                            .agg(lambda s: s.mode().iat[0] if not s.mode().empty else np.nan)
                         )
                         pivot_dir = sector_mode_series.unstack("doy")
                         pivot_dir = pivot_dir.reindex(index=range(24), columns=range(1, 366))
 
-                        dir_colors = ["#4c6fff", "#3fb3ff", "#36d1a8", "#8bd36b", "#f6c445", "#f08c42", "#e15b9a", "#9d6bff"]
-                        # map codes back to compass labels for hover
-                        label_grid = pivot_dir.map(lambda v: sector_names[int(v)] if pd.notna(v) else np.nan).values
+                        dir_colors = ["#4c6fff", "#3fb3ff", "#36d1a8", "#8bd36b",
+                                    "#f6c445", "#f08c42", "#e15b9a", "#9d6bff"]
+                        label_grid = pivot_dir.map(
+                            lambda v: sector_names[int(v)] if pd.notna(v) else np.nan
+                        ).values
 
                         info_dir = {
                             "metric": "Wind Direction",
@@ -4066,12 +4065,14 @@ def render_dashboard_page():
                             "colors": dir_colors,
                             "thresholds": [],
                             "hover_labels": label_grid,
-                            "show_colorscale": False,  # compass legend rendered separately
+                            "show_colorscale": False,
                             "colorbar": None,
                         }
                         heatmap_dict["Wind Direction"] = (pivot_dir, info_dir)
-              except Exception:
-                  pass  # Silently skip wind direction heatmap if it fails
+
+                except Exception as e:
+                    st.warning(f"Wind direction heatmap failed: {e}")
+    
 
             if not heatmap_dict:
                 st.info("No metric data available for heatmap generation.")
@@ -7611,15 +7612,28 @@ def render_wind_page():
         st.warning(f"This EPW file is missing required wind columns (Speed or Direction). Cannot generate Wind Rose.")
         return
 
-    df_clean = cdf.dropna(subset=[wind_spd_col, wind_dir_col])
+    df_clean = cdf.copy()
+    df_clean[wind_spd_col] = pd.to_numeric(df_clean[wind_spd_col], errors='coerce')
+
+    # normalize wind direction: accept either numeric degrees or compass text
+    _raw_dir = df_clean[wind_dir_col].astype(str).str.strip().str.upper()
+    _dir_num = pd.to_numeric(_raw_dir, errors='coerce')
+    _dir_txt = _raw_dir.map(_COMPASS_TO_DEG)
+    df_clean[wind_dir_col] = _dir_num.fillna(_dir_txt)
+
+    # drop invalid rows after conversion
+    df_clean = df_clean.dropna(subset=[wind_spd_col, wind_dir_col])
+
     # Debug: show column info to help diagnose wind data issues
     if not df_clean.empty:
         spd_vals = pd.to_numeric(df_clean[wind_spd_col], errors='coerce')
         dir_vals = pd.to_numeric(df_clean[wind_dir_col], errors='coerce')
         st.caption(f"Wind data: speed col='{wind_spd_col}' (range {spd_vals.min():.1f}–{spd_vals.max():.1f} m/s), dir col='{wind_dir_col}' (range {dir_vals.min():.0f}–{dir_vals.max():.0f}°), {len(df_clean)} records")
+
     if df_clean.empty:
         st.warning("All wind records are empty or invalid.")
         return
+
     fig = None
     try:
         fig = create_wind_rose(df_clean)
@@ -7629,8 +7643,7 @@ def render_wind_page():
     if fig:
         st.plotly_chart(fig, use_container_width=True,
                         config={"displayModeBar": True})
-        
-        # Download buttons — now outside try/except, only shown when fig exists
+
         d1, d2 = st.columns(2)
         clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
         with d1:
