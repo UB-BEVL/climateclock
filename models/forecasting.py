@@ -272,8 +272,7 @@ def plot_bias(df: pd.DataFrame) -> go.Figure:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         bargap=0.3,
     )
-    fig.update_xaxes(showgrid=False, linecolor="rgba(255,255,255,0.2)",
-                     tickformat="%b %d", dtick="D1")
+    fig.update_xaxes(showgrid=False, linecolor="rgba(255,255,255,0.2)", tickformat="%b %d", dtick="D1", title_text="Day")
     fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
     return fig
 

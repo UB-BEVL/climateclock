@@ -13,19 +13,6 @@ import re
 import numpy as np
 import pandas as pd
 import streamlit as st
-
-# Backward compatibility for st.fragment in Streamlit < 1.37.0
-if not hasattr(st, "fragment"):
-    if hasattr(st, "experimental_fragment"):
-        st.fragment = st.experimental_fragment
-    else:
-        # Fallback: no-op decorator that avoids SessionInfo errors
-        def _noop_fragment(func=None, *, run_every=None):
-            if func is not None:
-                return func
-            return lambda f: f
-        st.fragment = _noop_fragment
-
 import pydeck as pdk
 import plotly.graph_objects as go
 import plotly.express as px
@@ -40,6 +27,34 @@ import live_sensors as ls
 
 # Patch platform processor to avoid Windows WMI KeyError during h5py/pvlib import
 import platform as _platform
+
+
+
+if not hasattr(st, "fragment"):
+    if hasattr(st, "experimental_fragment"):
+        st.fragment = st.experimental_fragment
+    else:
+        def noop_fragment(func=None, *, run_every=None):
+            if func is not None:
+                return func
+            return lambda f: f
+        st.fragment = noop_fragment
+
+# Extra guard: re-wrap st.fragment so any SessionInfo crash is swallowed
+_real_fragment = st.fragment
+def _safe_fragment(func=None, *, run_every=None):
+    try:
+        _ = st.session_state  # probe: raises if SessionInfo not ready
+        if func is not None:
+            return _real_fragment(func)
+        return _real_fragment(run_every=run_every)
+    except Exception:
+        if func is not None:
+            return func
+        return lambda f: f
+st.fragment = _safe_fragment
+
+
 _orig_proc_get = getattr(getattr(_platform, "_Processor", None), "get", None)
 if _orig_proc_get:
     def _safe_proc_get(self=None, *args, **kwargs):
@@ -323,12 +338,12 @@ def _build_accessible_plotly_template(mode: str = "dark") -> go.layout.Template:
     return template
 
 
-pio.templates["bevl_dark"] = _build_accessible_plotly_template("dark")
-pio.templates["bevl_light"] = _build_accessible_plotly_template("light")
+#pio.templates["bevl_dark"] = _build_accessible_plotly_template("dark")
+#pio.templates["bevl_light"] = _build_accessible_plotly_template("light")
 
 DEFAULT_TEMPLATE = "bevl_dark"
-px.defaults.template = DEFAULT_TEMPLATE
-pio.templates.default = DEFAULT_TEMPLATE
+#px.defaults.template = DEFAULT_TEMPLATE
+#pio.templates.default = DEFAULT_TEMPLATE
 
 # Default station source fallback (can be overridden)
 STATION_SOURCE = "https://raw.githubusercontent.com/CenterForTheBuiltEnvironment/clima/main/assets/data/epw_location.json"
@@ -2218,14 +2233,27 @@ def _build_station_map_figure(stations: pd.DataFrame, map_height: int) -> go.Fig
 
 
 def _interactive_map_fragment() -> None:
-    """Micro-rerun fragment for the interactive map."""
-    from streamlit_plotly_events import plotly_events
+    try:
+        _ = st.session_state  # lightweight probe
+    except Exception:
+        return
+
+    # Deferred import — prevents SessionInfo crash on cold start
+    try:
+
+        from streamlit_plotly_events import plotly_events as _plotlyevents
+    except Exception as _ie:
+        st.info(f"Map component unavailable: {_ie}")
+        return
 
     stations = st.session_state.get("_stations_picker_df")
+    #st.write("stations_picker_df in session:", "stations_picker_df" in st.session_state)
+    #st.write("All session keys:", list(st.session_state.keys()))
     if not isinstance(stations, pd.DataFrame) or stations.empty:
         st.info("Station map is not available right now.")
         return
 
+    
     # ========== INTERACTIVE MAP (full-width card) ==========
     # Keep map dots exactly as rendered by _build_station_map_figure().
     with st.container(border=True):
@@ -2238,7 +2266,7 @@ def _interactive_map_fragment() -> None:
     fig_map = _build_station_map_figure(stations, map_height)
 
     with map_slot.container():
-        selected_points = plotly_events(
+        selected_points = _plotlyevents(
             fig_map,
             click_event=True,
             hover_event=False,
@@ -2280,6 +2308,10 @@ def _interactive_map_fragment() -> None:
 
 def _station_search_fragment() -> None:
     """Micro-rerun fragment for station search + load button."""
+    try:
+        _ = st.session_state
+    except Exception:
+        return
     stations = st.session_state.get("_stations_picker_df")
     if not isinstance(stations, pd.DataFrame) or stations.empty:
         return
@@ -2477,9 +2509,16 @@ def render_station_picker():
     stations = _prepare_station_picker_dataframe(stations_raw)
     st.session_state["_stations_picker_df"] = stations
 
-    _interactive_map_fragment()
+    
+    try:
+        _interactive_map_fragment()
+    except Exception as _frag_err:
+        st.warning(f"Map fragment error (try refreshing): {_frag_err}")
     st.divider()
-    _station_search_fragment()
+    try:
+        _station_search_fragment()
+    except Exception as _frag_err:
+        st.warning(f"Search fragment error (try refreshing): {_frag_err}")
 
 
 def handle_epw_upload(uploaded_file, picker_key: str = "sidebar") -> Optional[bytes]:
@@ -3042,24 +3081,24 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
             )
             show_scale = True
 
-        else:
+        #else:
             # Fallback for Wind Direction or others: discrete interpolation
-            colors_default, labels_default = get_color_scale_for_metric(info["metric"])
-            colors = info.get("colors", colors_default[: len(info.get("labels", labels_default))])
-            heatmap_colorscale = list(zip([i / (len(colors) - 1) for i in range(len(colors))], colors))
+        #    colors_default, labels_default = get_color_scale_for_metric(info["metric"])
+        #    colors = info.get("colors", colors_default[: len(info.get("labels", labels_default))])
+        #    heatmap_colorscale = list(zip([i / (len(colors) - 1) for i in range(len(colors))], colors))
             
             # Special Compass Legend for Wind Direction
-            if strip_name == "Wind Direction":
-                 # Use a cyclic colorscale (HSV)
-                 heatmap_colorscale = "HSV"
-                 zmin, zmax = 0, 360 # Explicit degrees
-                 # We need a separate legend for this maybe? 
-                 # For now, standard colorbar 0-360
-                 colorbar_dict = dict(
-                    orientation="v", x=1.01, y=y_center, yanchor="middle", len=h, thickness=15,
-                    tickmode="array", tickvals=[0, 90, 180, 270, 360], ticktext=["N", "E", "S", "W", "N"]
-                 )
-                 show_scale = True
+        #   if strip_name == "Wind Direction":
+        #        # Use a cyclic colorscale (HSV)
+        #        heatmap_colorscale = "HSV"
+        #        zmin, zmax = 0, 360 # Explicit degrees
+        #        # We need a separate legend for this maybe? 
+        #        # For now, standard colorbar 0-360
+        #        colorbar_dict = dict(
+        #           orientation="v", x=1.01, y=y_center, yanchor="middle", len=h, thickness=15,
+        #           tickmode="array", tickvals=[0, 90, 180, 270, 360], ticktext=["N", "E", "S", "W", "N"]
+        #        )
+        #        show_scale = True
 
         # Gentle DOY smoothing 
         if info["metric"] == "Wind Direction":
@@ -4794,7 +4833,8 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
         st.info(f"No data for {title_suffix}.")
         return
     mat_df = tmp.pivot_table(index="doy", columns="hour", values="val", aggfunc="mean")
-    mat_df = mat_df.reindex(index=range(1, 366), columns=range(24))
+    #mat_df = mat_df.reindex(index=range(1, 366), columns=range(24))
+    mat_df = mat_df.reindex(index=range(1, 367), columns=range(24))
     mat_val = mat_df.values
     mat_cat = np.full(mat_val.shape, np.nan)
     colors = []
@@ -4844,7 +4884,7 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
         ))
     month_days = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
     month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    fig.update_xaxes(tickvals=month_days, ticktext=month_names, ticklen=5, range=[0.5, 365.5])
+    fig.update_xaxes(tickvals=month_days, ticktext=month_names, ticklen=5, range=[0.5, 366.5])
     fig.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"], autorange="reversed", ticklen=5, range=[-0.5, 23.5])
     fig.update_layout(height=450, margin=dict(t=30, b=40, l=50, r=20), legend=dict(y=1, yanchor="top", x=1.02, xanchor="left", traceorder="reversed"), plot_bgcolor="#ffffff")
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
@@ -4950,7 +4990,10 @@ def render_pmv_page():
                     st.info("PMV index returned empty results. The pythermalcomfort library may need to be installed or updated.")
                     return
             except Exception as exc:
+                import traceback
                 st.error(f"PMV computation failed: {exc}")
+                with st.expander("Traceback (for debugging)"):
+                    st.code(traceback.format_exc())
                 return
         if pmv_df is None or (hasattr(pmv_df, 'empty') and pmv_df.empty):
             return
@@ -4962,6 +5005,15 @@ def render_pmv_page():
     st.caption("PMV is a thermal comfort index that predicts the mean value of the thermal votes of a large group of people on a 7-point thermal sensation scale (-3 cold to +3 hot).")
         
     _render_categorical_heatmap(temp_df, "pmv_index", "PMV Annual Heatmap", _PMV_BANDS, "pmv")
+
+def render_pmv_page():
+    # ADD THESE LINES:
+    try:
+        import pythermalcomfort  # noqa
+    except ImportError:
+        st.error("PMV requires the `pythermalcomfort` package. Add it to requirements.txt and redeploy.")
+        return
+    # ... rest of function continues unchanged
 
 def render_di_page():
     cdf = st.session_state.get("cdf")
@@ -6369,6 +6421,12 @@ def render_solar_page():
     # ---------- CLI / Demo ----------
 
     def main():
+        if "plotly_templates_ready" not in st.session_state:
+            pio.templates["bevldark"] = buildaccessibleplotlytemplate("dark")
+            pio.templates["bevllight"] = buildaccessibleplotlytemplate("light")
+            pio.templates.default = "bevldark"
+            px.defaults.template = "bevldark"
+            st.session_state["plotly_templates_ready"] = True
         p = argparse.ArgumentParser()
         p.add_argument("--lat", type=float, required=True)
         p.add_argument("--lon", type=float, required=True)
@@ -7541,11 +7599,15 @@ def render_wind_page():
         return
 
     # Using the single function since it perfectly generalizes to full-year plotting
-    fig = create_wind_rose(df_clean)
-    
-    if fig:
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+    try:
+        fig = create_wind_rose(df_clean)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True,
+                            config={"displayModeBar": True})
+    except Exception as _wr_err:
+        st.warning(f"Wind Rose failed to render: {_wr_err}")
         
+
         # Add a download button for the wind rose
         d1, d2 = st.columns(2)
         clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
