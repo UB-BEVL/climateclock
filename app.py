@@ -28,6 +28,14 @@ import live_sensors as ls
 # Patch platform processor to avoid Windows WMI KeyError during h5py/pvlib import
 import platform as _platform
 
+import streamlit.runtime.scriptrunner as _sr
+
+def _session_is_ready() -> bool:
+    try:
+        ctx = _sr.get_script_run_ctx()
+        return ctx is not None
+    except Exception:
+        return False
 
 
 if not hasattr(st, "fragment"):
@@ -42,9 +50,13 @@ if not hasattr(st, "fragment"):
 
 # Extra guard: re-wrap st.fragment so any SessionInfo crash is swallowed
 _real_fragment = st.fragment
+
 def _safe_fragment(func=None, *, run_every=None):
+    if not _session_is_ready():
+        if func is not None:
+            return func
+        return lambda f: f
     try:
-        _ = st.session_state  # probe: raises if SessionInfo not ready
         if func is not None:
             return _real_fragment(func)
         return _real_fragment(run_every=run_every)
@@ -52,6 +64,7 @@ def _safe_fragment(func=None, *, run_every=None):
         if func is not None:
             return func
         return lambda f: f
+
 st.fragment = _safe_fragment
 
 
@@ -3985,7 +3998,17 @@ def render_dashboard_page():
               try:
                 dir_col = get_metric_column(cdf, ["wind_direction", "winddir", "wind_dir", "wd", "wdir"])
                 if dir_col:
-                    dir_series = pd.to_numeric(cdf[dir_col], errors="coerce")
+                    #dir_series = pd.to_numeric(cdf[dir_col], errors="coerce")
+                    _COMPASS_TO_DEG = {
+                        "N": 0, "NNE": 22.5, "NE": 45, "ENE": 67.5,
+                        "E": 90, "ESE": 112.5, "SE": 135, "SSE": 157.5,
+                        "S": 180, "SSW": 202.5, "SW": 225, "WSW": 247.5,
+                        "W": 270, "WNW": 292.5, "NW": 315, "NNW": 337.5,
+                    }
+                    _raw = cdf[dir_col].astype(str).str.strip().str.upper()
+                    _mapped = _raw.map(_COMPASS_TO_DEG)
+                    dir_series = pd.to_numeric(_raw, errors="coerce").fillna(_mapped)
+
                     dir_series = dir_series.mask(dir_series >= 999)  # drop 999 sentinels
                     dir_series = dir_series.dropna()
                     if not dir_series.empty:
@@ -7597,18 +7620,17 @@ def render_wind_page():
     if df_clean.empty:
         st.warning("All wind records are empty or invalid.")
         return
-
-    # Using the single function since it perfectly generalizes to full-year plotting
+    fig = None
     try:
         fig = create_wind_rose(df_clean)
-        if fig:
-            st.plotly_chart(fig, use_container_width=True,
-                            config={"displayModeBar": True})
     except Exception as _wr_err:
         st.warning(f"Wind Rose failed to render: {_wr_err}")
-        
 
-        # Add a download button for the wind rose
+    if fig:
+        st.plotly_chart(fig, use_container_width=True,
+                        config={"displayModeBar": True})
+        
+        # Download buttons — now outside try/except, only shown when fig exists
         d1, d2 = st.columns(2)
         clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
         with d1:
@@ -7616,7 +7638,7 @@ def render_wind_page():
                 svg_bytes = fig.to_image(format="svg", width=800, height=800, scale=2)
                 st.download_button("📥 Download Wind Rose (SVG)", svg_bytes, f"{clean_loc}_wind_rose.svg", "image/svg+xml")
             except Exception as e:
-                st.download_button("📥 Download Wind Rose (SVG) - Unavailable", b"", disabled=True, help=f"PNG export failed. Requires working Kaleido installation. Error: {str(e)[:50]}")
+                st.download_button("📥 Download Wind Rose (SVG) - Unavailable", b"", disabled=True, help=f"Error: {str(e)[:50]}")
         with d2:
             try:
                 html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")
