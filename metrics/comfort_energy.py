@@ -66,7 +66,13 @@ def compute_utci_approx(
     _utci_used_fallback = False
     try:
         results = utci(tdb=Ta, tr=mrt, v=ws, rh=RH)
-        utci_vals = results.utci
+# Handle both old API (returns object) and new API (returns ndarray directly)
+        if hasattr(results, 'utci'):
+            utci_vals = results.utci
+        elif isinstance(results, np.ndarray):
+            utci_vals = results
+        else:
+            utci_vals = np.array(results)
     except Exception as e:
         import warnings
         warnings.warn(
@@ -127,16 +133,26 @@ def compute_pmv(
     else:
         clo_arr = np.full(len(df), float(clo))
 
-    Ta = df[temp_col].to_numpy()
+    Ta = df[temp_col].to_numpy(dtype=float)
     RH = df[rh_col].astype(float).clip(0, 100).to_numpy()
     ws = df[wind_col].astype(float).fillna(0.1).clip(lower=0.1).to_numpy()
 
-    mrt = Ta
+    mrt = Ta.copy()
 
     try:
         results = _pmv_func(tdb=Ta, tr=mrt, vr=ws, rh=RH, met=met, clo=clo_arr, limit_inputs=False)
-        pmv_vals = results.pmv
-    except Exception:
+        # Handle multiple API return formats
+        if hasattr(results, 'pmv'):
+            pmv_vals = np.asarray(results.pmv, dtype=float)
+        elif isinstance(results, dict) and 'pmv' in results:
+            pmv_vals = np.asarray(results['pmv'], dtype=float)
+        elif isinstance(results, np.ndarray):
+            pmv_vals = results.astype(float)
+        else:
+            pmv_vals = np.asarray(results, dtype=float)
+    except Exception as _pmv_exc:
+        import warnings
+        warnings.warn(f"PMV computation failed: {_pmv_exc}", RuntimeWarning, stacklevel=2)
         pmv_vals = np.full(len(df), np.nan)
 
     return pd.Series(pmv_vals, index=df.index, name="PMV")
@@ -392,9 +408,14 @@ def compute_degree_metrics(
     return deg
 
 
-def summarize_loads(deg_df: pd.DataFrame, freq: str = "A") -> pd.DataFrame:
+def summarize_loads(deg_df: pd.DataFrame, freq: str = "YE") -> pd.DataFrame:
     if deg_df.empty:
         return pd.DataFrame()
+    # Pandas >= 2.2.0 alias upgrades
+    if freq == "A" or freq == "Y":
+        freq = "YE"
+    elif freq == "M":
+        freq = "ME"
     resampled = deg_df.resample(freq).sum()
     resampled = resampled.rename(columns={
         "HDD_hour": "heating_degree_hours",
@@ -424,7 +445,7 @@ def _scenario_metrics(df: pd.DataFrame) -> pd.Series:
         utci = compute_utci_approx(df)
     except Exception:
         utci = None
-    comfort = summarize_comfort(df, di, utci, freq="A")
+    comfort = summarize_comfort(df, di, utci, freq="YE")
     deg = compute_degree_metrics(df)
     loads = summarize_loads(deg)
 

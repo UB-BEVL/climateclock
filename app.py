@@ -93,8 +93,9 @@ if _orig_proc_get:
             return os.environ.get("PROCESSOR_IDENTIFIER", "") or ""
     try:
         _platform._Processor.get = _safe_proc_get  # type: ignore[attr-defined]
+
     except Exception:
-        pass
+        pass  # silently ignore – this is just a platform compat patch
 
 
 def _temp_unit() -> str:
@@ -223,7 +224,15 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
+# ── Session state defaults ──────────────────────────────────────
+for _k, _v in [
+    ("cdf", None),
+    ("header", {}),
+    ("epw_path", None),
+    ("uploaded_epw", None),
+]:
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
 # Prevent footer "ghosting" during reruns/navigation: hide any old <footer> ASAP.
 # The app footer we render later uses class "bevl-footer" and stays visible.
 # Prevent footer "ghosting" during reruns/navigation: hide any old <footer> ASAP.
@@ -403,7 +412,7 @@ def _downcast_float32(df: Optional[pd.DataFrame], cols: Optional[Iterable[str]] 
             try:
                 out[c] = out[c].astype(np.float32)
             except Exception:
-                pass
+                pass  # silently skip – column downcast is optional
     return out
 
 def render_virtualized_table(
@@ -764,8 +773,9 @@ def country_from_zip_url(url: str) -> Optional[str]:
         for seg in url.split("/"):
             if "_" in seg and "." not in seg and len(seg) > 4 and seg[:3].isupper() and seg[3] == "_":
                 return seg[4:].replace("_", " ")
+
     except Exception:
-        pass
+        pass  # silently ignore – country detection is best-effort
     return None
 
 def best_country_from_row(row: pd.Series) -> Optional[str]:
@@ -964,7 +974,7 @@ def _hash_bytes(data: Optional[bytes]) -> Optional[str]:
         return None
     return hashlib.sha256(data).hexdigest()
 
-
+@st.cache_data(show_spinner="Computing thermal comfort metrics...")
 def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]]:
     # Compute comfort + load summaries used across multiple tabs.
     package: Dict[str, Optional[pd.DataFrame]] = {
@@ -987,69 +997,69 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
         try:
             di = ce.compute_di(cdf)
             package["di"] = di
-        except Exception:
+        except Exception as e:
             di = None
+            st.warning(f"DI failed: {e}")
 
     utci = None
     if {"drybulb", "relhum", "windspd"}.issubset(cdf.columns):
         try:
             utci = ce.compute_utci_approx(cdf)
-    # import warnings
-    # with warnings.catch_warnings(record=True) as w:
-    #     warnings.simplefilter('always')
-    #     utci = ce.compute_utci_approx(cdf)
-    #     if w: st.warning(str(w[-1].message))
 
             package["utci"] = utci
-        except Exception:
+        except Exception as e:
             utci = None
+            st.warning(f"UTCI failed: {e}")
 
     pmv = None
     if {"drybulb", "relhum", "windspd"}.issubset(cdf.columns):
         try:
             pmv = ce.compute_pmv(cdf)
             package["pmv"] = pmv
-        except Exception:
+        except Exception as e:
             pmv = None
+            st.warning(f"PMV failed: {e}")
 
     heat_index = None
     if {"drybulb", "relhum"}.issubset(cdf.columns):
         try:
             heat_index = ce.compute_heat_index(cdf)
             package["heat_index"] = heat_index
-        except Exception:
+        except Exception as e:
             heat_index = None
+            st.warning(f"Heat Index failed: {e}")
 
     humidex = None
     if {"drybulb", "relhum"}.issubset(cdf.columns):
         try:
             humidex = ce.compute_humidex(cdf)
             package["humidex"] = humidex
-        except Exception:
+        except Exception as e:
             humidex = None
+            st.warning(f"Humidex failed: {e}")
 
     try:
-        package["comfort_annual"] = ce.summarize_comfort(cdf, di, utci, freq="A")
-    except Exception:
-        pass
+        package["comfort_annual"] = ce.summarize_comfort(cdf, di, utci, freq="YE")
+    except Exception as e:
+        st.warning(f"comfort_annual failed: {e}")
 
     try:
-        package["comfort_monthly"] = ce.summarize_comfort(cdf, di, utci, freq="M")
-    except Exception:
-        pass
+        package["comfort_monthly"] = ce.summarize_comfort(cdf, di, utci, freq="ME")
+    except Exception as e:
+        st.warning(f"comfort_monthly failed: {e}")
 
     try:
         package["degree_daily"] = ce.compute_degree_metrics(cdf, freq="D")
-    except Exception:
-        pass
+    except Exception as e:
+        st.warning(f"degree_daily failed: {e}")
 
     try:
         deg_src = package["degree_daily"] if isinstance(package["degree_daily"], pd.DataFrame) else None
         if deg_src is None or deg_src.empty:
             deg_src = ce.compute_degree_metrics(cdf)
-        package["loads_annual"] = ce.summarize_loads(deg_src, freq="A")
-    except Exception:
-        pass
+        package["loads_annual"] = ce.summarize_loads(deg_src, freq="YE")
+    except Exception as e:
+        st.warning(f"loads_annual failed: {e}")
 
     return package
 
@@ -1509,8 +1519,8 @@ ss["active_page"] = str(controller_out.get("active_page") or "select_station")
 for k in controller_out.get("pop", []) or []:
     try:
         ss.pop(k, None)
-    except Exception:
-        pass
+    except Exception as e:
+        st.warning(f"pop failed: {e}")
 
 for k, v in (controller_out.get("set", {}) or {}).items():
     ss[k] = v
@@ -2262,29 +2272,20 @@ def _build_station_map_figure(stations: pd.DataFrame, map_height: int) -> go.Fig
 
 
 def _interactive_map_fragment() -> None:
+    # Guard: ensure Streamlit session context is fully initialized.
+    if not _session_is_ready():
+        return
     try:
         _ = st.session_state  # lightweight probe
     except Exception:
         return
 
-    # Deferred import — prevents SessionInfo crash on cold start
-    try:
-
-        from streamlit_plotly_events import plotly_events as _plotlyevents
-    except Exception as _ie:
-        st.info(f"Map component unavailable: {_ie}")
-        return
-
     stations = st.session_state.get("_stations_picker_df")
-    #st.write("stations_picker_df in session:", "stations_picker_df" in st.session_state)
-    #st.write("All session keys:", list(st.session_state.keys()))
     if not isinstance(stations, pd.DataFrame) or stations.empty:
         st.info("Station map is not available right now.")
         return
 
-    
     # ========== INTERACTIVE MAP (full-width card) ==========
-    # Keep map dots exactly as rendered by _build_station_map_figure().
     with st.container(border=True):
         st.markdown("### 🗺️ Interactive Map")
         st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
@@ -2294,49 +2295,58 @@ def _interactive_map_fragment() -> None:
     st.session_state["_map_slot"] = map_slot
     fig_map = _build_station_map_figure(stations, map_height)
 
+    # Use native st.plotly_chart with on_select instead of streamlit_plotly_events
+    # to avoid the "Tried to use SessionInfo before it was initialized" error.
     with map_slot.container():
-        selected_points = _plotlyevents(
+        event = st.plotly_chart(
             fig_map,
-            click_event=True,
-            hover_event=False,
-            select_event=False,
-            override_height=map_height,
-            override_width=None,
+            use_container_width=True,
+            on_select="rerun",
             key="station_map",
         )
-        
 
+    # Extract click selection from the native event object
+    selected_points = []
+    if event and hasattr(event, "selection") and event.selection:
+        sel = event.selection
+        # st.plotly_chart on_select returns {"points": [...], ...}
+        if hasattr(sel, "points"):
+            selected_points = sel.points
+        elif isinstance(sel, dict) and "points" in sel:
+            selected_points = sel["points"]
 
     if selected_points and len(selected_points) > 0:
         point = selected_points[0]
-        if "pointIndex" in point:
-            idx = point["pointIndex"]
-            if 0 <= idx < len(stations):
-                row = stations.iloc[idx]
-                station_info = {
-                    "name": row.get("name", "Unknown"),
-                    "country": row.get("country", "—"),
-                    "lat": row.get("lat", 0),
-                    "lon": row.get("lon", 0),
-                    "elevation_m": row.get("elevation_m", "—"),
-                    "timezone": row.get("timezone", "—"),
-                    "zip_url": row.get("zip_url", ""),
-                    "period": row.get("period", "—"),
-                    "heating_db": row.get("heating_db"),
-                    "cooling_db": row.get("cooling_db"),
-                    "display_label": row.get("display_label"),
-                    "station_id": row.get("station_id"),
-                    "raw_id": row.get("raw_id"),
-                }
-                station_id = row.get("station_id") or row.get("raw_id") or str(idx)
-                last_loaded_id = st.session_state.get("last_loaded_station_id")
-                pending_id = st.session_state.get("pending_station_id")
-                if station_id not in (last_loaded_id, pending_id):
-                    _stage_station_and_load(station_info)
+        # Native API uses "point_index" (underscore) instead of "pointIndex" (camelCase)
+        idx = point.get("point_index") or point.get("pointIndex")
+        if idx is not None and 0 <= idx < len(stations):
+            row = stations.iloc[idx]
+            station_info = {
+                "name": row.get("name", "Unknown"),
+                "country": row.get("country", "—"),
+                "lat": row.get("lat", 0),
+                "lon": row.get("lon", 0),
+                "elevation_m": row.get("elevation_m", "—"),
+                "timezone": row.get("timezone", "—"),
+                "zip_url": row.get("zip_url", ""),
+                "period": row.get("period", "—"),
+                "heating_db": row.get("heating_db"),
+                "cooling_db": row.get("cooling_db"),
+                "display_label": row.get("display_label"),
+                "station_id": row.get("station_id"),
+                "raw_id": row.get("raw_id"),
+            }
+            station_id = row.get("station_id") or row.get("raw_id") or str(idx)
+            last_loaded_id = st.session_state.get("last_loaded_station_id")
+            pending_id = st.session_state.get("pending_station_id")
+            if station_id not in (last_loaded_id, pending_id):
+                _stage_station_and_load(station_info)
 
 
 def _station_search_fragment() -> None:
     """Micro-rerun fragment for station search + load button."""
+    if not _session_is_ready():
+        return
     try:
         _ = st.session_state
     except Exception:
@@ -2432,7 +2442,7 @@ def _prepare_station_picker_dataframe(stations_in: pd.DataFrame) -> pd.DataFrame
             if c:
                 return c.name
         except Exception:
-            pass
+            pass  # pycountry lookup is best-effort
         return code.upper()
 
     stations["country_disp"] = stations.get("country", pd.Series(dtype=str)).fillna("—")
@@ -2561,8 +2571,8 @@ def handle_epw_upload(uploaded_file, picker_key: str = "sidebar") -> Optional[by
 
     try:
         uploaded_file.seek(0)
-    except Exception:
-        pass
+    except Exception as e:
+        st.warning(f"seek failed: {e}")
 
     filename = getattr(uploaded_file, "name", "uploaded.epw")
     raw_epw_bytes: Optional[bytes] = None
@@ -3297,15 +3307,10 @@ def render_dashboard_page():
     )
 
     loc = header["location"]
-    overview_tab, comfort_tab, diagnostics_tab, heatmaps_tab, temp_hum_tab, di_tab, utci_tab, pmv_tab, solar_tab, psych_tab, wind_tab, raw_data_tab = st.tabs([
+    overview_tab, comfort_tab, temp_hum_tab, solar_tab, psych_tab, wind_tab, raw_data_tab = st.tabs([
         "Overview & Stats",
         "Comfort & Loads",
-        "Data Quality",
-        "Heatmaps",
         "Temp & Humidity",
-        "DI",
-        "UTCI",
-        "PMV",
         "Solar Analysis",
         "Psychrometrics",
         "Wind",
@@ -3406,8 +3411,8 @@ def render_dashboard_page():
             st.caption(
                 f"Data window: **{tmin:%b %d, %Y} — {tmax:%b %d, %Y}**  ·  Records: **{n_hours:,}** hours"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            st.warning(f"Data window failed: {e}")
 
         def _month_name(m: int) -> str:
             try:
@@ -3455,369 +3460,8 @@ def render_dashboard_page():
         if highlights:
             st.markdown("#### 💡 Key takeaways")
             st.markdown("\n".join(f"- {text}" for text in highlights))
-    with comfort_tab:
-        st.markdown("### 😌 Thermal Comfort & Loads")
-        st.caption("Explore how often indoor comfort bands are met, where overheating or cold stress creep in, and how heating/cooling loads shift through the year.")
-        comfort_pkg = st.session_state.get("comfort_pkg", {}) or {}
-        comfort_annual_base = comfort_pkg.get("comfort_annual")
-        comfort_monthly_base = comfort_pkg.get("comfort_monthly")
-        loads_annual = comfort_pkg.get("loads_annual")
-        di_series = comfort_pkg.get("di")
-        utci_series = comfort_pkg.get("utci")
-        heat_index_series = comfort_pkg.get("heat_index")
-        humidex_series = comfort_pkg.get("humidex")
-        focus_threshold = int(st.session_state.get("custom_overheat_threshold", 30))
-        prefer_adaptive = bool(st.session_state.get("prefer_adaptive_comfort", False))
 
-        def _build_occupancy_mask(idx: pd.DatetimeIndex, mode: str) -> pd.Series:
-            if mode == "24/7":
-                return pd.Series(True, index=idx)
-            if mode == "Daytime (07-22)":
-                arr = (idx.hour >= 7) & (idx.hour < 22)
-                return pd.Series(arr, index=idx)
-            if mode == "Workday (Mon-Fri 9-17)":
-                arr = ((idx.dayofweek < 5) & (idx.hour >= 9) & (idx.hour < 17))
-                return pd.Series(arr, index=idx)
-            return pd.Series(True, index=idx)
-
-        with st.expander("⚙️ Comfort analysis settings", expanded=False):
-            comfort_mode = st.radio(
-                "Comfort band",
-                ["Fixed 18–26 °C", "Adaptive (ASHRAE 55)"],
-                index=1 if prefer_adaptive else 0,
-                horizontal=True,
-            )
-            adaptive_band = None
-            comfort_band = (18.0, 26.0)
-            if comfort_mode == "Fixed 18–26 °C":
-                comfort_band = st.slider(
-                    "Comfort temperature band (°C)",
-                    min_value=-10.0,
-                    max_value=40.0,
-                    value=(18.0, 26.0),
-                    step=0.5,
-                )
-            else:
-                if "drybulb" not in cdf.columns:
-                    st.warning("Adaptive comfort requires dry-bulb data; falling back to fixed band.")
-                else:
-                    acceptability = st.radio("Adaptive acceptability", ["80%", "90%"], horizontal=True)
-                    acc_value = 0.9 if acceptability == "90%" else 0.8
-                    adaptive_band = ce.build_adaptive_band(cdf["drybulb"], acceptability=acc_value)
-                    comfort_band = None
-
-            occupancy_mode = st.selectbox(
-                "Occupancy schedule",
-                ["24/7", "Daytime (07-22)", "Workday (Mon-Fri 9-17)"],
-                index=0,
-            )
-            occupancy_mask = None if occupancy_mode == "24/7" else _build_occupancy_mask(cdf.index, occupancy_mode)
-
-            hot_thresholds = st.multiselect(
-                "Overheating thresholds (°C)",
-                options=list(range(24, 41)),
-                default=[28, 30],
-                help="Counts hours above each selected dry-bulb threshold.",
-            )
-            if not hot_thresholds:
-                hot_thresholds = [28, 30]
-            if focus_threshold not in hot_thresholds:
-                hot_thresholds.append(focus_threshold)
-            hot_thresholds = sorted(set(int(th) for th in hot_thresholds))
-            cold_thresholds = st.multiselect(
-                "Cold stress thresholds (°C)",
-                options=list(range(-20, 11)),
-                default=[0],
-                help="Counts hours below each selected dry-bulb threshold.",
-            )
-            percentiles_on = st.checkbox("Show percentile diagnostics", value=True)
-
-        comfort_annual = comfort_annual_base
-        comfort_monthly = comfort_monthly_base
-        percentiles = (0.9, 0.95) if percentiles_on else None
-        try:
-            comfort_dyn_a = ce.summarize_comfort(
-                cdf,
-                di_series,
-                utci_series,
-                freq="A",
-                comfort_band=comfort_band,
-                adaptive_band=adaptive_band,
-                overheating_thresholds=hot_thresholds,
-                cold_thresholds=cold_thresholds,
-                percentiles=percentiles,
-                occupancy_mask=occupancy_mask,
-            )
-            if comfort_dyn_a is not None and not comfort_dyn_a.empty:
-                comfort_annual = comfort_dyn_a
-        except Exception:
-            pass
-
-        try:
-            comfort_dyn_m = ce.summarize_comfort(
-                cdf,
-                di_series,
-                utci_series,
-                freq="M",
-                comfort_band=comfort_band,
-                adaptive_band=adaptive_band,
-                overheating_thresholds=hot_thresholds,
-                cold_thresholds=cold_thresholds,
-                percentiles=percentiles,
-                occupancy_mask=occupancy_mask,
-            )
-            if comfort_dyn_m is not None and not comfort_dyn_m.empty:
-                comfort_monthly = comfort_dyn_m
-        except Exception:
-            pass
-
-        def _fmt_hours(val: float) -> str:
-            return "—" if pd.isna(val) else f"{float(val):.0f} h"
-
-        def _fmt_value(val: float, suffix: str = "") -> str:
-            return "—" if pd.isna(val) else f"{float(val):.0f}{suffix}"
-
-        if comfort_annual is None or comfort_annual.empty:
-            st.info("Comfort insights unlock automatically when dry-bulb, humidity, and wind speed data are available.")
-        else:
-            latest = comfort_annual.iloc[-1]
-            comfort_pct = latest.get("fraction_in_comfort_band", np.nan)
-            comfort_hours = latest.get("hours_in_comfort_band", np.nan)
-            total_hours = latest.get("hours_total", np.nan)
-            di_discomfort = latest.get("hours_di_discomfort", np.nan)
-            utci_heat = latest.get("hours_utci_heat_stress", np.nan)
-            utci_cold = latest.get("hours_utci_cold_stress", np.nan)
-            hot_cols = sorted([c for c in latest.index if c.startswith("overheating_hours_")])
-            cold_cols = sorted([c for c in latest.index if c.startswith("cold_hours_below_")])
-            focus_col = f"overheating_hours_{focus_threshold}C"
-            if focus_col in hot_cols:
-                hot_cols.remove(focus_col)
-                hot_cols.insert(0, focus_col)
-
-            comfort_value = "—" if pd.isna(comfort_pct) else f"{comfort_pct * 100:.1f} %"
-            comfort_delta = None
-            if not pd.isna(comfort_hours) and not pd.isna(total_hours):
-                comfort_delta = f"{comfort_hours:.0f}/{total_hours:.0f} h"
-
-            mc1, mc2, mc3 = st.columns(3)
-            mc1.metric("Comfort compliance", comfort_value, delta=comfort_delta)
-
-            di_available = di_series is not None and not getattr(di_series, "empty", True)
-            utci_available = utci_series is not None and not getattr(utci_series, "empty", True)
-
-            di_value = _fmt_hours(di_discomfort)
-            utci_value = _fmt_hours(utci_heat)
-            delta_cold = None if pd.isna(utci_cold) else f"Cold: {utci_cold:.0f} h"
-
-            mc2.metric("DI discomfort", di_value)
-            mc3.metric("UTCI heat stress", utci_value, delta=delta_cold)
-
-            if not di_available:
-                mc2.caption("Needs dry-bulb and relative humidity to compute DI.")
-            if not utci_available:
-                mc3.caption("Needs dry-bulb, relative humidity, and wind speed for UTCI.")
-
-            hot_display = []
-            for col in hot_cols[:2]:
-                thresh = col.replace("overheating_hours_", "").replace("C", "")
-                try:
-                    thresh_c = float(thresh)
-                except ValueError:
-                    thresh_c = float(focus_threshold)
-                hot_display.append((f"{format_threshold_label(thresh_c)} hours", latest.get(col, np.nan)))
-            if hot_display:
-                oc_cols = st.columns(len(hot_display))
-                for col_obj, (label, value) in zip(oc_cols, hot_display):
-                    col_obj.metric(label, _fmt_hours(value))
-            if cold_cols:
-                cc_cols = st.columns(min(len(cold_cols), 2))
-                for col_obj, col_name in zip(cc_cols, cold_cols[:2]):
-                    thresh = col_name.replace("cold_hours_below_", "").replace("C", "")
-                    try:
-                        thresh_c = float(thresh)
-                    except ValueError:
-                        thresh_c = 0.0
-                    col_obj.metric(f"{format_threshold_label(thresh_c, direction='<')} hours", _fmt_hours(latest.get(col_name, np.nan)))
-
-            if occupancy_mode != "24/7":
-                st.caption(f"Comfort metrics filtered to {occupancy_mode.lower()} hours.")
-            if comfort_mode != "Fixed 18–26 °C":
-                st.caption("Adaptive comfort band follows ASHRAE 55's running-mean method—great for naturally ventilated spaces.")
-            st.caption(
-                f"Focus threshold: tracking hours above {format_threshold_label(focus_threshold, direction='>')} per the Customize Analysis panel."
-            )
-
-            if loads_annual is not None and not loads_annual.empty:
-                loads_latest = loads_annual.iloc[-1]
-                l1, l2 = st.columns(2)
-                l1.metric(
-                    "Heating degree days",
-                    _fmt_value(loads_latest.get("heating_degree_days", np.nan)),
-                    delta=_fmt_value(loads_latest.get("heating_degree_hours", np.nan), " h")
-                )
-                l2.metric(
-                    "Cooling degree days",
-                    _fmt_value(loads_latest.get("cooling_degree_days", np.nan)),
-                    delta=_fmt_value(loads_latest.get("cooling_degree_hours", np.nan), " h")
-                )
-
-            if comfort_monthly is not None and not comfort_monthly.empty:
-                # Collapse multi-year monthly rows into one row per calendar month to avoid zig-zag lines
-                monthly = comfort_monthly.copy()
-                month_numbers = monthly.index.month
-
-                agg_spec = {}
-                for col in monthly.columns:
-                    if col.startswith("fraction_in_comfort_band"):
-                        agg_spec[col] = "mean"
-                    else:
-                        agg_spec[col] = "sum"
-
-                monthly_grouped = monthly.copy()
-                monthly_grouped["month_num"] = month_numbers
-                monthly_grouped = monthly_grouped.groupby("month_num").agg(agg_spec)
-                monthly_grouped = monthly_grouped.reindex(range(1, 13))
-
-                # Fill gaps for hour counts; keep comfort fraction as-is so missing months stay blank
-                for col in monthly_grouped.columns:
-                    if not col.startswith("fraction_in_comfort_band"):
-                        monthly_grouped[col] = monthly_grouped[col].fillna(0)
-
-                monthly_grouped.index = [pd.Timestamp(2001, int(m), 1).strftime("%b") for m in monthly_grouped.index]
-
-                fig_comfort = make_subplots(specs=[[{"secondary_y": True}]])
-                for idx, col_name in enumerate(hot_cols[:2]):
-                    thresh = col_name.replace("overheating_hours_", "").replace("C", "")
-                    try:
-                        thresh_c = float(thresh)
-                    except ValueError:
-                        thresh_c = float(focus_threshold)
-                    fig_comfort.add_bar(
-                        name=format_threshold_label(thresh_c),
-                        x=monthly_grouped.index,
-                        y=monthly_grouped.get(col_name, pd.Series(index=monthly_grouped.index)).fillna(0),
-                        marker_color="#fb923c" if idx == 0 else "#f97316",
-                        opacity=0.6 if idx == 1 else 0.8,
-                        secondary_y=False,
-                    )
-
-                if "hours_utci_heat_stress" in monthly_grouped:
-                    fig_comfort.add_bar(
-                        name="UTCI heat stress",
-                        x=monthly_grouped.index,
-                        y=monthly_grouped["hours_utci_heat_stress"].fillna(0),
-                        marker_color="#ef4444",
-                        opacity=0.5,
-                        secondary_y=False,
-                    )
-
-                if "fraction_in_comfort_band" in monthly_grouped:
-                    fig_comfort.add_scatter(
-                        name="Comfort %",
-                        x=monthly_grouped.index,
-                        y=(monthly_grouped["fraction_in_comfort_band"] * 100),
-                        mode="lines+markers",
-                        line=dict(color="#34d399", width=2.5),
-                        marker=dict(size=6),
-                        secondary_y=True,
-                    )
-
-                fig_comfort.update_layout(
-                    bargap=0.2,
-                    hovermode="x unified",
-                    margin=dict(l=0, r=0, t=30, b=0),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.12, xanchor="left", x=0),
-                )
-                fig_comfort.update_yaxes(title_text="Hours", secondary_y=False)
-                fig_comfort.update_yaxes(title_text="Comfort %", range=[0, 100], secondary_y=True)
-                st.plotly_chart(fig_comfort, use_container_width=True)
-
-            # Point-in-time probe: inspect weather and comfort metrics together at a chosen hour
-            with st.expander("Point-in-time probe", expanded=False):
-                if len(cdf.index):
-                    available_dates = sorted(pd.to_datetime(cdf.index.date).unique())
-                    default_date = available_dates[0]
-                    chosen_date = st.date_input(
-                        "Date",
-                        value=default_date,
-                        min_value=available_dates[0],
-                        max_value=available_dates[-1],
-                    )
-                    chosen_hour = st.slider("Hour (0–23)", 0, 23, 14)
-                    ts = pd.Timestamp(year=chosen_date.year, month=chosen_date.month, day=chosen_date.day, hour=int(chosen_hour))
-                    idx_tz = getattr(cdf.index, "tz", None)
-                    if idx_tz is not None:
-                        ts = ts.tz_localize(idx_tz, nonexistent="shift_forward", ambiguous="NaT")
-                    nearest_idx = cdf.index.get_indexer([ts], method="nearest")
-                    if nearest_idx[0] != -1:
-                        snap = cdf.iloc[nearest_idx[0]]
-                        snap_di = di_series.iloc[nearest_idx[0]] if di_series is not None and not getattr(di_series, "empty", True) else np.nan
-                        snap_utci = utci_series.iloc[nearest_idx[0]] if utci_series is not None and not getattr(utci_series, "empty", True) else np.nan
-                        snap_rows = [
-                            ("Dry-bulb (°C)", format_temperature(snap.get("drybulb"))),
-                            ("Rel humidity (%)", "—" if pd.isna(snap.get("relhum")) else f"{snap.get('relhum'):.0f} %"),
-                            ("Wind speed (m/s)", "—" if pd.isna(snap.get("windspd")) else f"{snap.get('windspd'):.1f}"),
-                            ("DI", "—" if pd.isna(snap_di) else f"{snap_di:.1f}"),
-                            ("UTCI (°C)", "—" if pd.isna(snap_utci) else f"{snap_utci:.1f}"),
-                            ("Heat index (°C)", "—" if heat_index_series is None or pd.isna(heat_index_series.iloc[nearest_idx[0]]) else f"{heat_index_series.iloc[nearest_idx[0]]:.1f}"),
-                            ("Humidex (°C)", "—" if humidex_series is None or pd.isna(humidex_series.iloc[nearest_idx[0]]) else f"{humidex_series.iloc[nearest_idx[0]]:.1f}"),
-                        ]
-                        snap_df = pd.DataFrame(snap_rows, columns=["Metric", "Value"]).set_index("Metric")
-                        st.table(snap_df)
-                    else:
-                        st.info("No data available for that selection.")
-
-            if percentiles_on and not comfort_annual.empty:
-                pct_cols = [c for c in latest.index if c.startswith("temp_p") or c.startswith("di_p") or c.startswith("utci_p")]
-                pct_series = latest[pct_cols].dropna()
-                hi_pct = None
-                hum_pct = None
-                if heat_index_series is not None and not heat_index_series.empty:
-                    hi_src = heat_index_series
-                    if occupancy_mask is not None:
-                        occ = occupancy_mask.reindex(hi_src.index).fillna(False)
-                        hi_src = hi_src.loc[occ]
-                    hi_pct = hi_src.quantile(0.95)
-                if humidex_series is not None and not humidex_series.empty:
-                    hum_src = humidex_series
-                    if occupancy_mask is not None:
-                        occ = occupancy_mask.reindex(hum_src.index).fillna(False)
-                        hum_src = hum_src.loc[occ]
-                    hum_pct = hum_src.quantile(0.95)
-                with st.expander("Percentile & feels-like diagnostics", expanded=False):
-                    if not pct_series.empty:
-                        st.write(pct_series.rename(lambda c: c.replace("_", " ")))
-                    hi_text = (
-                        f"Heat index 95th percentile: {format_temperature(hi_pct)}"
-                        if hi_pct is not None else "Heat index data unavailable."
-                    )
-                    hum_text = (
-                        f"Humidex 95th percentile: {format_temperature(hum_pct)}"
-                        if hum_pct is not None else "Humidex data unavailable."
-                    )
-                    st.caption(f"{hi_text}\n\n{hum_text}")
-
-    with diagnostics_tab:
-        st.markdown("### 📋 Data completeness (non-null coverage)")
-        st.caption("Quickly confirm which weather variables are fully populated and which ones have gaps before trusting downstream analytics.")
-        null_ct = cdf.isna().sum()
-        cov_pct = ((1 - null_ct / len(cdf)) * 100).round(1)
-
-        cov_df = (
-            pd.DataFrame({"Coverage %": cov_pct, "Missing": null_ct})
-            .sort_values("Coverage %", ascending=True)
-            .head(12)
-        )
-
-        if (cov_df["Coverage %"] == 100).all():
-            st.success("All shown columns are complete (100% coverage).")
-        st.dataframe(cov_df, use_container_width=True)
-
-        # Diagnostics tab: keep Data Quality content only (heatmaps moved to the Heatmaps tab)
-        st.caption("Data quality diagnostics shown above. Use the Heatmaps tab to explore annual diurnal resource heatmaps.")
-
-    # ========== HEATMAPS TAB CONTENT ==========
-    with heatmaps_tab:
+        # ========== HEATMAPS (moved from former Heatmaps tab) ==========
         st.divider()
         st.divider()
         
@@ -4134,20 +3778,368 @@ def render_dashboard_page():
                 else:
                     st.warning("Could not generate heatmap figure from available data.")
 
+    with comfort_tab:
+        st.markdown("### 😌 Thermal Comfort & Loads")
+        st.caption("Explore how often indoor comfort bands are met, where overheating or cold stress creep in, and how heating/cooling loads shift through the year.")
+        comfort_pkg = st.session_state.get("comfort_pkg", {}) or {}
+        comfort_annual_base = comfort_pkg.get("comfort_annual")
+        comfort_monthly_base = comfort_pkg.get("comfort_monthly")
+        loads_annual = comfort_pkg.get("loads_annual")
+        di_series = comfort_pkg.get("di")
+        utci_series = comfort_pkg.get("utci")
+        heat_index_series = comfort_pkg.get("heat_index")
+        humidex_series = comfort_pkg.get("humidex")
+        focus_threshold = int(st.session_state.get("custom_overheat_threshold", 30))
+        prefer_adaptive = bool(st.session_state.get("prefer_adaptive_comfort", False))
+
+        def _build_occupancy_mask(idx: pd.DatetimeIndex, mode: str) -> pd.Series:
+            if mode == "24/7":
+                return pd.Series(True, index=idx)
+            if mode == "Daytime (07-22)":
+                arr = (idx.hour >= 7) & (idx.hour < 22)
+                return pd.Series(arr, index=idx)
+            if mode == "Workday (Mon-Fri 9-17)":
+                arr = ((idx.dayofweek < 5) & (idx.hour >= 9) & (idx.hour < 17))
+                return pd.Series(arr, index=idx)
+            return pd.Series(True, index=idx)
+
+        with st.expander("⚙️ Comfort analysis settings", expanded=False):
+            comfort_mode = st.radio(
+                "Comfort band",
+                ["Fixed 18–26 °C", "Adaptive (ASHRAE 55)"],
+                index=1 if prefer_adaptive else 0,
+                horizontal=True,
+            )
+            adaptive_band = None
+            comfort_band = (18.0, 26.0)
+            if comfort_mode == "Fixed 18–26 °C":
+                comfort_band = st.slider(
+                    "Comfort temperature band (°C)",
+                    min_value=-10.0,
+                    max_value=40.0,
+                    value=(18.0, 26.0),
+                    step=0.5,
+                )
+            else:
+                if "drybulb" not in cdf.columns:
+                    st.warning("Adaptive comfort requires dry-bulb data; falling back to fixed band.")
+                else:
+                    acceptability = st.radio("Adaptive acceptability", ["80%", "90%"], horizontal=True)
+                    acc_value = 0.9 if acceptability == "90%" else 0.8
+                    adaptive_band = ce.build_adaptive_band(cdf["drybulb"], acceptability=acc_value)
+                    comfort_band = None
+
+            occupancy_mode = st.selectbox(
+                "Occupancy schedule",
+                ["24/7", "Daytime (07-22)", "Workday (Mon-Fri 9-17)"],
+                index=0,
+            )
+            occupancy_mask = None if occupancy_mode == "24/7" else _build_occupancy_mask(cdf.index, occupancy_mode)
+
+            hot_thresholds = st.multiselect(
+                "Overheating thresholds (°C)",
+                options=list(range(24, 41)),
+                default=[28, 30],
+                help="Counts hours above each selected dry-bulb threshold.",
+            )
+            if not hot_thresholds:
+                hot_thresholds = [28, 30]
+            if focus_threshold not in hot_thresholds:
+                hot_thresholds.append(focus_threshold)
+            hot_thresholds = sorted(set(int(th) for th in hot_thresholds))
+            cold_thresholds = st.multiselect(
+                "Cold stress thresholds (°C)",
+                options=list(range(-20, 11)),
+                default=[0],
+                help="Counts hours below each selected dry-bulb threshold.",
+            )
+            percentiles_on = st.checkbox("Show percentile diagnostics", value=True)
+
+        comfort_annual = comfort_annual_base
+        comfort_monthly = comfort_monthly_base
+        percentiles = (0.9, 0.95) if percentiles_on else None
+        try:
+            comfort_dyn_a = ce.summarize_comfort(
+                cdf,
+                di_series,
+                utci_series,
+                freq="YE",
+                comfort_band=comfort_band,
+                adaptive_band=adaptive_band,
+                overheating_thresholds=hot_thresholds,
+                cold_thresholds=cold_thresholds,
+                percentiles=percentiles,
+                occupancy_mask=occupancy_mask,
+            )
+            if comfort_dyn_a is not None and not comfort_dyn_a.empty:
+                comfort_annual = comfort_dyn_a
+        except Exception as e:
+            st.warning(f"comfort_annual failed: {e}")
+
+        try:
+            comfort_dyn_m = ce.summarize_comfort(
+                cdf,
+                di_series,
+                utci_series,
+                freq="ME",
+                comfort_band=comfort_band,
+                adaptive_band=adaptive_band,
+                overheating_thresholds=hot_thresholds,
+                cold_thresholds=cold_thresholds,
+                percentiles=percentiles,
+                occupancy_mask=occupancy_mask,
+            )
+            if comfort_dyn_m is not None and not comfort_dyn_m.empty:
+                comfort_monthly = comfort_dyn_m
+        except Exception as e:
+            st.warning(f"comfort_monthly failed: {e}")
+
+        def _fmt_hours(val: float) -> str:
+            return "—" if pd.isna(val) else f"{float(val):.0f} h"
+
+        def _fmt_value(val: float, suffix: str = "") -> str:
+            return "—" if pd.isna(val) else f"{float(val):.0f}{suffix}"
+
+        if comfort_annual is None or comfort_annual.empty:
+            st.info("Comfort insights unlock automatically when dry-bulb, humidity, and wind speed data are available.")
+        else:
+            latest = comfort_annual.iloc[-1]
+            comfort_pct = latest.get("fraction_in_comfort_band", np.nan)
+            comfort_hours = latest.get("hours_in_comfort_band", np.nan)
+            total_hours = latest.get("hours_total", np.nan)
+            di_discomfort = latest.get("hours_di_discomfort", np.nan)
+            utci_heat = latest.get("hours_utci_heat_stress", np.nan)
+            utci_cold = latest.get("hours_utci_cold_stress", np.nan)
+            hot_cols = sorted([c for c in latest.index if c.startswith("overheating_hours_")])
+            cold_cols = sorted([c for c in latest.index if c.startswith("cold_hours_below_")])
+            focus_col = f"overheating_hours_{focus_threshold}C"
+            if focus_col in hot_cols:
+                hot_cols.remove(focus_col)
+                hot_cols.insert(0, focus_col)
+
+            comfort_value = "—" if pd.isna(comfort_pct) else f"{comfort_pct * 100:.1f} %"
+            comfort_delta = None
+            if not pd.isna(comfort_hours) and not pd.isna(total_hours):
+                comfort_delta = f"{comfort_hours:.0f}/{total_hours:.0f} h"
+
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric("Comfort compliance", comfort_value, delta=comfort_delta)
+
+            di_available = di_series is not None and not getattr(di_series, "empty", True)
+            utci_available = utci_series is not None and not getattr(utci_series, "empty", True)
+
+            di_value = _fmt_hours(di_discomfort)
+            utci_value = _fmt_hours(utci_heat)
+            delta_cold = None if pd.isna(utci_cold) else f"Cold: {utci_cold:.0f} h"
+
+            mc2.metric("DI discomfort", di_value)
+            mc3.metric("UTCI heat stress", utci_value, delta=delta_cold)
+
+            if not di_available:
+                mc2.caption("Needs dry-bulb and relative humidity to compute DI.")
+            if not utci_available:
+                mc3.caption("Needs dry-bulb, relative humidity, and wind speed for UTCI.")
+
+            hot_display = []
+            for col in hot_cols[:2]:
+                thresh = col.replace("overheating_hours_", "").replace("C", "")
+                try:
+                    thresh_c = float(thresh)
+                except ValueError:
+                    thresh_c = float(focus_threshold)
+                hot_display.append((f"{format_threshold_label(thresh_c)} hours", latest.get(col, np.nan)))
+            if hot_display:
+                oc_cols = st.columns(len(hot_display))
+                for col_obj, (label, value) in zip(oc_cols, hot_display):
+                    col_obj.metric(label, _fmt_hours(value))
+            if cold_cols:
+                cc_cols = st.columns(min(len(cold_cols), 2))
+                for col_obj, col_name in zip(cc_cols, cold_cols[:2]):
+                    thresh = col_name.replace("cold_hours_below_", "").replace("C", "")
+                    try:
+                        thresh_c = float(thresh)
+                    except ValueError:
+                        thresh_c = 0.0
+                    col_obj.metric(f"{format_threshold_label(thresh_c, direction='<')} hours", _fmt_hours(latest.get(col_name, np.nan)))
+
+            if occupancy_mode != "24/7":
+                st.caption(f"Comfort metrics filtered to {occupancy_mode.lower()} hours.")
+            if comfort_mode != "Fixed 18–26 °C":
+                st.caption("Adaptive comfort band follows ASHRAE 55's running-mean method—great for naturally ventilated spaces.")
+            st.caption(
+                f"Focus threshold: tracking hours above {format_threshold_label(focus_threshold, direction='>')} per the Customize Analysis panel."
+            )
+
+            if loads_annual is not None and not loads_annual.empty:
+                loads_latest = loads_annual.iloc[-1]
+                l1, l2 = st.columns(2)
+                l1.metric(
+                    "Heating degree days",
+                    _fmt_value(loads_latest.get("heating_degree_days", np.nan)),
+                    delta=_fmt_value(loads_latest.get("heating_degree_hours", np.nan), " h")
+                )
+                l2.metric(
+                    "Cooling degree days",
+                    _fmt_value(loads_latest.get("cooling_degree_days", np.nan)),
+                    delta=_fmt_value(loads_latest.get("cooling_degree_hours", np.nan), " h")
+                )
+
+            if comfort_monthly is not None and not comfort_monthly.empty:
+                # Collapse multi-year monthly rows into one row per calendar month to avoid zig-zag lines
+                monthly = comfort_monthly.copy()
+                month_numbers = monthly.index.month
+
+                agg_spec = {}
+                for col in monthly.columns:
+                    if col.startswith("fraction_in_comfort_band"):
+                        agg_spec[col] = "mean"
+                    else:
+                        agg_spec[col] = "sum"
+
+                monthly_grouped = monthly.copy()
+                monthly_grouped["month_num"] = month_numbers
+                monthly_grouped = monthly_grouped.groupby("month_num").agg(agg_spec)
+                monthly_grouped = monthly_grouped.reindex(range(1, 13))
+
+                # Fill gaps for hour counts; keep comfort fraction as-is so missing months stay blank
+                for col in monthly_grouped.columns:
+                    if not col.startswith("fraction_in_comfort_band"):
+                        monthly_grouped[col] = monthly_grouped[col].fillna(0)
+
+                monthly_grouped.index = [pd.Timestamp(2001, int(m), 1).strftime("%b") for m in monthly_grouped.index]
+
+                fig_comfort = make_subplots(specs=[[{"secondary_y": True}]])
+                for idx, col_name in enumerate(hot_cols[:2]):
+                    thresh = col_name.replace("overheating_hours_", "").replace("C", "")
+                    try:
+                        thresh_c = float(thresh)
+                    except ValueError:
+                        thresh_c = float(focus_threshold)
+                    fig_comfort.add_bar(
+                        name=format_threshold_label(thresh_c),
+                        x=monthly_grouped.index,
+                        y=monthly_grouped.get(col_name, pd.Series(index=monthly_grouped.index)).fillna(0),
+                        marker_color="#fb923c" if idx == 0 else "#f97316",
+                        opacity=0.6 if idx == 1 else 0.8,
+                        secondary_y=False,
+                    )
+
+                if "hours_utci_heat_stress" in monthly_grouped:
+                    fig_comfort.add_bar(
+                        name="UTCI heat stress",
+                        x=monthly_grouped.index,
+                        y=monthly_grouped["hours_utci_heat_stress"].fillna(0),
+                        marker_color="#ef4444",
+                        opacity=0.5,
+                        secondary_y=False,
+                    )
+
+                if "fraction_in_comfort_band" in monthly_grouped:
+                    fig_comfort.add_scatter(
+                        name="Comfort %",
+                        x=monthly_grouped.index,
+                        y=(monthly_grouped["fraction_in_comfort_band"] * 100),
+                        mode="lines+markers",
+                        line=dict(color="#34d399", width=2.5),
+                        marker=dict(size=6),
+                        secondary_y=True,
+                    )
+
+                fig_comfort.update_layout(
+                    bargap=0.2,
+                    hovermode="x unified",
+                    margin=dict(l=0, r=0, t=30, b=0),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.12, xanchor="left", x=0),
+                )
+                fig_comfort.update_yaxes(title_text="Hours", secondary_y=False)
+                fig_comfort.update_yaxes(title_text="Comfort %", range=[0, 100], secondary_y=True)
+                st.plotly_chart(fig_comfort, use_container_width=True)
+
+            # Point-in-time probe: inspect weather and comfort metrics together at a chosen hour
+            with st.expander("Point-in-time probe", expanded=False):
+                if len(cdf.index):
+                    available_dates = sorted(pd.to_datetime(cdf.index.date).unique())
+                    default_date = available_dates[0]
+                    chosen_date = st.date_input(
+                        "Date",
+                        value=default_date,
+                        min_value=available_dates[0],
+                        max_value=available_dates[-1],
+                    )
+                    chosen_hour = st.slider("Hour (0–23)", 0, 23, 14)
+                    ts = pd.Timestamp(year=chosen_date.year, month=chosen_date.month, day=chosen_date.day, hour=int(chosen_hour))
+                    idx_tz = getattr(cdf.index, "tz", None)
+                    if idx_tz is not None:
+                        ts = ts.tz_localize(idx_tz, nonexistent="shift_forward", ambiguous="NaT")
+                    nearest_idx = cdf.index.get_indexer([ts], method="nearest")
+                    if nearest_idx[0] != -1:
+                        snap = cdf.iloc[nearest_idx[0]]
+                        snap_di = di_series.iloc[nearest_idx[0]] if di_series is not None and not getattr(di_series, "empty", True) else np.nan
+                        snap_utci = utci_series.iloc[nearest_idx[0]] if utci_series is not None and not getattr(utci_series, "empty", True) else np.nan
+                        snap_rows = [
+                            ("Dry-bulb (°C)", format_temperature(snap.get("drybulb"))),
+                            ("Rel humidity (%)", "—" if pd.isna(snap.get("relhum")) else f"{snap.get('relhum'):.0f} %"),
+                            ("Wind speed (m/s)", "—" if pd.isna(snap.get("windspd")) else f"{snap.get('windspd'):.1f}"),
+                            ("DI", "—" if pd.isna(snap_di) else f"{snap_di:.1f}"),
+                            ("UTCI (°C)", "—" if pd.isna(snap_utci) else f"{snap_utci:.1f}"),
+                            ("Heat index (°C)", "—" if heat_index_series is None or pd.isna(heat_index_series.iloc[nearest_idx[0]]) else f"{heat_index_series.iloc[nearest_idx[0]]:.1f}"),
+                            ("Humidex (°C)", "—" if humidex_series is None or pd.isna(humidex_series.iloc[nearest_idx[0]]) else f"{humidex_series.iloc[nearest_idx[0]]:.1f}"),
+                        ]
+                        snap_df = pd.DataFrame(snap_rows, columns=["Metric", "Value"]).set_index("Metric")
+                        st.table(snap_df)
+                    else:
+                        st.info("No data available for that selection.")
+
+            if percentiles_on and not comfort_annual.empty:
+                pct_cols = [c for c in latest.index if c.startswith("temp_p") or c.startswith("di_p") or c.startswith("utci_p")]
+                pct_series = latest[pct_cols].dropna()
+                hi_pct = None
+                hum_pct = None
+                if heat_index_series is not None and not heat_index_series.empty:
+                    hi_src = heat_index_series
+                    if occupancy_mask is not None:
+                        occ = occupancy_mask.reindex(hi_src.index).fillna(False)
+                        hi_src = hi_src.loc[occ]
+                    hi_pct = hi_src.quantile(0.95)
+                if humidex_series is not None and not humidex_series.empty:
+                    hum_src = humidex_series
+                    if occupancy_mask is not None:
+                        occ = occupancy_mask.reindex(hum_src.index).fillna(False)
+                        hum_src = hum_src.loc[occ]
+                    hum_pct = hum_src.quantile(0.95)
+                with st.expander("Percentile & feels-like diagnostics", expanded=False):
+                    if not pct_series.empty:
+                        st.write(pct_series.rename(lambda c: c.replace("_", " ")))
+                    hi_text = (
+                        f"Heat index 95th percentile: {format_temperature(hi_pct)}"
+                        if hi_pct is not None else "Heat index data unavailable."
+                    )
+                    hum_text = (
+                        f"Humidex 95th percentile: {format_temperature(hum_pct)}"
+                        if hum_pct is not None else "Humidex data unavailable."
+                    )
+                    st.caption(f"{hi_text}\n\n{hum_text}")
+
+        # ========== DI, UTCI, PMV (moved from separate tabs) ==========
+        st.divider()
+        st.markdown("### 🌡️ Discomfort Index (DI)")
+        render_di_page()
+
+        st.divider()
+        st.markdown("### 🥵 UTCI")
+        render_utci_page()
+
+        st.divider()
+        st.markdown("### 🏠 PMV")
+        render_pmv_page()
+
+
+
     with temp_hum_tab:
         render_trends_page()
         render_temperature_page()
         render_heatmap_page()
         render_humidity_page()
-        
-    with di_tab:
-        render_di_page()
-        
-    with utci_tab:
-        render_utci_page()
-        
-    with pmv_tab:
-        render_pmv_page()
         
     with solar_tab:
         render_solar_page()
@@ -4159,6 +4151,25 @@ def render_dashboard_page():
         render_wind_page()
         
     with raw_data_tab:
+        # ---- Data Quality (moved from former Data Quality tab) ----
+        st.markdown("### 📋 Data completeness (non-null coverage)")
+        st.caption("Quickly confirm which weather variables are fully populated and which ones have gaps before trusting downstream analytics.")
+        null_ct = cdf.isna().sum()
+        cov_pct = ((1 - null_ct / len(cdf)) * 100).round(1)
+
+        cov_df = (
+            pd.DataFrame({"Coverage %": cov_pct, "Missing": null_ct})
+            .sort_values("Coverage %", ascending=True)
+            .head(12)
+        )
+
+        if (cov_df["Coverage %"] == 100).all():
+            st.success("All shown columns are complete (100% coverage).")
+        st.dataframe(cov_df, use_container_width=True)
+        st.caption("Data quality diagnostics shown above.")
+        st.divider()
+
+        # ---- Raw data table ----
         render_raw_data_page()
 
 # ====================== TEMPERATURE & HUMIDITY (CLEAN) ======================
@@ -4703,8 +4714,8 @@ def render_trends_page():
         try:
             html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")
             st.download_button("📥 Download Trends (HTML)", html_bytes, f"{clean_loc}_trends_chart.html", "text/html")
-        except Exception:
-            pass
+        except Exception as e:
+            st.warning(f"Download Trends (HTML) failed: {e}")
 
 
 # ------------- GENERIC CHART HELPERS -------------
@@ -4752,7 +4763,8 @@ def _render_bar_chart(cdf, col, title_suffix, y_label, color, key_suffix):
     with d2:
         try:
             st.download_button(f"📥 Download {title_suffix} (HTML)", fig.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{clean_loc}_{col}_chart.html", "text/html", key=f"dl_{col}_html_{key_suffix}")
-        except Exception: pass
+        except Exception as e:
+            st.warning(f"Download {title_suffix} (HTML) failed: {e}")
 
 def _render_daily_scatter(cdf, col, title_suffix, y_label, line_color, key_suffix):
     import plotly.express as px
@@ -4810,7 +4822,8 @@ def _render_daily_scatter(cdf, col, title_suffix, y_label, line_color, key_suffi
     with d2:
         try:
             st.download_button(f"📥 Download {title_suffix} (HTML)", fig_sc.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{cname}_{col}_scatter.html", "text/html", key=f"dl_{col}_scat_html_{key_suffix}")
-        except Exception: pass
+        except Exception as e:
+            st.warning(f"Download {title_suffix} (HTML) failed: {e}")
 
 
 
@@ -4828,13 +4841,13 @@ _UTCI_BANDS = [
 ]
 
 _PMV_BANDS = [
-    (-100, -2.5, "Cold (< -3)", "#3559a6"),
-    (-2.5, -1.5, "Cool (-3 to -2)", "#4bb3d4"),
-    (-1.5, -0.5, "Slightly Cool (-2 to -1)", "#8fe0ee"),
-    (-0.5, 0.5, "Neutral (-1 to +1)", "#ffffff"),
-    (0.5, 1.5, "Slightly Warm (+1 to +2)", "#ffc080"),
-    (1.5, 2.5, "Warm (+2 to +3)", "#fc6554"),
-    (2.5, 100, "Hot (> +3)", "#d12229"),
+    (-100, -3.0, "Cold (< -3)", "#3559a6"),
+    (-3.0, -2.0, "Cool (-3 to -2)", "#4bb3d4"),
+    (-2.0, -1.0, "Slightly Cool (-2 to -1)", "#8fe0ee"),
+    (-1.0, 1.0, "Neutral (-1 to +1)", "#ffffff"),
+    (1.0, 2.0, "Slightly Warm (+1 to +2)", "#ffc080"),
+    (2.0, 3.0, "Warm (+2 to +3)", "#fc6554"),
+    (3.0, 100, "Hot (> +3)", "#d12229"),
 ]
 
 _DI_BANDS = [
@@ -4922,7 +4935,8 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
     with d2:
         try:
             st.download_button(f"📥 Download {title_suffix} (HTML)", fig.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{clean_loc}_{col}_{key_suffix}.html", "text/html", key=f"dl_{col}_{key_suffix}_html")
-        except Exception: pass
+        except Exception as e:
+            st.warning(f"Download {title_suffix} (HTML) failed: {e}")
 
 def _render_heatmap(cdf, col, title_suffix, y_label, color_scale):
     st.markdown("---")
@@ -4953,7 +4967,8 @@ def _render_heatmap(cdf, col, title_suffix, y_label, color_scale):
     with d2:
         try:
             st.download_button(f"📥 Download {title_suffix} (HTML)", fig_hm.to_html(include_plotlyjs="cdn").encode("utf-8"), f"{clean_loc}_{col}_heatmap.html", "text/html", key=f"dl_{col}_hm_html")
-        except Exception: pass
+        except Exception as e:
+            st.warning(f"Download {title_suffix} (HTML) failed: {e}")
 
 def render_temperature_page():
     cdf = st.session_state.get("cdf")
@@ -4995,6 +5010,12 @@ def render_utci_page():
     _render_categorical_heatmap(temp_df, "utci_index", "UTCI Annual Heatmap", _UTCI_BANDS, "utci")
 
 def render_pmv_page():
+    try:
+        import pythermalcomfort  # noqa
+    except ImportError:
+        st.error("PMV requires the `pythermalcomfort` package. Add it to requirements.txt and redeploy.")
+        return
+
     cdf = st.session_state.get("cdf")
     if cdf is None: return
     
@@ -5029,15 +5050,6 @@ def render_pmv_page():
     st.caption("PMV is a thermal comfort index that predicts the mean value of the thermal votes of a large group of people on a 7-point thermal sensation scale (-3 cold to +3 hot).")
         
     _render_categorical_heatmap(temp_df, "pmv_index", "PMV Annual Heatmap", _PMV_BANDS, "pmv")
-
-def render_pmv_page():
-    # ADD THESE LINES:
-    try:
-        import pythermalcomfort  # noqa
-    except ImportError:
-        st.error("PMV requires the `pythermalcomfort` package. Add it to requirements.txt and redeploy.")
-        return
-    # ... rest of function continues unchanged
 
 def render_di_page():
     cdf = st.session_state.get("cdf")
@@ -6814,7 +6826,7 @@ def render_solar_page():
 
     # (B) Solstice envelope (Jun 21 vs Dec 21)
     def _daily_arc(month, day):
-        tloc = pd.date_range(pd.Timestamp(year, month, day, tz=tz), periods=24, freq="1H")
+        tloc = pd.date_range(pd.Timestamp(year, month, day, tz=tz), periods=24, freq="1h")
         az, alt, _ = solar_pos(tloc.tz_convert("UTC"))
         m = alt > 0
         return (az[m], alt[m]) if m.any() else (np.array([]), np.array([]))
@@ -6864,7 +6876,7 @@ def render_solar_page():
             )
 
     # (D) Selected day (suns) with optional temperature colors & labels
-    idx_sel = pd.date_range(pd.Timestamp(sel_ts.date(), tz=tz), periods=24, freq="1H")
+    idx_sel = pd.date_range(pd.Timestamp(sel_ts.date(), tz=tz), periods=24, freq="1h")
     az_sel, alt_sel, _ = solar_pos(idx_sel.tz_convert("UTC"))
     m_sel = alt_sel > 0
     x_sel = az_sel[m_sel]; y_sel = alt_sel[m_sel]
@@ -6932,7 +6944,7 @@ def render_solar_page():
     # Hour labels (largest elevation per clock hour across whole year)
     if show_hour_labels:
         idx_loc = pd.date_range(pd.Timestamp(year,1,1,tz=tz),
-                                pd.Timestamp(year,12,31,23,tz=tz), freq="1H")
+                                pd.Timestamp(year,12,31,23,tz=tz), freq="1h")
         az_h, alt_h, _ = solar_pos(idx_loc.tz_convert("UTC"))
         mask = alt_h > 0
         if mask.any():
@@ -7504,14 +7516,14 @@ def render_psychrometrics_page():
             # Explicitly safe dimensions to prevent memory crash
             svg_bytes = fig_psy.to_image(format="svg", width=1200, height=900, scale=2)
             st.download_button("📥 Download Chart (SVG)", svg_bytes, f"{clean_loc}_psychrometric_chart.svg", "image/svg+xml", key="dl_psy_png")
-        except Exception:
-            pass
+        except Exception as e:
+            st.warning(f"Download Chart (SVG) failed: {e}")
     with d2:
         try:
             html_bytes = fig_psy.to_html(include_plotlyjs="cdn").encode("utf-8")
             st.download_button("📥 Download Chart (HTML)", html_bytes, f"{clean_loc}_psychrometric_chart.html", "text/html", key="dl_psy_html")
-        except Exception:
-            pass
+        except Exception as e:
+            st.warning(f"Download Chart (HTML) failed: {e}")
 
 
 def create_wind_rose(df):
@@ -7658,8 +7670,8 @@ def render_wind_page():
             try:
                 html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")
                 st.download_button("📥 Download Wind Rose (HTML)", html_bytes, f"{clean_loc}_wind_rose.html", "text/html")
-            except Exception:
-                pass
+            except Exception as e:
+                st.warning(f"Download Wind Rose (HTML) failed: {e}")
     else:
         st.warning("Not enough valid points to construct a Wind Rose.")
 
@@ -8280,7 +8292,7 @@ def render_live_data_page():
             
             # Select only numeric columns to prevent TypeError during aggregation
             work_num = work.select_dtypes(include=["number"])
-            resampled = work_num.resample("1H").mean()
+            resampled = work_num.resample("1h").mean()
             
             if numeric_cols:
                 valid_cols = [c for c in numeric_cols if c in resampled.columns]
@@ -8384,7 +8396,7 @@ def render_live_data_page():
                     temp.index = temp.index.map(lambda ts: safe_replace_year(ts, yr))
                     frames.append(temp)
                 aligned = pd.concat(frames).sort_index()
-                return aligned[(aligned.index >= start_ts.floor("H")) & (aligned.index <= end_ts.ceil("H"))]
+                return aligned[(aligned.index >= start_ts.floor("h")) & (aligned.index <= end_ts.ceil("h"))]
 
             def _plot_calendar_overlay(epw_col: str, sensor_col: str, title: str, units: str, y_range=None, thresholds: Optional[list] = None):
                 if not focus_month_only or sensor_start is None or sensor_end is None:
@@ -8627,8 +8639,8 @@ def render_live_data_page():
             else:
                 epw_slice, sensor_slice = epw_work, sensor_ts
 
-            epw_hot = {thr: int((epw_slice.set_index("timestamp")["T_db"] > thr).resample("1H").sum().sum()) for thr in [26, 28, 30]}
-            sensor_hot = {thr: int((sensor_slice.set_index("timestamp")["T_db"] > thr).resample("1H").sum().sum()) for thr in [26, 28, 30]}
+            epw_hot = {thr: int((epw_slice.set_index("timestamp")["T_db"] > thr).resample("1h").sum().sum()) for thr in [26, 28, 30]}
+            sensor_hot = {thr: int((sensor_slice.set_index("timestamp")["T_db"] > thr).resample("1h").sum().sum()) for thr in [26, 28, 30]}
 
             delta30 = sensor_hot[30] - epw_hot[30]
             st.caption(f"As shown above, your site experienced {delta30:+d} more hours above 30 °C than the climate baseline in the selected window.")
@@ -8840,9 +8852,8 @@ def render_sensor_comparison_page():
                     # If it's mostly unique and stepping by ~1, treat as index-like
                     if prop_unique > 0.9 and (near_one > 0.8 or np.isclose(median_step, 1.0, rtol=0.1)):
                         continue
-            except Exception:
-                # If anything goes wrong, fall back to including the column
-                pass
+            except Exception as e:
+                st.warning(f"Section failed: {e}")
 
             metric_cols.append(col)
 
