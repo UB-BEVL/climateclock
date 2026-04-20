@@ -304,19 +304,19 @@ if st.session_state.get("pdf_dashboard_autobuild_pending"):
 
 # Navigation definitions
 NAV_ITEMS = [
-    ("🛰️ Select weather file", "Select weather file"),
-    ("📊 Dashboard", "📊 Dashboard"),
-    ("📡 Live Data vs EPW", "📡 Live Data vs EPW"),
-    ("🧪 Sensor Comparison", "Sensor Comparison"),
-    ("🧭 Short-Term Prediction (24–72h)", "📈 Short-Term Prediction (24–72h)"),
-    ("🌍 Future Climate (2050 / 2080 SSP)", "🌍 Future Climate (2050 / 2080 SSP)"),
+    ("Select weather file", "Select weather file"),
+    ("Dashboard", "Dashboard"),
+    ("Live Data vs EPW", "Live Data vs EPW"),
+    ("Sensor Comparison", "Sensor Comparison"),
+    ("Short-Term Prediction (24–72h)", "Short-Term Prediction (24–72h)"),
+    ("Future Climate (2050 / 2080 SSP)", "Future Climate (2050 / 2080 SSP)"),
 ]
 
 FROZEN_NAV_LABELS = {
-    "🌍 Future Climate (2050 / 2080 SSP)",
+    "Future Climate (2050 / 2080 SSP)",
 }
 FROZEN_PAGES = {
-    "🌍 Future Climate (2050 / 2080 SSP)",
+    "Future Climate (2050 / 2080 SSP)",
 }
 
 LABEL_TO_PAGE = {label: page for label, page in NAV_ITEMS}
@@ -1568,7 +1568,8 @@ def run_controller(
                 out["active_page"] = "dashboard"
                 set_updates.update({
                     "_just_loaded_epw": True,
-                    "nav_page": "📊 Dashboard",
+                    "nav_page": "Dashboard",
+                    "sidebar_nav": "Dashboard",
                     "last_loaded_station_id": pending_station_id,
                     "pending_station_id": None,
                     "sel_station_url": None,
@@ -1607,7 +1608,8 @@ def run_controller(
             out["active_page"] = "dashboard"
             set_updates.update({
                 "_just_loaded_epw": True,
-                "nav_page": "📊 Dashboard",
+                "nav_page": "Dashboard",
+                "sidebar_nav": "Dashboard",
                 "_clear_map_on_next_run": True,
             })
             if not was_epw_ready:
@@ -1953,6 +1955,33 @@ SECONDARY_CSS = r'''
     .map-wrapper .js-plotly-plot { min-height: 440px !important; }
     .header-center .title { font-size: 1.5rem; }
 }
+
+/* Custom Sidebar Navigation Menu Styling (mimics clima.cbe) */
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
+    display: none !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label {
+    margin-bottom: 0.15rem !important; 
+    padding: 0.35rem 0.6rem !important; 
+    border-radius: 6px !important;
+    transition: all 0.2s ease !important;
+    opacity: 0.85;
+    display: block !important;
+    width: 100% !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    opacity: 1.0 !important;
+    border-left: 3px solid #3b82f6 !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) p {
+    font-weight: 600 !important;
+    color: #ffffff !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:hover:has(input:not(:checked)) {
+    background-color: rgba(255, 255, 255, 0.04) !important;
+    opacity: 1.0 !important;
+}
 </style>
 '''
 st.markdown(SECONDARY_CSS, unsafe_allow_html=True)
@@ -2082,8 +2111,7 @@ def render_landing_hero():
 
 
 def render_sidebar_filters(epw_loaded: bool) -> None:
-    st.markdown("### Filters and units")
-    with st.expander("Filters and units", expanded=False):
+    with st.expander("⚙️ Settings & Filters", expanded=False):
         st.caption("Refine the analysis sandbox. Settings persist for this session.")
         temp_unit = st.radio(
             "Temperature units",
@@ -2202,15 +2230,16 @@ def render_sidebar():
 
         st.markdown(
             f"""
-            <div style='text-align: center; margin-bottom: 1.5rem; padding: 0.9rem 0.75rem;'>
-                <div style='font-size: 2.1rem; margin-bottom: 0.35rem;'>&#127780;</div>
-                <p style='font-size: 1rem; font-weight: 700; color:#e2e8f0; margin-bottom: 0.15rem; letter-spacing: -0.01em;'>{loc_label}</p>
-                <p style='color: #c5cbd8; font-size: 0.9rem; font-weight: 500;'>Quick access tools</p>
+            <div style='display: flex; align-items: center; margin-bottom: 0.5rem; padding: 0.2rem;'>
+                <div style='font-size: 1.8rem; margin-right: 0.5rem;'>&#127780;</div>
+                <div>
+                    <h3 style='margin:0; font-size:1.05rem; padding:0; color:#e2e8f0; font-weight: 600;'>Climate Analysis Pro</h3>
+                    <p style='margin:0; font-size:0.8rem; color:#94a3b8; font-weight:500;'>{loc_label}</p>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-        st.divider()
 
         epw_loaded = bool(st.session_state.get("cdf") is not None and st.session_state.get("header"))
         current_page = st.session_state.get("nav_page", DEFAULT_PAGE)
@@ -2221,7 +2250,6 @@ def render_sidebar():
         st.session_state["nav_page"] = current_page
 
         nav_labels = [label for label, _ in NAV_ITEMS]
-        st.markdown("### Visualize weather file")
         
         # Determine the effective selection based on state
         current_label = PAGE_TO_LABEL.get(current_page, nav_labels[0])
@@ -2233,7 +2261,7 @@ def render_sidebar():
                 options=nav_labels,
                 index=default_index,
                 label_visibility="collapsed",
-                key="sidebar_nav",
+                key="nav_active",
             )
             st.markdown(
                 """
@@ -2254,95 +2282,87 @@ def render_sidebar():
             nav_choice = nav_labels[0]
             st.radio(
                 "Navigation",
-                options=[nav_choice],
+                options=nav_labels,
                 index=0,
                 label_visibility="collapsed",
-                key="sidebar_nav_locked",
+                key="nav_locked",
                 disabled=True
             )
-            locked_labels = nav_labels[1:]
-            if locked_labels:
-                st.markdown(
-                    "<div style='color:#5c6472; font-size:0.9rem;'>" +
-                    "<br>".join([f"• {lbl}" for lbl in locked_labels]) +
-                    "</div>",
-                    unsafe_allow_html=True,
-                )
             st.info("Load a station from the map or upload an EPW/ZIP to unlock the dashboard views.")
-        st.divider()
-        st.markdown("**📄 Export Report**")
-        
-        # Check if weather data is loaded
-        cdf = st.session_state.get("cdf")
-        header = st.session_state.get("header")
-        has_data = cdf is not None and header is not None
-        
-        if not has_data:
-            st.info("👈 Load a weather file first, then click Generate PDF.")
-        else:
-            st.caption("Generate directly from the Dashboard to export captured visualizations.")
-        
-        if st.button("Generate PDF", use_container_width=True, disabled=not has_data):
+        st.markdown("<br>", unsafe_allow_html=True)
+        with st.expander("📄 Export PDF Report", expanded=False):
+            # Check if weather data is loaded
+            cdf = st.session_state.get("cdf")
+            header = st.session_state.get("header")
+            has_data = cdf is not None and header is not None
+            
             if not has_data:
-                st.error("📭 No weather data loaded. Please select a location or upload an EPW file first.")
+                st.info("👈 Load a weather file first, then click Generate PDF.")
             else:
-                if st.session_state.get("nav_page") != "📊 Dashboard":
-                    st.error("Open the Dashboard page, then click Generate PDF.")
+                st.caption("Generate directly from the Dashboard to export captured visualizations.")
+            
+            if st.button("Generate PDF", use_container_width=True, disabled=not has_data):
+                if not has_data:
+                    st.error("📭 No weather data loaded. Please select a location or upload an EPW file first.")
                 else:
-                    figs_now = _merged_pdf_figures()
-                    if not figs_now:
-                        st.session_state["pdf_download_bytes"] = None
-                        st.session_state["pdf_download_name"] = None
-                        st.session_state["pdf_download_error"] = (
-                            "No Dashboard visualizations are captured yet. Visit Dashboard tabs once, then click Generate PDF."
-                        )
+                    if st.session_state.get("nav_page") != "Dashboard":
+                        st.error("Open the Dashboard page, then click Generate PDF.")
                     else:
-                        try:
-                            with st.spinner("Preparing PDF..."):
-                                pdf_bytes = build_climate_pdf()
-                            loc_name = _safe_location_label(st.session_state.get("header") or {})
-                            safe_name = str(loc_name).replace(" ", "_").replace(",", "")
-                            st.session_state["pdf_download_bytes"] = pdf_bytes
-                            st.session_state["pdf_download_name"] = f"{safe_name}_Report.pdf"
-                            st.session_state["pdf_download_error"] = None
-                        except Exception as exc:
+                        figs_now = _merged_pdf_figures()
+                        if not figs_now:
                             st.session_state["pdf_download_bytes"] = None
                             st.session_state["pdf_download_name"] = None
-                            st.session_state["pdf_download_error"] = f"PDF generation failed: {exc}"
+                            st.session_state["pdf_download_error"] = (
+                                "No Dashboard visualizations are captured yet. Visit Dashboard tabs once, then click Generate PDF."
+                            )
+                        else:
+                            try:
+                                with st.spinner("Preparing PDF..."):
+                                    pdf_bytes = build_climate_pdf()
+                                loc_name = _safe_location_label(st.session_state.get("header") or {})
+                                safe_name = str(loc_name).replace(" ", "_").replace(",", "")
+                                st.session_state["pdf_download_bytes"] = pdf_bytes
+                                st.session_state["pdf_download_name"] = f"{safe_name}_Report.pdf"
+                                st.session_state["pdf_download_error"] = None
+                            except Exception as exc:
+                                st.session_state["pdf_download_bytes"] = None
+                                st.session_state["pdf_download_name"] = None
+                                st.session_state["pdf_download_error"] = f"PDF generation failed: {exc}"
 
-        pdf_error = st.session_state.get("pdf_download_error")
-        pdf_bytes_ready = st.session_state.get("pdf_download_bytes")
-        pdf_name_ready = st.session_state.get("pdf_download_name")
-        if pdf_bytes_ready and pdf_name_ready:
-            st.download_button(
-                label="⬇️ Download PDF Report",
-                data=pdf_bytes_ready,
-                file_name=pdf_name_ready,
-                mime="application/octet-stream",
-                use_container_width=True,
-            )
+            pdf_error = st.session_state.get("pdf_download_error")
+            pdf_bytes_ready = st.session_state.get("pdf_download_bytes")
+            pdf_name_ready = st.session_state.get("pdf_download_name")
+            if pdf_bytes_ready and pdf_name_ready:
+                st.download_button(
+                    label="⬇️ Download PDF Report",
+                    data=pdf_bytes_ready,
+                    file_name=pdf_name_ready,
+                    mime="application/octet-stream",
+                    use_container_width=True,
+                )
 
-            fig_count = len(_merged_pdf_figures())
-            st.success(f"✓ PDF ready with {fig_count} visualization(s)")
-            with st.expander("Captured visualizations", expanded=False):
+                fig_count = len(_merged_pdf_figures())
+                st.success(f"✓ PDF ready with {fig_count} visualization(s)")
+                st.caption("Expand to see captured visualizations.")
                 for _title in _merged_pdf_figures().keys():
-                    st.write(f"• {_title}")
-        elif pdf_error:
-            st.button(
-                "⬇️ Download PDF Report",
-                use_container_width=True,
-                disabled=True,
-                key="pdf_download_disabled",
-            )
-            st.error(pdf_error)
-        elif has_data:
-            st.button(
-                "⬇️ Download PDF Report",
-                use_container_width=True,
-                disabled=True,
-                key="pdf_download_disabled",
-            )
-            st.caption("Click Generate PDF first. Download will appear here.")
+                    st.caption(f"• {_title}")
+            elif pdf_error:
+                st.button(
+                    "⬇️ Download PDF Report",
+                    use_container_width=True,
+                    disabled=True,
+                    key="pdf_download_disabled",
+                )
+                st.error(pdf_error)
+            elif has_data:
+                st.button(
+                    "⬇️ Download PDF Report",
+                    use_container_width=True,
+                    disabled=True,
+                    key="pdf_download_disabled",
+                )
+                st.caption("Click Generate PDF first. Download will appear here.")
+                
         # Update state based on selection
         frozen_hit = nav_choice in FROZEN_NAV_LABELS
         nav_choice_effective = nav_choice if not frozen_hit else current_label
@@ -2357,10 +2377,9 @@ def render_sidebar():
 
         render_sidebar_filters(epw_loaded)
 
-        st.divider()
-        st.markdown("### 🔧 Troubleshooting")
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        if st.button("Reset Session & Try Again"):
+        if st.button("🔄 Reset Session", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             _rerun()
@@ -10696,19 +10715,19 @@ def main():
     if effective_page == "Select weather file":
         render_select_station_page()
     
-    elif effective_page == "📊 Dashboard":
+    elif effective_page == "Dashboard":
         render_dashboard_page()
         
-    elif effective_page == "📡 Live Data vs EPW":
+    elif effective_page == "Live Data vs EPW":
         render_live_data_page()
         
     elif effective_page == "Sensor Comparison":
         render_sensor_comparison_page()
         
-    elif effective_page == "📈 Short-Term Prediction (24–72h)":
+    elif effective_page == "Short-Term Prediction (24–72h)":
         render_short_term_prediction_page()
         
-    elif effective_page == "🌍 Future Climate (2050 / 2080 SSP)":
+    elif effective_page == "Future Climate (2050 / 2080 SSP)":
         render_future_climate_page()
         
     else:
