@@ -7,7 +7,7 @@ import io, zipfile, csv, math, argparse, datetime, base64, hashlib
 from contextlib import nullcontext
 import requests
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Tuple, Optional, Union
+from typing import Any, Dict, Iterable, List, Tuple, Optional, Union
 import re
 # third-party
 import numpy as np
@@ -20,7 +20,14 @@ import plotly.io as pio
 from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-import pvlib
+try:
+    import pvlib
+    PVLIB_AVAILABLE = True
+    PVLIB_IMPORT_ERROR = None
+except Exception as _pvlib_import_exc:
+    pvlib = None  # type: ignore[assignment]
+    PVLIB_AVAILABLE = False
+    PVLIB_IMPORT_ERROR = _pvlib_import_exc
 # local modules
 from metrics import comfort_energy as ce
 import live_sensors as ls
@@ -29,6 +36,9 @@ import live_sensors as ls
 import platform as _platform
 
 import streamlit.runtime.scriptrunner as _sr
+# utils/pdf_exporter.py
+from fpdf import FPDF
+import tempfile
 
 
 _COMPASS_TO_DEG = {
@@ -63,25 +73,9 @@ if not hasattr(st, "fragment"):
                 return func
             return lambda f: f
         st.fragment = noop_fragment
-
-# Extra guard: re-wrap st.fragment so any SessionInfo crash is swallowed
-_real_fragment = st.fragment
-
-def _safe_fragment(func=None, *, run_every=None):
-    if not _session_is_ready():
-        if func is not None:
-            return func
-        return lambda f: f
-    try:
-        if func is not None:
-            return _real_fragment(func)
-        return _real_fragment(run_every=run_every)
-    except Exception:
-        if func is not None:
-            return func
-        return lambda f: f
-
-st.fragment = _safe_fragment
+elif hasattr(st, "experimental_fragment") and getattr(st.fragment, "__name__", "") == "_safe_fragment":
+    # Recover from older hot-reloaded sessions where st.fragment was monkey-patched.
+    st.fragment = st.experimental_fragment
 
 
 _orig_proc_get = getattr(getattr(_platform, "_Processor", None), "get", None)
@@ -292,6 +286,21 @@ st.session_state.setdefault("is_loading", False)
 st.session_state.setdefault("last_loaded_station_id", None)
 st.session_state.setdefault("_map_slot", None)
 st.session_state.setdefault("_clear_map_on_next_run", False)
+st.session_state.setdefault("pdf_capture_running", False)
+st.session_state.setdefault("pdf_capture_pages", [])
+st.session_state.setdefault("pdf_capture_index", 0)
+st.session_state.setdefault("pdf_capture_origin_page", "Select weather file")
+st.session_state.setdefault("pdf_download_bytes", None)
+st.session_state.setdefault("pdf_download_name", None)
+st.session_state.setdefault("pdf_download_error", None)
+st.session_state.setdefault("pdf_dashboard_autobuild_pending", False)
+st.session_state.setdefault("pdf_figures", {})
+st.session_state.setdefault("pdf_figures_auto", {})
+
+
+# Legacy cleanup: clear stale deferred-export flag from earlier sessions.
+if st.session_state.get("pdf_dashboard_autobuild_pending"):
+    st.session_state["pdf_dashboard_autobuild_pending"] = False
 
 # Navigation definitions
 NAV_ITEMS = [
@@ -422,36 +431,154 @@ def render_virtualized_table(
     key: str = "table",
     page_size: int = 50,
 ) -> None:
-    """Render a large dataframe using AgGrid pagination to avoid browser main-thread stalls.
+    """Render a large dataframe using Streamlit's native dataframe widget.
 
-    Falls back to st.dataframe if st-aggrid isn't installed.
+    Previously used AgGrid, but st_aggrid triggers a 'SessionInfo before
+    it was initialized' error on Streamlit >= 1.30.  The native widget
+    in Streamlit 1.40+ supports sorting and column resizing out of the box.
     """
-    try:
-        from st_aggrid import AgGrid, GridOptionsBuilder  # type: ignore
-    except Exception:
-        st.dataframe(df, use_container_width=True, height=height)
-        return
-
-    gb = GridOptionsBuilder.from_dataframe(df)
-    gb.configure_default_column(resizable=True, sortable=True, filter=True)
-    gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=int(page_size))
-    grid_options = gb.build()
-
-    AgGrid(
-        df,
-        gridOptions=grid_options,
-        height=int(height),
-        key=key,
-        enable_enterprise_modules=False,
-        allow_unsafe_jscode=False,
-        fit_columns_on_grid_load=True,
-    )
+    st.dataframe(df, use_container_width=True, height=height)
 
 # --- Streamlit compat shims ---
 if hasattr(st, "rerun"):
-    def _rerun(): st.rerun()
+    def _rerun():
+        if not _session_is_ready():
+            return
+        try:
+            st.rerun()
+        except Exception:
+            return
 else:
-    def _rerun(): st.experimental_rerun()
+    def _rerun():
+        if not _session_is_ready():
+            return
+        try:
+            st.experimental_rerun()
+        except Exception:
+            return
+
+
+def _capture_plotly_figure(fig_obj: Any) -> Any:
+    """Capture Plotly figures rendered in-app so PDF export can include all charts."""
+    if fig_obj is None:
+        return fig_obj
+
+    try:
+        fig = fig_obj if isinstance(fig_obj, go.Figure) else go.Figure(fig_obj)
+    except Exception:
+        return fig_obj
+
+    current_page = str(st.session_state.get("nav_page", "") or "").strip()
+    if current_page == "Select weather file":
+        return fig_obj
+
+    def _is_map_figure(fig_obj_local: go.Figure) -> bool:
+        map_trace_types = {
+            "scattermapbox", "choroplethmapbox", "densitymapbox", "scattergeo", "choropleth", "densitygeo"
+        }
+        for tr in getattr(fig_obj_local, "data", []) or []:
+            if str(getattr(tr, "type", "")).lower() in map_trace_types:
+                return True
+        return False
+
+    def _infer_title(fig_obj_local: go.Figure, store_local: Dict[str, Any]) -> str:
+        raw_title = ""
+        try:
+            raw_title = (fig_obj_local.layout.title.text or "").strip() if fig_obj_local.layout and fig_obj_local.layout.title else ""
+        except Exception:
+            raw_title = ""
+        if raw_title:
+            return raw_title
+
+        trace_types = [str(getattr(tr, "type", "")).lower() for tr in (getattr(fig_obj_local, "data", []) or [])]
+        first_type = trace_types[0] if trace_types else ""
+        if "heatmap" in first_type:
+            base = "Heatmap"
+        elif "histogram" in first_type:
+            base = "Histogram"
+        elif "bar" in first_type:
+            base = "Bar chart"
+        elif "scatter" in first_type:
+            base = "Scatter plot"
+        elif "surface" in first_type or "mesh3d" in first_type:
+            base = "3D chart"
+        elif first_type:
+            base = f"{first_type.title()} chart"
+        else:
+            base = "Chart"
+
+        used = {str(k).strip().lower() for k in store_local.keys()}
+        idx = 1
+        candidate = f"{base} {idx}"
+        while candidate.lower() in used:
+            idx += 1
+            candidate = f"{base} {idx}"
+        return candidate
+
+    store = st.session_state.get("pdf_figures_auto", {})
+    fingerprints = st.session_state.get("pdf_figure_fingerprints", set())
+
+    try:
+        fig_json = fig.to_json()
+    except Exception:
+        fig_json = ""
+
+    if fig_json and fig_json in fingerprints:
+        return fig
+
+    title = _infer_title(fig, store)
+    title_low = title.lower()
+    exclude_keywords = ["station", "location picker", "map picker", "select weather", "setup"]
+    if any(keyword in title_low for keyword in exclude_keywords) or _is_map_figure(fig):
+        return fig_obj
+
+    key = title
+    if key in store:
+        suffix = 2
+        while f"{title} ({suffix})" in store:
+            suffix += 1
+        key = f"{title} ({suffix})"
+
+    store[key] = fig
+    if fig_json:
+        fingerprints.add(fig_json)
+        
+    st.session_state["pdf_figures_auto"] = store
+    st.session_state["pdf_figure_fingerprints"] = fingerprints
+    return fig
+
+
+def _install_plotly_capture_hook() -> None:
+    """Monkey-patch st.plotly_chart once so all Plotly charts are captured for PDF export."""
+    if not hasattr(st, "_original_plotly_chart"):
+        setattr(st, "_original_plotly_chart", st.plotly_chart)
+
+    if getattr(st.plotly_chart, "__name__", "") == "_plotly_chart_with_capture":
+        return
+
+    original_plotly_chart = getattr(st, "_original_plotly_chart")
+
+    def _plotly_chart_with_capture(figure_or_data=None, *args, **kwargs):
+        # on_select charts are managed by Streamlit's event protocol; avoid wrapping them.
+        if kwargs.get("on_select"):
+            return original_plotly_chart(figure_or_data, *args, **kwargs)
+        fig_for_render = _capture_plotly_figure(figure_or_data)
+        return original_plotly_chart(fig_for_render, *args, **kwargs)
+
+    st.plotly_chart = _plotly_chart_with_capture
+
+
+def _restore_plotly_chart_if_hooked() -> None:
+    """Restore native Streamlit plotly renderer if a prior run monkey-patched it."""
+    original_plotly_chart = getattr(st, "_original_plotly_chart", None)
+    if original_plotly_chart is None:
+        return
+    if getattr(st.plotly_chart, "__name__", "") == "_plotly_chart_with_capture":
+        st.plotly_chart = original_plotly_chart
+
+
+# Guard against stale hot-reload state where plotly_chart remained monkey-patched.
+_restore_plotly_chart_if_hooked()
 
 
 def fix_station_url(url: str) -> List[str]:
@@ -992,6 +1119,10 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
     if cdf is None or cdf.empty:
         return package
 
+    def _log_comfort_warning(message: str) -> None:
+        # Avoid Streamlit UI calls inside cached functions.
+        print(f"[comfort-cache] {message}")
+
     di = None
     if {"drybulb", "relhum"}.issubset(cdf.columns):
         try:
@@ -999,7 +1130,7 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
             package["di"] = di
         except Exception as e:
             di = None
-            st.warning(f"DI failed: {e}")
+            _log_comfort_warning(f"DI failed: {e}")
 
     utci = None
     if {"drybulb", "relhum", "windspd"}.issubset(cdf.columns):
@@ -1009,7 +1140,7 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
             package["utci"] = utci
         except Exception as e:
             utci = None
-            st.warning(f"UTCI failed: {e}")
+            _log_comfort_warning(f"UTCI failed: {e}")
 
     pmv = None
     if {"drybulb", "relhum", "windspd"}.issubset(cdf.columns):
@@ -1018,7 +1149,7 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
             package["pmv"] = pmv
         except Exception as e:
             pmv = None
-            st.warning(f"PMV failed: {e}")
+            _log_comfort_warning(f"PMV failed: {e}")
 
     heat_index = None
     if {"drybulb", "relhum"}.issubset(cdf.columns):
@@ -1027,7 +1158,7 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
             package["heat_index"] = heat_index
         except Exception as e:
             heat_index = None
-            st.warning(f"Heat Index failed: {e}")
+            _log_comfort_warning(f"Heat Index failed: {e}")
 
     humidex = None
     if {"drybulb", "relhum"}.issubset(cdf.columns):
@@ -1036,22 +1167,22 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
             package["humidex"] = humidex
         except Exception as e:
             humidex = None
-            st.warning(f"Humidex failed: {e}")
+            _log_comfort_warning(f"Humidex failed: {e}")
 
     try:
         package["comfort_annual"] = ce.summarize_comfort(cdf, di, utci, freq="YE")
     except Exception as e:
-        st.warning(f"comfort_annual failed: {e}")
+        _log_comfort_warning(f"comfort_annual failed: {e}")
 
     try:
         package["comfort_monthly"] = ce.summarize_comfort(cdf, di, utci, freq="ME")
     except Exception as e:
-        st.warning(f"comfort_monthly failed: {e}")
+        _log_comfort_warning(f"comfort_monthly failed: {e}")
 
     try:
         package["degree_daily"] = ce.compute_degree_metrics(cdf, freq="D")
     except Exception as e:
-        st.warning(f"degree_daily failed: {e}")
+        _log_comfort_warning(f"degree_daily failed: {e}")
 
     try:
         deg_src = package["degree_daily"] if isinstance(package["degree_daily"], pd.DataFrame) else None
@@ -1059,7 +1190,7 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
             deg_src = ce.compute_degree_metrics(cdf)
         package["loads_annual"] = ce.summarize_loads(deg_src, freq="YE")
     except Exception as e:
-        st.warning(f"loads_annual failed: {e}")
+        _log_comfort_warning(f"loads_annual failed: {e}")
 
     return package
 
@@ -2138,16 +2269,91 @@ def render_sidebar():
                     unsafe_allow_html=True,
                 )
             st.info("Load a station from the map or upload an EPW/ZIP to unlock the dashboard views.")
+        st.divider()
+        st.markdown("**📄 Export Report**")
         
+        # Check if weather data is loaded
+        cdf = st.session_state.get("cdf")
+        header = st.session_state.get("header")
+        has_data = cdf is not None and header is not None
+        
+        if not has_data:
+            st.info("👈 Load a weather file first, then click Generate PDF.")
+        else:
+            st.caption("Generate directly from the Dashboard to export captured visualizations.")
+        
+        if st.button("Generate PDF", use_container_width=True, disabled=not has_data):
+            if not has_data:
+                st.error("📭 No weather data loaded. Please select a location or upload an EPW file first.")
+            else:
+                if st.session_state.get("nav_page") != "📊 Dashboard":
+                    st.error("Open the Dashboard page, then click Generate PDF.")
+                else:
+                    figs_now = _merged_pdf_figures()
+                    if not figs_now:
+                        st.session_state["pdf_download_bytes"] = None
+                        st.session_state["pdf_download_name"] = None
+                        st.session_state["pdf_download_error"] = (
+                            "No Dashboard visualizations are captured yet. Visit Dashboard tabs once, then click Generate PDF."
+                        )
+                    else:
+                        try:
+                            with st.spinner("Preparing PDF..."):
+                                pdf_bytes = build_climate_pdf()
+                            loc_name = _safe_location_label(st.session_state.get("header") or {})
+                            safe_name = str(loc_name).replace(" ", "_").replace(",", "")
+                            st.session_state["pdf_download_bytes"] = pdf_bytes
+                            st.session_state["pdf_download_name"] = f"{safe_name}_Report.pdf"
+                            st.session_state["pdf_download_error"] = None
+                        except Exception as exc:
+                            st.session_state["pdf_download_bytes"] = None
+                            st.session_state["pdf_download_name"] = None
+                            st.session_state["pdf_download_error"] = f"PDF generation failed: {exc}"
+
+        pdf_error = st.session_state.get("pdf_download_error")
+        pdf_bytes_ready = st.session_state.get("pdf_download_bytes")
+        pdf_name_ready = st.session_state.get("pdf_download_name")
+        if pdf_bytes_ready and pdf_name_ready:
+            st.download_button(
+                label="⬇️ Download PDF Report",
+                data=pdf_bytes_ready,
+                file_name=pdf_name_ready,
+                mime="application/octet-stream",
+                use_container_width=True,
+            )
+
+            fig_count = len(_merged_pdf_figures())
+            st.success(f"✓ PDF ready with {fig_count} visualization(s)")
+            with st.expander("Captured visualizations", expanded=False):
+                for _title in _merged_pdf_figures().keys():
+                    st.write(f"• {_title}")
+        elif pdf_error:
+            st.button(
+                "⬇️ Download PDF Report",
+                use_container_width=True,
+                disabled=True,
+                key="pdf_download_disabled",
+            )
+            st.error(pdf_error)
+        elif has_data:
+            st.button(
+                "⬇️ Download PDF Report",
+                use_container_width=True,
+                disabled=True,
+                key="pdf_download_disabled",
+            )
+            st.caption("Click Generate PDF first. Download will appear here.")
         # Update state based on selection
         frozen_hit = nav_choice in FROZEN_NAV_LABELS
         nav_choice_effective = nav_choice if not frozen_hit else current_label
         chosen_page = LABEL_TO_PAGE.get(nav_choice_effective, DEFAULT_PAGE)
         
-        # Only update if changed to avoid rerun loops? Streamlit handles this mostly.
+        # Keep navigation state in sync; no manual rerun needed because interactions already rerun.
         if st.session_state.get("nav_page") != chosen_page:
             st.session_state["nav_page"] = chosen_page
-            _rerun()
+
+        # Keep controller page mode aligned with navigation to avoid mixed-page state.
+        st.session_state["active_page"] = "select_station" if chosen_page == "Select weather file" else "dashboard"
 
         render_sidebar_filters(epw_loaded)
 
@@ -2186,6 +2392,11 @@ source_label = ss.get("source_label")
 
 def _stage_station_and_load(station_info: dict):
     """Stage station selection; controller performs the one-shot download+parse."""
+    if st.session_state.get("pdf_dashboard_autobuild_pending", False):
+        return
+    if st.session_state.get("nav_page") != "Select weather file":
+        return
+
     station_id = station_info.get("station_id") or station_info.get("raw_id") or station_info.get("name")
     if st.session_state.get("is_loading"):
         return
@@ -2294,33 +2505,51 @@ def _interactive_map_fragment() -> None:
     map_slot = st.empty()
     st.session_state["_map_slot"] = map_slot
     fig_map = _build_station_map_figure(stations, map_height)
+    pdf_pending = bool(st.session_state.get("pdf_dashboard_autobuild_pending", False))
+    on_select_page = st.session_state.get("nav_page") == "Select weather file"
 
-    # Use native st.plotly_chart with on_select instead of streamlit_plotly_events
-    # to avoid the "Tried to use SessionInfo before it was initialized" error.
+    # Interactive map when safe; static fallback during PDF generation.
+    event = None
     with map_slot.container():
-        event = st.plotly_chart(
-            fig_map,
-            use_container_width=True,
-            on_select="rerun",
-            key="station_map",
-        )
+        try:
+            if pdf_pending or not on_select_page:
+                map_key = "station_map_pdf_pending" if pdf_pending else "station_map_static_only"
+                st.plotly_chart(fig_map, use_container_width=True, key=map_key)
+                if pdf_pending:
+                    st.caption("Map click-to-load is paused while PDF generation is in progress.")
+                return
 
-    # Extract click selection from the native event object
+            event = st.plotly_chart(
+                fig_map,
+                use_container_width=True,
+                on_select="rerun",
+                selection_mode=("points",),
+                key="station_map_interactive",
+            )
+        except Exception:
+            st.plotly_chart(fig_map, use_container_width=True, key="station_map_static")
+            st.caption("Map click-to-load is temporarily unavailable. Use Station Search below to load a station.")
+            return
+
+    # Extract selected point index from Streamlit event payload.
     selected_points = []
     if event and hasattr(event, "selection") and event.selection:
         sel = event.selection
-        # st.plotly_chart on_select returns {"points": [...], ...}
         if hasattr(sel, "points"):
             selected_points = sel.points
-        elif isinstance(sel, dict) and "points" in sel:
-            selected_points = sel["points"]
+        elif isinstance(sel, dict):
+            selected_points = sel.get("points") or []
 
-    if selected_points and len(selected_points) > 0:
+    if selected_points:
         point = selected_points[0]
-        # Native API uses "point_index" (underscore) instead of "pointIndex" (camelCase)
-        idx = point.get("point_index") or point.get("pointIndex")
-        if idx is not None and 0 <= idx < len(stations):
-            row = stations.iloc[idx]
+        idx = point.get("point_index")
+        if idx is None:
+            idx = point.get("pointIndex")
+        if idx is None and isinstance(point.get("point_indices"), list) and point.get("point_indices"):
+            idx = point.get("point_indices")[0]
+
+        if idx is not None and 0 <= int(idx) < len(stations):
+            row = stations.iloc[int(idx)]
             station_info = {
                 "name": row.get("name", "Unknown"),
                 "country": row.get("country", "—"),
@@ -2723,6 +2952,14 @@ if raw_epw_bytes is None:
 
 def show_epw_status():
     if st.session_state.pop("_just_loaded_epw", False):
+        # New weather file loaded: clear prior PDF captures/download state.
+        st.session_state["pdf_figures"] = {}
+        st.session_state["pdf_figures_auto"] = {}
+        st.session_state["pdf_figure_fingerprints"] = set()
+        st.session_state["pdf_download_bytes"] = None
+        st.session_state["pdf_download_name"] = None
+        st.session_state["pdf_download_error"] = None
+
         header = st.session_state.get("header")
         df = st.session_state.get("df")
         epw_notes = st.session_state.get("_last_epw_notes")
@@ -3288,6 +3525,467 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
     
     return fig
 
+# ========== PDF REPORT EXPORT ==========
+class ClimateReportPDF(FPDF):
+    """Branded PDF report with clean, minimalist aesthetics inspired by true scientific journals."""
+
+    def __init__(self, location_label: str, source_label: str, generated_on: str):
+        super().__init__(orientation="P", unit="mm", format="A4")
+        self.location_label = location_label
+        self.source_label = source_label
+        self.generated_on = generated_on
+
+    def header(self):
+        # Skip header on cover page
+        if self.page_no() == 1:
+            return
+            
+        self.set_fill_color(255, 255, 255) # Pure white
+        self.rect(0, 0, 210, 297, "F")
+        
+        # Crisp minimal typography
+        self.set_font("Helvetica", "B", 10)
+        self.set_text_color(80, 80, 80) # Dark Gray
+        self.set_xy(15, 12)
+        self.cell(180, 5, self.location_label.upper(), ln=0, align="L")
+        
+        # Clean thin separator
+        self.set_draw_color(210, 210, 210) # Light grey
+        self.set_line_width(0.2)
+        self.line(15, 18, 195, 18)
+
+    def footer(self):
+        if self.page_no() == 1:
+            return
+            
+        self.set_y(-15)
+        # Separator line at bottom
+        self.set_draw_color(210, 210, 210)
+        self.line(15, 282, 195, 282)
+        
+        self.set_font("Helvetica", "I", 8)
+        self.set_text_color(160, 160, 160) # Light Gray
+        self.set_x(15)
+        self.cell(90, 4, f"Generated: {self.generated_on}", ln=0, align="L")
+        
+        self.set_font("Helvetica", "", 9)
+        self.set_text_color(120, 120, 120)
+        self.set_x(105)
+        self.cell(90, 4, f"Page {self.page_no()} of {{nb}}", ln=0, align="R")
+
+
+def _fig_to_tmp_png(fig, width: int = 1400, height: int = 730, scale: int = 2) -> str:
+    """Export a Plotly figure to a temporary PNG file and return its path."""
+    # Force pure, elegant styling
+    try:
+        import plotly.graph_objects as go
+        if isinstance(fig, go.Figure):
+            fig = go.Figure(fig)
+            fig.update_layout(
+                template="plotly_white",
+                paper_bgcolor="white",
+                plot_bgcolor="white",
+                font=dict(color="#222222", family="Helvetica, Arial, sans-serif"),
+                title=dict(font=dict(size=16, color="#111111")),
+                margin=dict(t=50, l=40, r=20, b=40),
+                showlegend=True,
+            )
+            fig.update_xaxes(
+                gridcolor="#f0f0f0", 
+                zerolinecolor="#e2e8f0", 
+                linecolor="#cbd5e1",
+                tickfont=dict(color="#64748b"), 
+                title_font=dict(color="#334155")
+            )
+            fig.update_yaxes(
+                gridcolor="#f0f0f0", 
+                zerolinecolor="#e2e8f0", 
+                linecolor="#cbd5e1",
+                tickfont=dict(color="#64748b"), 
+                title_font=dict(color="#334155")
+            )
+    except Exception:
+        pass
+
+    # Note: 1400x730 is selected for the 2-chart-per-page grid layout aspect ratio
+    img_bytes = pio.to_image(fig, format="png", width=width, height=height, scale=scale)
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    tmp.write(img_bytes)
+    tmp.close()
+    return tmp.name
+
+
+def _safe_location_label(header: dict) -> str:
+    loc = header.get("location", {}) if isinstance(header, dict) else {}
+    if isinstance(loc, dict):
+        city = loc.get("city") or loc.get("name") or "Unknown Location"
+        country = loc.get("country") or ""
+        return f"{city}, {country}".strip(", ")
+    if isinstance(loc, str) and loc.strip():
+        return loc.strip()
+    return "Unknown Location"
+
+
+def _location_meta(header: dict) -> Dict[str, str]:
+    """Return normalized location metadata for report cover/header."""
+    loc = header.get("location", {}) if isinstance(header, dict) else {}
+    city = "Unknown"
+    country = "Unknown"
+    lat = "--"
+    lon = "--"
+    tz = "--"
+    elev = "--"
+    wmo = "--"
+
+    if isinstance(loc, dict):
+        city = str(loc.get("city") or loc.get("name") or city)
+        country = str(loc.get("country") or country)
+        try:
+            if loc.get("latitude") is not None:
+                lat = f"{float(loc.get('latitude')):.3f}"
+            if loc.get("longitude") is not None:
+                lon = f"{float(loc.get('longitude')):.3f}"
+            if loc.get("elevation_m") is not None:
+                elev = f"{float(loc.get('elevation_m')):.0f} m"
+        except Exception:
+            pass
+        if loc.get("timezone") is not None:
+            tz = str(loc.get("timezone"))
+        if loc.get("wmo") is not None:
+            wmo = str(loc.get("wmo"))
+
+    return {
+        "city": city,
+        "country": country,
+        "lat": lat,
+        "lon": lon,
+        "tz": tz,
+        "elev": elev,
+        "wmo": wmo,
+    }
+
+
+def _normalized_pdf_figures(figs: dict) -> Dict[str, object]:
+    """Normalize figure keys so naming whitespace/typos do not skip charts."""
+    if not isinstance(figs, dict):
+        return {}
+    out: Dict[str, object] = {}
+    for raw_key, fig in figs.items():
+        key = str(raw_key).strip()
+        if key:
+            out[key] = fig
+    return out
+
+
+def _section_tag(title: str) -> str:
+    low = title.lower()
+    if "sun" in low or "solar" in low or "irradiance" in low or "insolation" in low or "cloud" in low:
+        return "Solar & Sky Analysis"
+    if "wind" in low:
+        return "Wind Data"
+    if "psych" in low:
+        return "Psychrometrics"
+    if "comfort" in low or "load" in low or "pmv" in low or "utci" in low:
+        return "Thermal Comfort"
+    if "humid" in low or "drybulb" in low or "temp" in low:
+        return "Temperature & Humidity"
+    return "Overview Metadata"
+
+
+def _add_manual_pdf_figure(key: str, fig: object) -> None:
+    store = st.session_state.get("pdf_figures", {})
+    store[key] = fig
+    st.session_state["pdf_figures"] = store
+
+
+def _merged_pdf_figures() -> Dict[str, object]:
+    """Return collected Plotly figures, perfectly deduplicated."""
+    manual_figs = _normalized_pdf_figures(st.session_state.get("pdf_figures", {}))
+    auto_figs = _normalized_pdf_figures(st.session_state.get("pdf_figures_auto", {}))
+
+    def _is_map_figure(fig_obj: object) -> bool:
+        map_trace_types = {
+            "scattermapbox", "choroplethmapbox", "densitymapbox", "scattergeo", "choropleth", "densitygeo"
+        }
+        for tr in getattr(fig_obj, "data", []) or []:
+            if str(getattr(tr, "type", "")).lower() in map_trace_types:
+                return True
+        return False
+
+    def _fallback_title(fig_obj: object) -> str:
+        trace_types = [str(getattr(tr, "type", "")).lower() for tr in (getattr(fig_obj, "data", []) or [])]
+        first_type = trace_types[0] if trace_types else ""
+        if "heatmap" in first_type: return "Heatmap"
+        if "histogram" in first_type: return "Histogram"
+        if "bar" in first_type: return "Bar chart"
+        if "scatter" in first_type: return "Scatter plot"
+        if "surface" in first_type or "mesh3d" in first_type: return "3D chart"
+        return f"{first_type.title()} chart" if first_type else "Chart"
+
+    filtered: Dict[str, object] = {}
+    seen_fingerprints = set()
+
+    # Manual figs takes precedence (they provide better titles)
+    for source in (manual_figs, auto_figs):
+        for title, fig in source.items():
+            if _is_map_figure(fig):
+                continue
+            
+            # Smart deduplication by JSON fingerprint
+            try:
+                j = fig.to_json()
+                if j in seen_fingerprints:
+                    continue
+                seen_fingerprints.add(j)
+            except Exception:
+                pass
+
+            clean_title = str(title).strip()
+            if clean_title.lower().startswith("visualization"):
+                clean_title = _fallback_title(fig)
+
+            unique_title = clean_title
+            suffix = 2
+            while unique_title in filtered:
+                unique_title = f"{clean_title} ({suffix})"
+                suffix += 1
+            filtered[unique_title] = fig
+
+    return filtered
+
+
+def _request_dashboard_pdf_build() -> None:
+    """Request a dashboard-only PDF build on the next dashboard render pass."""
+    st.session_state["pdf_dashboard_autobuild_pending"] = True
+    st.session_state["pdf_download_bytes"] = None
+    st.session_state["pdf_download_name"] = None
+    st.session_state["pdf_download_error"] = None
+    st.session_state["pdf_capture_origin_page"] = st.session_state.get("nav_page", DEFAULT_PAGE)
+
+    # Fresh capture per export click.
+    st.session_state["pdf_figures"] = {}
+    st.session_state["pdf_figures_auto"] = {}
+    st.session_state["pdf_figure_fingerprints"] = set()
+
+
+def _finalize_dashboard_pdf_if_pending(effective_page: str) -> None:
+    """Build PDF once dashboard tabs are rendered in the normal app flow.
+    
+    Does NOT call _rerun() to avoid SessionInfo protocol violation.
+    Download button will appear after state is set on next interaction.
+    """
+    if not st.session_state.get("pdf_dashboard_autobuild_pending", False):
+        return
+    if effective_page != "📊 Dashboard":
+        return
+
+    figs = _merged_pdf_figures()
+    if not figs:
+        st.session_state["pdf_download_bytes"] = None
+        st.session_state["pdf_download_name"] = None
+        st.session_state["pdf_download_error"] = "No dashboard visualizations were captured."
+        st.session_state["pdf_dashboard_autobuild_pending"] = False
+        return
+
+    try:
+        pdf_bytes = build_climate_pdf()
+        loc_name = _safe_location_label(st.session_state.get("header") or {})
+        safe_name = str(loc_name).replace(" ", "_").replace(",", "")
+
+        st.session_state["pdf_download_bytes"] = pdf_bytes
+        st.session_state["pdf_download_name"] = f"{safe_name}_Report.pdf"
+        st.session_state["pdf_download_error"] = None
+    except Exception as exc:
+        st.session_state["pdf_download_bytes"] = None
+        st.session_state["pdf_download_name"] = None
+        st.session_state["pdf_download_error"] = f"PDF generation failed: {exc}"
+    st.session_state["pdf_dashboard_autobuild_pending"] = False
+
+
+def _render_all_visualizations_silently() -> None:
+    """Placeholder - rendering all pages from sidebar causes SessionInfo errors.
+    
+    Instead, users navigate naturally through tabs which auto-captures everything.
+    This maintains Streamlit's session protocol integrity.
+    """
+    pass
+
+
+def build_climate_pdf() -> bytes:
+    def _cpt(t: str) -> str:
+        s = str(t).replace("—", "-").replace("–", "-").replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'").replace("°", " deg ")
+        return s.encode("latin-1", "replace").decode("latin-1")
+
+    header = st.session_state.get("header", {})
+    location_label = _cpt(_safe_location_label(header))
+    
+    loc_meta = {}
+    for k, v in _location_meta(header).items():
+        loc_meta[k] = _cpt(v)
+        
+    source = _cpt(st.session_state.get("source_label", "EPW File"))
+    figs = _merged_pdf_figures()
+    generated_on = _cpt(datetime.date.today().strftime("%B %d, %Y"))
+
+    pdf = ClimateReportPDF(location_label=location_label, source_label=source, generated_on=generated_on)
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_margins(15, 15, 15)
+
+    # Content pages in preferred order
+    section_order = [
+        "drybulb Monthly Bar", "drybulb Hourly Dot Plot", "drybulb Annual Heatmap",
+        "relhum Monthly Bar", "relhum Hourly Dot Plot", "relhum Annual Heatmap",
+        "Annual Diurnal Resource Heatmap",
+        "Monthly Solar Insolation", "Solar Daily Scatter", "Irradiance Heatmap", "Solar Annual Heatmap",
+        "Cloud Coverage",
+        "Comfort Loads",
+        "Sun Path 2D", "Sun Path 3D", "Sun Path Cartesian",
+        "Drybulb Temperature Matrix",
+    ]
+
+    # Add any remaining figures not in the explicit order.
+    for key in figs:
+        if key not in section_order:
+            section_order.append(key)
+
+    # Keep only sections that have available figures.
+    available_titles = [title for title in section_order if title in figs]
+
+    # === 1. PREMIUM WHITE ARCHITECTURAL COVER PAGE ===
+    pdf.add_page()
+    pdf.set_fill_color(255, 255, 255)
+    pdf.rect(0, 0, 210, 297, "F")
+    
+    # Sharp clean branding
+    pdf.set_text_color(15, 15, 15)
+    pdf.set_font("Helvetica", "B", 38)
+    pdf.set_xy(15, 60)
+    pdf.cell(170, 14, "CLIMATE ANALYSIS", ln=1)
+    
+    pdf.set_font("Helvetica", "", 18)
+    pdf.set_text_color(120, 120, 120)
+    pdf.set_xy(15, 76)
+    pdf.cell(170, 10, "ARCHITECTURAL DATABOOK", ln=1)
+    
+    # Very thin separation line
+    pdf.set_draw_color(200, 200, 200)
+    pdf.set_line_width(0.3)
+    pdf.line(15, 95, 195, 95)
+    
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(60, 60, 60)
+    pdf.set_xy(15, 105)
+    pdf.multi_cell(180, 7, location_label.upper())
+    
+    # Metadata grid configuration
+    y_pos = 145
+    meta_items = [
+        ("Data Source", source[:80]),
+        ("Format", "TMYx / EPW File"),
+        ("WMO Station", loc_meta["wmo"]),
+        ("Coordinates", f"{loc_meta['lat']} deg N,  {loc_meta['lon']} deg E"),
+        ("Elevation", loc_meta["elev"]),
+        ("Timezone", loc_meta["tz"])
+    ]
+    
+    for label, val in meta_items:
+        pdf.set_xy(15, y_pos)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(130, 130, 130)
+        pdf.cell(40, 7, label.upper(), ln=0)
+        
+        pdf.set_font("Helvetica", "", 11)
+        pdf.set_text_color(40, 40, 40)
+        pdf.cell(140, 7, str(val), ln=1)
+        y_pos += 9
+        
+    pdf.set_xy(15, 270)
+    pdf.set_text_color(160, 160, 160)
+    pdf.set_font("Helvetica", "I", 9)
+    pdf.cell(170, 5, "Generated by Climate Analysis Pro", ln=1)
+
+
+    # === 2. FIGURE RENDER LOOP WITH MINIMALIST GRID ENGINE ===
+    from collections import defaultdict
+    sections = defaultdict(list)
+    for title in available_titles:
+        tag = _section_tag(title)
+        sections[tag].append(title)
+        
+    known_section_groups = ["Temperature & Humidity", "Solar & Sky Analysis", "Wind Data", "Psychrometrics", "Thermal Comfort", "Overview Metadata"]
+    ordered_sections = []
+    for ks in known_section_groups:
+        if ks in sections:
+            ordered_sections.append((ks, sections[ks]))
+    for s, titles in sections.items():
+        if s not in known_section_groups:
+            ordered_sections.append((s, titles))
+
+    temp_images: List[str] = []
+    
+    for section_name, figure_titles in ordered_sections:
+        pdf.add_page()
+        
+        # Pristine section header
+        pdf.set_font("Helvetica", "B", 18)
+        pdf.set_text_color(40, 40, 40)
+        pdf.set_xy(15, 23)
+        pdf.cell(180, 8, section_name.upper(), ln=1, align="L")
+        
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(140, 140, 140)
+        pdf.set_xy(15, 31)
+        pdf.cell(180, 6, f"Section Contains {len(figure_titles)} Visualizations", ln=1, align="L")
+        
+        pdf.set_draw_color(220, 220, 220)
+        pdf.set_line_width(0.3)
+        pdf.line(15, 38, 195, 38)
+        
+        y_positions = [46, 160]
+        
+        for idx, title in enumerate(figure_titles):
+            if idx > 0 and idx % 2 == 0:
+                pdf.add_page()
+                
+            y_pos = y_positions[idx % 2]
+            
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_text_color(60, 60, 60)
+            pdf.set_xy(15, y_pos)
+            pdf.cell(180, 6, _cpt(title).upper(), ln=1)
+            
+            fig = figs.get(title)
+            try:
+                img_path = _fig_to_tmp_png(fig, width=1400, height=730, scale=2)
+                temp_images.append(img_path)
+            except Exception as exc:
+                img_path = None
+                
+            if img_path:
+                pdf.image(img_path, x=15, y=y_pos + 7, w=180)
+            else:
+                pdf.set_fill_color(245, 245, 245)
+                pdf.rect(15, y_pos + 7, 180, 93, "F")
+                pdf.set_xy(20, y_pos + 50)
+                pdf.set_font("Helvetica", "I", 10)
+                pdf.set_text_color(150, 150, 150)
+                pdf.cell(170, 6, "Visualization rendering unavailable.", ln=1)
+
+    out = pdf.output(dest="S")
+
+    # Ensure temp chart images are cleaned up.
+    for p in temp_images:
+        try:
+            os.remove(p)
+        except Exception:
+            pass
+
+    if isinstance(out, (bytes, bytearray)):
+        return bytes(out)
+    return str(out).encode("latin-1", errors="replace")
+
+
 
 # ========== MAIN TABS WITH IMPROVED ORGANIZATION ==========
 def render_dashboard_page():
@@ -3317,32 +4015,7 @@ def render_dashboard_page():
         "Raw Data",
     ])
 
-    # ---- Tab persistence: auto-click the last active tab on rerun (fixes fullscreen exit) ----
-    st.markdown("""
-    <script>
-    (function() {
-        const KEY = 'bevl_dashboard_tab';
-        // Restore stored tab on page load
-        function restoreTab() {
-            const idx = sessionStorage.getItem(KEY);
-            if (idx !== null && idx !== '0') {
-                const tabs = parent.document.querySelectorAll('button[data-baseweb="tab"]');
-                if (tabs && tabs.length > parseInt(idx)) {
-                    tabs[parseInt(idx)].click();
-                }
-            }
-        }
-        // Listen for tab clicks and store the index
-        function attachListeners() {
-            const tabs = parent.document.querySelectorAll('button[data-baseweb="tab"]');
-            tabs.forEach((tab, i) => {
-                tab.addEventListener('click', () => sessionStorage.setItem(KEY, i));
-            });
-        }
-        setTimeout(() => { attachListeners(); restoreTab(); }, 500);
-    })();
-    </script>
-    """, unsafe_allow_html=True)
+    # Avoid custom JS-driven tab auto-clicks; they can race Streamlit session init.
 
     with overview_tab:
         st.markdown("### 📊 Climate Overview")
@@ -3724,7 +4397,7 @@ def render_dashboard_page():
                 fig = build_diurnal_heatmap_figure(heatmap_dict, cdf, header)
                 if fig:
                     st.plotly_chart(fig, use_container_width=False, config={"responsive": False})
-
+                    _add_manual_pdf_figure("Annual Diurnal Resource Heatmap", fig)
                     # Downloads reflecting current thresholds
                     city_clean = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
                     clean_loc = city_clean
@@ -4054,7 +4727,7 @@ def render_dashboard_page():
                 fig_comfort.update_yaxes(title_text="Hours", secondary_y=False)
                 fig_comfort.update_yaxes(title_text="Comfort %", range=[0, 100], secondary_y=True)
                 st.plotly_chart(fig_comfort, use_container_width=True)
-
+                _add_manual_pdf_figure("Comfort Loads", fig_comfort)
             # Point-in-time probe: inspect weather and comfort metrics together at a chosen hour
             with st.expander("Point-in-time probe", expanded=False):
                 if len(cdf.index):
@@ -4700,7 +5373,7 @@ def render_trends_page():
 
 
     st.plotly_chart(fig, use_container_width=True)
-
+    _add_manual_pdf_figure("Annual Climate Statistics", fig)
     # Download buttons for Trends
     d1, d2 = st.columns(2)
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
@@ -4752,7 +5425,7 @@ def _render_bar_chart(cdf, col, title_suffix, y_label, color, key_suffix):
         bargap=0.15
     )
     st.plotly_chart(fig, use_container_width=True)
-    
+    _add_manual_pdf_figure(f"{col} Monthly Bar", fig)
     d1, d2 = st.columns(2)
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
     with d1:
@@ -4812,7 +5485,7 @@ def _render_daily_scatter(cdf, col, title_suffix, y_label, line_color, key_suffi
     fig_sc.update_layout(legend=dict(orientation="h", x=0, xanchor="left", y=1.08, yanchor="bottom"), margin=dict(t=105, b=70, l=50, r=30))
     cname = get_clean_city_name().replace(" ", "_")
     st.plotly_chart(fig_sc, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_{col}_scatter", "format": "png", "scale": 2}, "displayModeBar": True})
-
+    _add_manual_pdf_figure(f"{col} Hourly Dot Plot", fig_sc)
     d1, d2 = st.columns(2)
     with d1:
         try:
@@ -4926,6 +5599,7 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
     fig.update_layout(height=450, margin=dict(t=30, b=40, l=50, r=20), legend=dict(y=1, yanchor="top", x=1.02, xanchor="left", traceorder="reversed"), plot_bgcolor="#ffffff")
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
     st.plotly_chart(fig, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{clean_loc}_{col}_{key_suffix}", "format": "png"}, "displayModeBar": True})
+    _add_manual_pdf_figure(f"{col} Annual Heatmap", fig)
     d1, d2 = st.columns(2)
     with d1:
         try:
@@ -4956,7 +5630,7 @@ def _render_heatmap(cdf, col, title_suffix, y_label, color_scale):
     )
     fig_hm.update_xaxes(side="bottom")
     st.plotly_chart(fig_hm, use_container_width=True)
-
+    _add_manual_pdf_figure(f"{col} Annual Heatmap", fig_hm)
     d1, d2 = st.columns(2)
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
     with d1:
@@ -5139,6 +5813,100 @@ class Options3D:
 def render_solar_page():
     effective_page = st.session_state.get("nav_page")
     # Solar page logic handled self-contained data loading if needed, or uses session state
+    if not PVLIB_AVAILABLE:
+        st.warning(
+            "Solar analysis is unavailable because pvlib dependencies could not be loaded on this machine. "
+            "Windows Application Control appears to be blocking an h5py DLL."
+        )
+        if PVLIB_IMPORT_ERROR is not None:
+            st.caption(f"Import detail: {type(PVLIB_IMPORT_ERROR).__name__}: {PVLIB_IMPORT_ERROR}")
+        st.info(
+            "You can still use the rest of the dashboard. To re-enable solar features, allow the blocked DLL "
+            "or run in a Python environment where pvlib+h5py can load successfully."
+        )
+
+        # Fallback: render EPW-native solar/cloud charts that do not depend on pvlib.
+        cdf = st.session_state.get("cdf")
+        if cdf is None or cdf.empty:
+            return
+
+        location_label = get_clean_city_name()
+        st.markdown(f"<h3>{location_label} – Solar Analysis (Fallback)</h3>", unsafe_allow_html=True)
+        st.caption("Showing irradiance and cloud plots that do not require pvlib.")
+
+        _ghi_col = get_metric_column(cdf, ["glohorrad", "ghi", "global_horizontal", "global_horiz", "solar", "radiation"])
+        _dhi_col = get_metric_column(cdf, ["difhorrad", "dhi", "diffuse_horizontal", "dif_hor_rad"])
+        _dni_col = get_metric_column(cdf, ["dirnorrad", "dni", "direct_normal", "dir_nor_rad"])
+
+        if _ghi_col or _dhi_col or _dni_col:
+            fig_solar = go.Figure()
+            if _ghi_col:
+                s = pd.to_numeric(cdf[_ghi_col], errors="coerce").dropna()
+                if not s.empty:
+                    d = pd.DataFrame({"doy": s.index.dayofyear, "val": s.values}).groupby("doy")["val"].mean()
+                    fig_solar.add_trace(go.Scatter(x=d.index, y=d.values, mode="lines", name="GHI", line=dict(color="#fbbf24", width=2)))
+            if _dni_col:
+                s = pd.to_numeric(cdf[_dni_col], errors="coerce").dropna()
+                if not s.empty:
+                    d = pd.DataFrame({"doy": s.index.dayofyear, "val": s.values}).groupby("doy")["val"].mean()
+                    fig_solar.add_trace(go.Scatter(x=d.index, y=d.values, mode="lines", name="DNI", line=dict(color="#f97316", width=2, dash="dot")))
+            if _dhi_col:
+                s = pd.to_numeric(cdf[_dhi_col], errors="coerce").dropna()
+                if not s.empty:
+                    d = pd.DataFrame({"doy": s.index.dayofyear, "val": s.values}).groupby("doy")["val"].mean()
+                    fig_solar.add_trace(go.Scatter(x=d.index, y=d.values, mode="lines", name="DHI", line=dict(color="#60a5fa", width=2, dash="dash")))
+
+            fig_solar.update_layout(
+                title="Solar Radiation — Annual Daily Means (W/m²)",
+                yaxis_title="Irradiance (W/m²)",
+                height=340,
+                margin=dict(l=0, r=0, t=40, b=0),
+            )
+            st.plotly_chart(fig_solar, use_container_width=True)
+            _add_manual_pdf_figure("Monthly Solar Insolation", fig_solar)
+        if "totskycvr" in cdf:
+            cc = cdf[["totskycvr"]].copy()
+            cc["month"] = cc.index.month
+
+            def _bucket_cloud(v):
+                if pd.isna(v):
+                    return np.nan
+                if v <= 3:
+                    return "Clear (0–3/10)"
+                if v <= 7:
+                    return "Intermediate (4–7/10)"
+                return "Cloudy (8–10/10)"
+
+            cc["category"] = cc["totskycvr"].apply(_bucket_cloud)
+            counts = cc.value_counts(["month", "category"]).rename("n").reset_index()
+            counts["pct"] = 100 * counts["n"] / counts.groupby("month")["n"].transform("sum")
+            freq = counts.drop(columns="n")
+            fig_cloud = px.bar(
+                freq,
+                x="month",
+                y="pct",
+                color="category",
+                barmode="stack",
+                labels={"month": "Month", "pct": "% of hours", "category": ""},
+                title="Cloud coverage by month (stacked frequency)",
+            )
+            st.plotly_chart(fig_cloud, use_container_width=True)
+            _add_manual_pdf_figure("Cloud Coverage", fig_cloud)
+            tmp = pd.DataFrame({"doy": cdf.index.dayofyear, "hour": cdf.index.hour, "val": cdf["totskycvr"]}).dropna()
+            if not tmp.empty:
+                mat = tmp.pivot_table(index="hour", columns="doy", values="val", aggfunc="mean").sort_index()
+                fig_cloud_hm = px.imshow(
+                    mat.values,
+                    origin="lower",
+                    aspect="auto",
+                    labels=dict(x="Day of Year", y="Hour", color="Total sky cover (tenths)"),
+                    title="Annual heatmap — Total sky cover (tenths)",
+                    height=340,
+                    color_continuous_scale="Blues",
+                )
+                st.plotly_chart(fig_cloud_hm, use_container_width=True)
+                _add_manual_pdf_figure("Cloud Coverage Heatmap", fig_cloud_hm)
+        return
     
 
 
@@ -6604,7 +7372,7 @@ def render_solar_page():
     )
     cname = get_clean_city_name().replace(" ", "_")
     st.plotly_chart(fig2d, use_container_width=True, config={"displayModeBar": True, "toImageButtonOptions": {"filename": f"{cname}_sunpath_2d", "format": "png", "scale": 2}})
-
+    _add_manual_pdf_figure("Sun Path 2D", fig2d)
     # --- Render Solar Info Panel ---
     if info_dict.get("azimuth") is not None:
         st.markdown("##### Solar Metrics")
@@ -6659,6 +7427,7 @@ def render_solar_page():
                 "toImageButtonOptions": {"filename": f"{cname}_sunpath_3d", "format": "png", "scale": 2},
             },
         )
+        _add_manual_pdf_figure("Sun Path 3D", fig3d)
         st.caption("Sun position colored by selected environmental variable.")
     else:
         st.warning(f"3D sun path unavailable (got {type(fig3d).__name__}).")
@@ -6966,14 +7735,7 @@ def render_solar_page():
         paper_bgcolor="rgba(0,0,0,0)"
     )
     st.plotly_chart(fig_cart, use_container_width=True, config={"displayModeBar": True, "toImageButtonOptions": {"filename": f"{cname}_sunpath_cartesian", "format": "png", "scale": 2}})
-
-
-
-
-
-
-
-
+    _add_manual_pdf_figure("Sun Path Cartesian", fig_cart)
     # Solar Irradiance Components (GHI, DNI, DHI) — above cloud coverage
     import plotly.express as px
     st.markdown("---")
@@ -7036,7 +7798,7 @@ def render_solar_page():
                                ticktext=['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
         fig_solar.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
         st.plotly_chart(fig_solar, use_container_width=True)
-
+        _add_manual_pdf_figure("Monthly Solar Insolation", fig_solar)
         # Individual heatmaps for DHI and DNI
         for _irr_label, _irr_col, _irr_scale, _irr_cname in [
             ("DHI — Diffuse Horizontal Irradiance", _dhi_col, "Blues", "DHI (W/m²)"),
@@ -7053,6 +7815,9 @@ def render_solar_page():
                     _fig_irr.update_xaxes(tickvals=_month_days, ticktext=_month_names, side="bottom")
                     _fig_irr.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"])
                     st.plotly_chart(_fig_irr, use_container_width=True)
+                    pdf_store = st.session_state.setdefault("pdf_figures", {})
+                    if "Irradiance Heatmap" not in pdf_store:
+                        pdf_store["Irradiance Heatmap"] = _fig_irr
 
     # Cloud Coverage Frequencies 
     st.markdown("---")
@@ -7085,7 +7850,7 @@ def render_solar_page():
             title="Cloud coverage by month (stacked frequency)"
         )
         st.plotly_chart(fig_cloud, use_container_width=True)
-
+        _add_manual_pdf_figure("Cloud Coverage", fig_cloud)
         # Hourly scatter faceted by month with smoothed mean overlay
         vcol = "totskycvr"
         vlabel = "Total sky cover (tenths)"
@@ -7159,6 +7924,7 @@ def render_solar_page():
         )
 
         st.plotly_chart(fig_sc, use_container_width=True)
+        _add_manual_pdf_figure("Cloud Coverage Scatter", fig_sc)
         # ---- Annual heatmap (day-of-year × hour) ----
         tmp = pd.DataFrame({
             "doy": cdf.index.dayofyear,
@@ -7178,8 +7944,7 @@ def render_solar_page():
         fig_hm.update_xaxes(tickvals=month_days, ticktext=month_names)
         fig_hm.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"])
         st.plotly_chart(fig_hm, use_container_width=True)
-
-
+        _add_manual_pdf_figure("Cloud Coverage Heatmap", fig_hm)
 def render_psychrometrics_page():
     page = st.session_state.get("nav_page")
     cdf = st.session_state.get("cdf")
@@ -7508,7 +8273,7 @@ def render_psychrometrics_page():
             "toImageButtonOptions": {"filename": f"{clean_loc}_psychrometric_chart", "format": "png", "scale": 2}
         },
     )
-
+    _add_manual_pdf_figure("Annual Psychrometric Points", fig_psy)
     # Download buttons for Psychrometric Chart
     d1, d2 = st.columns(2)
     with d1:
@@ -7657,7 +8422,7 @@ def render_wind_page():
     if fig:
         st.plotly_chart(fig, use_container_width=True,
                         config={"displayModeBar": True})
-
+        _add_manual_pdf_figure("Annual Wind Rose", fig)
         d1, d2 = st.columns(2)
         clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
         with d1:
@@ -9906,6 +10671,7 @@ def main():
     # 1. Setup session state & CSS
     st.markdown(PREMIUM_CSS, unsafe_allow_html=True)
     st.markdown(SECONDARY_CSS, unsafe_allow_html=True)
+    _install_plotly_capture_hook()
 
     # 2. Render Header
     render_header()
