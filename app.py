@@ -269,6 +269,34 @@ st.markdown(
         h1 svg, h2 svg, h3 svg, h4 svg, h5 svg, h6 svg {
             display: none !important;
         }
+
+        /* ── Sidebar navigation: highlight active page ── */
+        [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label {
+            border-radius: 8px !important;
+            padding: 0.45rem 0.75rem !important;
+            margin: 2px 0 !important;
+            transition: all 0.2s ease !important;
+            border-left: 3px solid transparent !important;
+            cursor: pointer !important;
+        }
+        /* Hover for non-selected items */
+        [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:hover {
+            background: rgba(59, 130, 246, 0.08) !important;
+        }
+        /* Active/selected item */
+        [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:has(input[type="radio"]:checked) {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.18) 0%, rgba(99, 102, 241, 0.12) 100%) !important;
+            border-left: 3px solid #3b82f6 !important;
+            font-weight: 600 !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:has(input[type="radio"]:checked) p {
+            color: #60a5fa !important;
+            font-weight: 600 !important;
+        }
+        /* Hide the default radio dot entirely for a cleaner nav look */
+        [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
+            display: none !important;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -1767,62 +1795,81 @@ div[data-testid="stFileUploader"] section { border: 1px dashed rgba(96,165,250,0
 
 
 /* ---- PROFESSIONAL LANDING LAYOUT ---- */
-.block-container { padding-top: 0.75rem; }
+.block-container { padding-top: 0.5rem; }
+
+/* Hide the Streamlit colored decoration bar at the very top */
+[data-testid="stDecoration"],
+header[data-testid="stHeader"] {
+    display: none !important;
+}
 
 .app-header {
-    margin: 0 -0.5rem 1.25rem -0.5rem;
-    padding: 1.5rem 3rem;             /* Dominant Masthead Padding */
-    background: #02192f;
-    border-bottom: 1px solid rgba(15,23,42,0.9);
-    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+    margin: -1rem -1rem 1rem -1rem;
+    padding: 0.85rem 2rem;
+    background: linear-gradient(135deg, #020e1a 0%, #0a1929 50%, #0d2137 100%);
+    border-bottom: 1px solid rgba(59, 130, 246, 0.15);
+    box-shadow: 0 2px 16px rgba(0,0,0,0.45);
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 2rem;
+    z-index: 9999;
+    min-width: 0;
 }
 
 .header-left {
     display: flex;
     align-items: center;
-    gap: 1.4rem;
+    gap: 1rem;
+    min-width: 0;                       /* Allow text to shrink gracefully */
+    flex: 1 1 auto;
 }
 
 .header-logo {
-    max-height: 56px;          /* Large, premium logo sizing */
+    max-height: 48px;
     width: auto;
     border-radius: 999px;
     box-shadow: 0 0 15px rgba(59,130,246,0.4);
+    flex-shrink: 0;                     /* Never squish the logo */
 }
 
 .header-text {
     display: flex;
     flex-direction: column;
-    gap: 0.2rem;
+    gap: 0.15rem;
+    min-width: 0;                       /* Allow text truncation */
 }
 
 .header-title {
-    font-size: 1.8rem;         /* Large, authoritative title */
+    font-size: 1.15rem;
     font-weight: 800;
     color: #f9fafb;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.01em;
     line-height: 1.1;
+    white-space: nowrap;
 }
 
 .header-location {
-    font-size: 1.0rem;         /* Clear subtitle */
+    font-size: 0.8rem;
     color: #cbd5e1;
     font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .header-right {
     display: flex;
     align-items: center;
     justify-content: flex-end;
+    flex-shrink: 0;                     /* Right side never squishes */
 }
 
 .header-ub {
-    max-height: 48px;          /* Balanced with main logo */
+    max-height: 44px;
     width: auto;
     opacity: 0.98;
+    flex-shrink: 0;
 }
 
 /* make sure old center/glow layout is turned off */
@@ -1844,34 +1891,39 @@ div[data-testid="stFileUploader"] section { border: 1px dashed rgba(96,165,250,0
 
 .hero-card {
     background: #020617;
-    border-radius: 12px;
-    border: 1px solid rgba(51, 65, 85, 0.8);
-    padding: 1.0rem 1.5rem;    /* Tighter vertical padding */
-    box-shadow: 0 20px 50px rgba(0,0,0,0.5); /* Deep shadow for lift */
+    border-radius: 8px;
+    border: 1px solid rgba(51, 65, 85, 0.6);
+    padding: 0.4rem 0.9rem;
+    margin-bottom: 0.25rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    flex-wrap: wrap;
 }
 
 .hero-card h2 {
-    margin: 0 0 0.3rem 0;
-    font-size: 1.35rem;        /* Slightly smaller heading */
+    margin: 0;
+    font-size: 0.9rem;
     font-weight: 700;
     color: #e5e7eb;
+    white-space: nowrap;
 }
 
 .hero-card p {
-    margin: 0 0 0.8rem 0;
-    font-size: 0.9rem;
-    color: #94a3b8;
-    line-height: 1.5;
+    margin: 0;
+    font-size: 0.78rem;
+    color: #64748b;
+    line-height: 1.3;
 }
 
 .hero-btn {
-    padding: 0.45rem 1.4rem;   /* sleek button */
+    padding: 0.35rem 1.1rem;   /* sleek, ultra-minimal button footprint */
     border-radius: 999px;
     border: 1px solid rgba(59,130,246,0.6);
     background: linear-gradient(135deg,#3b82f6,#06b6d4);
     color: #020617;
     font-weight: 700;
-    font-size: 0.9rem;
+    font-size: 0.82rem;
     cursor: pointer;
     transition: all 0.2s ease;
 }
@@ -2090,17 +2142,9 @@ def render_header():
 def render_landing_hero():
     st.markdown(
         """
-        <div class="hero-row">
-          <div class="hero-card">
-            <div class="hero-text">
-              <h2>Select weather file</h2>
-              <p>
-                Upload or choose an EPW file to unlock climate diagnostics,
-                comfort metrics, and solar analysis for your location.
-              </p>
-              <button class="hero-btn">🚀 Get started</button>
-            </div>
-          </div>
+        <div class="hero-card">
+          <h2>Select weather file</h2>
+          <p>Upload or choose an EPW file to unlock climate diagnostics, comfort metrics, and solar analysis.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2253,15 +2297,13 @@ def render_sidebar():
         
         # Determine the effective selection based on state
         current_label = PAGE_TO_LABEL.get(current_page, nav_labels[0])
-        default_index = nav_labels.index(current_label) if current_label in nav_labels else 0
 
         if epw_loaded:
             nav_choice = st.radio(
                 "Navigation",
                 options=nav_labels,
-                index=default_index,
                 label_visibility="collapsed",
-                key="nav_active",
+                key="nav_page",
             )
             st.markdown(
                 """
@@ -2363,14 +2405,14 @@ def render_sidebar():
                 )
                 st.caption("Click Generate PDF first. Download will appear here.")
                 
-        # Update state based on selection
+        # Evaluate routing selection
         frozen_hit = nav_choice in FROZEN_NAV_LABELS
         nav_choice_effective = nav_choice if not frozen_hit else current_label
         chosen_page = LABEL_TO_PAGE.get(nav_choice_effective, DEFAULT_PAGE)
         
-        # Keep navigation state in sync; no manual rerun needed because interactions already rerun.
-        if st.session_state.get("nav_page") != chosen_page:
-            st.session_state["nav_page"] = chosen_page
+        # Enforce frozen rollback natively 
+        # Note: nav_page is widget-owned; we cannot write to it after radio is instantiated.
+        # The chosen_page local variable is used for routing below.
 
         # Keep controller page mode aligned with navigation to avoid mixed-page state.
         st.session_state["active_page"] = "select_station" if chosen_page == "Select weather file" else "dashboard"
@@ -2868,7 +2910,6 @@ if nav_page in FROZEN_PAGES:
     nav_page = DEFAULT_PAGE
 if nav_page not in ALLOWED_PAGES:
     nav_page = DEFAULT_PAGE
-st.session_state["nav_page"] = nav_page
 
 if controller_page != "select_station" or st.session_state.pop("_clear_map_on_next_run", False):
     map_slot = st.session_state.pop("_map_slot", None)
@@ -2880,7 +2921,6 @@ if controller_page != "select_station" or st.session_state.pop("_clear_map_on_ne
 main_upload = None
 def render_select_station_page():
     render_landing_hero()
-    st.markdown("<hr class='page-separator' />", unsafe_allow_html=True)
     st.markdown("<div id='station-picker'></div>", unsafe_allow_html=True)
     # render_station_picker handles the map and list
     render_station_picker()
@@ -3000,25 +3040,12 @@ def show_epw_status():
         # ------------------
         st.session_state.pop("loading_station_name", None)
 
-        with st.expander("EPW metadata", expanded=False):
-            meta_rows = [
-                ("Location", f"{city}, {country}".strip().strip(',')),
-                ("Source", domain or "—"),
-                ("WMO", location_meta.get("wmo", "—")),
-                ("Elevation (m)", location_meta.get("elevation_m", "—")),
-                ("Timezone", location_meta.get("timezone", "—")),
-                ("Period", period),
-                ("Records", f"{record_count:,}"),
-            ]
-            meta_df = pd.DataFrame(meta_rows, columns=["Field", "Value"])
-            st.table(meta_df)
-
 
 def setup_cdf():
     cdf = st.session_state.get("cdf")
 
     if cdf is None and st.session_state.get("nav_page") != DEFAULT_PAGE:
-        st.session_state["nav_page"] = DEFAULT_PAGE
+        pass  # nav_page is widget-owned; sidebar handles routing
 
     # Harmonize alternate column names that may come from different EPW parsers (e.g., pvlib)
     if cdf is not None:
@@ -3043,7 +3070,6 @@ def setup_cdf():
         page = DEFAULT_PAGE
     if page not in ALLOWED_PAGES:
         page = DEFAULT_PAGE
-    st.session_state["nav_page"] = page
     return page
 
 # ========== HEATMAP HELPERS (ANNUAL DIURNAL RESOURCE) ==========
@@ -4016,12 +4042,6 @@ def render_dashboard_page():
 
     # Dashboard Page
     import plotly.express as px
-    st.markdown("### 📊 Dashboard")
-    st.caption(
-        "Start here for a quick health check: tabs bundle location context, thermal comfort, "
-        "and data quality so you can understand what the climate looks like and whether the EPW "
-        "inputs are trustworthy before diving deeper."
-    )
 
     loc = header["location"]
     overview_tab, comfort_tab, temp_hum_tab, solar_tab, psych_tab, wind_tab, raw_data_tab = st.tabs([
@@ -10692,22 +10712,20 @@ def main():
     st.markdown(SECONDARY_CSS, unsafe_allow_html=True)
     _install_plotly_capture_hook()
 
-    # 2. Render Header
+    # 2. Evaluate Effective Routing Page State
+    effective_page = st.session_state.get("nav_page", DEFAULT_PAGE)
+
+    # 3. Render Header (Globally Fixed Sticky UI Bar)
     render_header()
 
-    # 3. Render Sidebar (handles navigation state)
+    # 4. Render Sidebar (handles navigation state)
     render_sidebar()
 
-    # 4. Controller Logic (Load EPW, etc.)
-    #    - If we just loaded an EPW, show success status
+    # 5. Controller Logic (Load EPW, etc.)
     show_epw_status()
-    
-    #    - Ensure CDF is ready if available
     setup_cdf()
 
-    # 5. Page Routing
-    #    - Determine effective page from session state
-    effective_page = st.session_state.get("nav_page", DEFAULT_PAGE)
+    # 6. Page Routing Execution
     
     #    - Dispatch to appropriate render function
     #    - Some pages might be restricted if no EPW is loaded (handled inside functions or via sidebar disabling)
