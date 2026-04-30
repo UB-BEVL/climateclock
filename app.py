@@ -18,6 +18,12 @@ import plotly.graph_objects as go
 import plotly.express as px
 import plotly.io as pio
 from plotly.subplots import make_subplots
+
+# Configure kaleido for Streamlit Cloud - disable headless mode issues
+os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+if os.getenv('STREAMLIT_SERVER_HEADLESS'):
+    os.environ['KALEIDO_DISABLE_SANDBOX'] = '1'
+
 import matplotlib
 matplotlib.use('Agg')  # Use Agg backend for headless environments (Streamlit Cloud)
 import matplotlib.pyplot as plt
@@ -140,6 +146,20 @@ def format_threshold_label(temp_c: float, direction: str = ">", digits: int = 0)
 
 def convert_threshold_for_display(temp_c: float) -> float:
     return _c_to_f(temp_c) if _temp_unit() == "F" else temp_c
+
+
+def safe_to_image(fig, format="svg", **kwargs):
+    """Safely export figure to image format, with retry logic for kaleido."""
+    try:
+        return fig.to_image(format=format, **kwargs)
+    except Exception as e:
+        # Retry once with disabled sandbox mode
+        try:
+            os.environ['KALEIDO_DISABLE_SANDBOX'] = '1'
+            return fig.to_image(format=format, **kwargs)
+        except Exception as retry_error:
+            st.warning(f"⚠️ Image export failed: {type(retry_error).__name__}")
+            return None
 
 
 # ========== UI COMPONENTS ==========
@@ -3650,7 +3670,16 @@ def _fig_to_tmp_png(fig, width: int = 1400, height: int = 730, scale: int = 2) -
         pass
 
     # Note: 1400x730 is selected for the 2-chart-per-page grid layout aspect ratio
-    img_bytes = pio.to_image(fig, format="png", width=width, height=height, scale=scale)
+    try:
+        img_bytes = pio.to_image(fig, format="png", width=width, height=height, scale=scale)
+    except Exception:
+        # Fallback: save as SVG if PNG fails
+        try:
+            img_bytes = pio.to_image(fig, format="svg", width=width, height=height, scale=scale)
+        except Exception as e:
+            st.warning("⚠️ Image export failed - proceeding without embedded chart")
+            return None
+    
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     tmp.write(img_bytes)
     tmp.close()
