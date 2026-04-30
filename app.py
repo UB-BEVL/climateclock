@@ -4073,6 +4073,7 @@ def build_climate_pdf() -> bytes:
                 img_path = _fig_to_tmp_png(fig, width=1400, height=730, scale=2)
                 temp_images.append(img_path)
             except Exception as exc:
+                export_err = str(exc)
                 img_path = None
                 
             if img_path:
@@ -4084,6 +4085,11 @@ def build_climate_pdf() -> bytes:
                 pdf.set_font("Helvetica", "I", 10)
                 pdf.set_text_color(150, 150, 150)
                 pdf.cell(170, 6, "Visualization rendering unavailable.", ln=1)
+                if 'export_err' in locals() and export_err:
+                    pdf.set_xy(20, y_pos + 58)
+                    pdf.set_font("Helvetica", "", 7)
+                    pdf.set_text_color(170, 170, 170)
+                    pdf.multi_cell(170, 4, export_err[:220])
 
     out = pdf.output(dest="S")
 
