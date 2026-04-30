@@ -18,6 +18,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 import plotly.io as pio
 from plotly.subplots import make_subplots
+import matplotlib
+matplotlib.use('Agg')  # Use Agg backend for headless environments (Streamlit Cloud)
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 try:
@@ -4852,7 +4854,12 @@ def render_dashboard_page():
         render_solar_page()
         
     with psych_tab:
-        render_psychrometrics_page()
+        try:
+            render_psychrometrics_page()
+        except Exception as e:
+            st.error(f"❌ Psychrometrics error: {str(e)}")
+            import traceback
+            st.error(f"Details: {traceback.format_exc()}")
         
     with wind_tab:
         render_wind_page()
