@@ -12,7 +12,7 @@ pycountry==23.12.11
 pythermalcomfort==2.5.3
 geopy==2.4.1
 scipy==1.14.1
-kaleido==0.2.1
+kaleido>=0.2.3
 fpdf2==2.7.1
 
 
