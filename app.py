@@ -1758,6 +1758,11 @@ h3 { font-size: 1.15rem !important; font-weight: 650 !important; color: #d9e1ec 
 .stTabs [data-baseweb="tab"] { background: transparent; border-radius: 10px; padding: 8px 12px; font-weight: 600; color: var(--muted); border: none; transition: color 0.15s ease, background 0.15s ease, transform 0.15s ease; }
 .stTabs [data-baseweb="tab"]:hover { color: var(--text); transform: translateY(-1px); }
 .stTabs [aria-selected="true"] { background: linear-gradient(135deg, var(--primary), var(--primary-2)) !important; color: #0b1220 !important; box-shadow: 0 12px 24px rgba(59,130,246,0.3); }
+/* Tab content isolation - prevent bleed-through */
+.stTabs [data-baseweb="tab-panel"] { overflow: hidden; position: relative; z-index: 1; background: rgba(15,23,42,0.96); border: 1px solid rgba(255,255,255,0.05); border-radius: 0 0 14px 14px; padding: 1rem 1rem 0.25rem; margin-top: 0.55rem; box-shadow: 0 18px 40px rgba(0,0,0,0.22); }
+.stTabs [data-baseweb="tab-panel"] > div { overflow: hidden; position: relative; }
+.stTabs > div:nth-of-type(2) > div > div { overflow: hidden; position: relative; }
+[role="tabpanel"] { overflow: hidden !important; background: transparent !important; }
 
 [data-testid="stSidebar"] { background: linear-gradient(180deg, #0b1220, #0f172a 60%, #0b1220); border-right: 1px solid rgba(255,255,255,0.06); box-shadow: 12px 0 28px rgba(0,0,0,0.35); }
 [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label { margin-bottom: 6px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); background: rgba(255,255,255,0.02); padding: 10px 12px; transition: all 0.2s ease; }
