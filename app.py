@@ -3715,7 +3715,55 @@ def _fig_to_tmp_png(fig, width: int = 1400, height: int = 730, scale: int = 2) -
                 last_error = exc
                 continue
         if svg_bytes is None:
-            raise RuntimeError(f"Figure export failed: {last_error}")
+            # Final fallback: render with matplotlib instead of Kaleido
+            try:
+                import matplotlib.pyplot as plt
+                from matplotlib.figure import Figure
+                
+                mpl_fig = Figure(figsize=(14, 7.3), dpi=100)
+                ax = mpl_fig.add_subplot(111)
+                
+                # Extract data from Plotly figure and render with matplotlib
+                if hasattr(fig, 'data') and len(fig.data) > 0:
+                    for trace in fig.data:
+                        trace_type = getattr(trace, 'type', 'scatter')
+                        if trace_type == 'heatmap':
+                            z_data = getattr(trace, 'z', None)
+                            if z_data is not None:
+                                im = ax.imshow(z_data, cmap='YlOrRd', aspect='auto')
+                                mpl_fig.colorbar(im, ax=ax)
+                        elif trace_type in ('scatter', 'scattergl'):
+                            x = getattr(trace, 'x', [])
+                            y = getattr(trace, 'y', [])
+                            mode = getattr(trace, 'mode', 'lines+markers')
+                            name = getattr(trace, 'name', '')
+                            if 'lines' in mode:
+                                ax.plot(x, y, label=name, linewidth=2, alpha=0.7)
+                            if 'markers' in mode:
+                                ax.scatter(x, y, label=name, alpha=0.6)
+                        elif trace_type == 'bar':
+                            x = getattr(trace, 'x', [])
+                            y = getattr(trace, 'y', [])
+                            name = getattr(trace, 'name', '')
+                            ax.bar(x, y, label=name, alpha=0.7)
+                    
+                    if hasattr(fig, 'layout'):
+                        layout = fig.layout
+                        title = getattr(layout, 'title', None)
+                        if title is not None:
+                            title_text = getattr(title, 'text', str(title)) if hasattr(title, 'text') else str(title)
+                            ax.set_title(title_text, fontsize=14, fontweight='bold')
+                    
+                    ax.legend(loc='best', fontsize=9)
+                    ax.grid(True, alpha=0.3)
+                
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                mpl_fig.savefig(tmp.name, format='png', dpi=100, bbox_inches='tight')
+                plt.close(mpl_fig)
+                tmp.close()
+                return tmp.name
+            except Exception as mpl_error:
+                raise RuntimeError(f"All export methods failed: Kaleido: {last_error}, Matplotlib: {mpl_error}")
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".svg")
         tmp.write(svg_bytes)
