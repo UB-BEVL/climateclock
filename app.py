@@ -31,6 +31,7 @@ except Exception as _pvlib_import_exc:
 # local modules
 from metrics import comfort_energy as ce
 import live_sensors as ls
+import psychro_helpers as psh
 
 # Patch platform processor to avoid Windows WMI KeyError during h5py/pvlib import
 import platform as _platform
@@ -1946,15 +1947,9 @@ header[data-testid="stHeader"] {
 .station-modal p { margin: 0.15rem 0; color: #cbd5e1; }
 .station-modal .actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.5rem; margin-top: 0.75rem; }
 
-footer { background: #0a0f1f; border-top: 1px solid rgba(148, 163, 184, 0.15); padding: 3rem 2rem 1.5rem; margin-top: 6rem; color: #64748b; }
-.footer-content { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 3rem; max-width: 1400px; margin: 0 auto 2rem; }
-.footer-content h4 { color: #e2e8f0; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 1rem; }
-.footer-content ul { list-style: none; padding: 0; margin: 0; }
-.footer-content li { margin-bottom: 0.5rem; font-size: 0.875rem; }
-.footer-bottom { text-align: center; padding-top: 2rem; border-top: 1px solid rgba(148, 163, 184, 0.1); font-size: 0.75rem; }
-.footer-links { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-top: 0.5rem; }
-.footer-links a { color: #94a3b8; text-decoration: none; font-weight: 600; }
-.footer-links a:hover { color: #e2e8f0; }
+.bevl-footer { background: #0a0f1f; border-top: 1px solid rgba(148, 163, 184, 0.12); padding: 1rem 2rem 0.75rem; margin-top: 2rem; color: #64748b; text-align: center; font-size: 0.8rem; }
+.bevl-footer a { color: #94a3b8; text-decoration: underline; }
+.bevl-footer a:hover { color: #e2e8f0; }
 
 hr.page-separator { border: 0; height: 1px; background: rgba(148, 163, 184, 0.25); margin: 1.6rem 0; }
 
@@ -7985,349 +7980,292 @@ def render_solar_page():
         st.plotly_chart(fig_hm, use_container_width=True)
         _add_manual_pdf_figure("Cloud Coverage Heatmap", fig_hm)
 def render_psychrometrics_page():
-    page = st.session_state.get("nav_page")
     cdf = st.session_state.get("cdf")
-    # if cdf is None: return # handled by check inside or main
-    
-    # ------- Controls -------
-    st.markdown("**Filters**")
-    month_range = st.slider("Month Range", 1, 12, (1, 12), key="psy_month_range")
-    
-    cA, cB = st.columns([1.2, 1])
-    auto_zoom = cA.checkbox("Auto zoom to EPW range", value=True, help="Fit axes to EPW hourly temperature and absolute humidity range.")
-    show_enthalpy = cB.checkbox("Show enthalpy & v lines", value=True)
-
-    location_label = get_clean_city_name()
-    st.markdown(f"<h3>{location_label} – Psychrometrics</h3>", unsafe_allow_html=True)
-    st.caption(
-        "Plot hourly temperature/ humidity points on the classic psychrometric grid to see "
-        "when air falls inside comfort envelopes, where latent loads spike, and how far "
-        "conditioning has to move conditions."
-    )
-
-    st.subheader("Psychrometric Chart")
-    st.caption("Clean grid with absolute humidity (g/kg), RH isolines, saturation curve, and hourly EPW scatter.")
-
-    # ------- Thermo helpers (SI) -------
-    def p_ws_kPa(TC: np.ndarray) -> np.ndarray:
-        """Saturation vapor pressure over water [kPa] (Magnus/Tetens)."""
-        return 0.61094 * np.exp(17.625*TC / (TC + 243.04))
-
-    def w_from_Pv_kPa(Pv_kPa: np.ndarray, P_kPa: float) -> np.ndarray:
-        """Humidity ratio w [kg/kg] from vapor pressure Pv [kPa] and total pressure P [kPa]."""
-        Pv_kPa = np.clip(Pv_kPa, 0.0, 0.999 * P_kPa)
-        return 0.62198 * Pv_kPa / (P_kPa - Pv_kPa)
-
-    def abs_hum_gpkg_from_w(w: np.ndarray) -> np.ndarray:
-        """Convert humidity ratio w [kg/kg] to absolute humidity [g/kg]."""
-        return 1000.0 * w
-
-    def dew_point_C(TC: np.ndarray, RH_pct: np.ndarray) -> np.ndarray:
-        # Dew point in Celsius, Magnus approximation.
-        a, b = 17.625, 243.04
-        gamma = np.log(np.clip(RH_pct, 1e-6, 100)/100.0) + (a*TC)/(b+TC)
-        return (b*gamma)/(a-gamma)
-
-    def wet_bulb_C_stull(TC: np.ndarray, RH_pct: np.ndarray) -> np.ndarray:
-        # Stull (2011) empirical wet-bulb approximation in Celsius.
-        RH = np.clip(RH_pct, 1e-6, 100.0)
-        return (TC*np.arctan(0.151977*np.sqrt(RH + 8.313659)) +
-                np.arctan(TC + RH) - np.arctan(RH - 1.676331) +
-                0.00391838*(RH**1.5)*np.arctan(0.023101*RH) - 4.686035)
-
-    def enthalpy_kJkg(TC: np.ndarray, w: np.ndarray) -> np.ndarray:
-        # Moist-air specific enthalpy (kJ/kg dry air).
-        return 1.006*TC + w*(2501.0 + 1.86*TC)
-
-    def specific_volume_m3kg(TC: np.ndarray, w: np.ndarray, P_kPa: float) -> np.ndarray:
-        # Specific volume (m3/kg dry air).
-        R = 0.287042  # kPa*m3/(kg*K) for dry air
-        return R*(TC+273.15)*(1 + 1.6078*w)/P_kPa
-
-    # ------- Data prep -------
+    if cdf is None:
+        return
     needed = ["drybulb", "relhum"]
     if not all(k in cdf.columns for k in needed):
         st.info("This EPW is missing required fields for the psychrometric plot.")
         return
 
-    # Pressure: median of atmos_pressure if present, else 101.325 kPa
+    # Pressure
     if "atmos_pressure" in cdf and cdf["atmos_pressure"].notna().any():
-        P_kPa = float(np.nanmedian(cdf["atmos_pressure"].values))/1000.0
+        P_kPa = float(np.nanmedian(cdf["atmos_pressure"].values)) / 1000.0
     else:
         P_kPa = 101.325
 
+    location_label = get_clean_city_name()
+    st.markdown(f"<h3>{location_label} – Psychrometrics</h3>", unsafe_allow_html=True)
+    st.caption("Plot hourly EPW data on the classic psychrometric grid with bioclimatic strategy zones, frequency heatmap, and toggleable metric overlays.")
+
+    # ── Controls ──
+    ctrl1, ctrl2, ctrl3 = st.columns(3)
+    month_range = ctrl1.slider("Month Range", 1, 12, (1, 12), key="psy_month_range")
+    overlay_choice = ctrl2.selectbox("Comfort Overlay", ["None", "Givoni Bioclimatic Chart", "ASHRAE 55 Comfort Zone"], index=1, key="psy_overlay")
+
+    mean_outdoor_t = 20.0
+    if overlay_choice == "Givoni Bioclimatic Chart":
+        if "drybulb" in cdf.columns:
+            daily_mean = cdf["drybulb"].resample("1D").mean()
+            running_mean = daily_mean.rolling(30, min_periods=1).mean()
+            mean_outdoor_t = float(running_mean.median())
+        mean_outdoor_t = ctrl3.slider("Mean Outdoor Temp (°C)", 5.0, 35.0, float(round(mean_outdoor_t, 1)), step=0.5, key="psy_trm", help="Adjusts adaptive comfort zone width.")
+
+    auto_zoom = ctrl3.checkbox("Auto zoom to EPW range", value=True, key="psy_autozoom") if overlay_choice != "Givoni Bioclimatic Chart" else st.sidebar.checkbox("Auto zoom", value=True, key="psy_autozoom")
+
+    with st.expander("Chart Metric Lines", expanded=False):
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        show_rh = mc1.checkbox("RH Lines", True, key="psy_rh")
+        show_enthalpy = mc2.checkbox("Enthalpy", True, key="psy_enth")
+        show_volume = mc3.checkbox("Spec. Volume", False, key="psy_vol")
+        show_wetbulb = mc4.checkbox("Wet-Bulb", False, key="psy_twb")
+
+    # ── Data prep ──
     dfp = cdf[["drybulb", "relhum"]].dropna().copy()
-    if dfp.index.tz is None: # Saftey depending on how cdf was parsed
-        dfp = dfp[ (dfp.index.month >= month_range[0]) & (dfp.index.month <= month_range[1]) ]
-    else:
-        # DatetimeIndex has month attribute
-        dfp = dfp[ (dfp.index.month >= month_range[0]) & (dfp.index.month <= month_range[1]) ]
-        
+    dfp = dfp[(dfp.index.month >= month_range[0]) & (dfp.index.month <= month_range[1])]
     if dfp.empty:
-        st.info("No points to plot.")
+        st.info("No data points in selected range.")
         return
 
-    # Compute scatter values (absolute humidity g/kg)
     T_pts = dfp["drybulb"].to_numpy(float)
     RH_pts = dfp["relhum"].to_numpy(float)
-    Pv_pts = (RH_pts/100.0) * p_ws_kPa(T_pts)
-    w_pts  = w_from_Pv_kPa(Pv_pts, P_kPa)
-    Y_pts_gpkg = abs_hum_gpkg_from_w(w_pts)
+    Pv_pts = (RH_pts / 100.0) * psh.p_ws_kPa(T_pts)
+    w_pts = psh.w_from_Pv_kPa(Pv_pts, P_kPa)
+    Y_gpkg = psh.gpkg(w_pts)
+    dp_pts = psh.dew_point_C(T_pts, RH_pts)
+    tw_pts = psh.wet_bulb_C(T_pts, RH_pts)
+    h_pts = psh.enthalpy_kJkg(T_pts, w_pts)
+    v_pts = psh.specific_vol(T_pts, w_pts, P_kPa)
 
-    # Auto ranges from EPW data (fallback to defaults if needed)
-    def _safe_min(arr, default):
-        v = np.nanmin(arr) if arr.size else np.nan
-        return v if np.isfinite(v) else default
-
-    def _safe_max(arr, default):
-        v = np.nanmax(arr) if arr.size else np.nan
-        return v if np.isfinite(v) else default
-
+    # Axis ranges
     if auto_zoom:
-        x_min = _safe_min(T_pts, -10.0) - 2
-        x_max = _safe_max(T_pts, 40.0) + 2
-        y_min = max(0.0, _safe_min(Y_pts_gpkg, 0.0) - 1)
-        y_max = _safe_max(Y_pts_gpkg, 30.0) + 1
+        x_min = max(-15, float(np.nanmin(T_pts)) - 3)
+        x_max = min(50, float(np.nanmax(T_pts)) + 3)
+        y_min = max(0, float(np.nanmin(Y_gpkg)) - 1)
+        y_max = min(35, float(np.nanmax(Y_gpkg)) + 2)
     else:
-        x_min, x_max = -10.0, 50.0
-        y_min, y_max = 0.0, 40.0
+        x_min, x_max, y_min, y_max = -10.0, 50.0, 0.0, 30.0
 
-    # Extra metrics for hover
-    dp_pts = dew_point_C(T_pts, RH_pts)
-    tw_pts = wet_bulb_C_stull(T_pts, RH_pts)
-    h_pts  = enthalpy_kJkg(T_pts, w_pts)
-    v_pts  = specific_volume_m3kg(T_pts, w_pts, P_kPa)
-    # --- Psychro axis extents & styling constants ---
-    X_MIN, X_MAX = x_min, x_max
-    Y_MIN, Y_MAX = y_min, y_max
+    T_axis = np.linspace(x_min, x_max, 500)
 
-    # ------- Background curves (built in SI then plotted as °C vs g/kg) -------
-    # Temperature axis for curves
-    T_axis = np.linspace(X_MIN, X_MAX, 600)
-
-    Pws_axis = p_ws_kPa(T_axis)
-
-    # Saturation curve (100% RH)
-    w_sat = w_from_Pv_kPa(Pws_axis, P_kPa)
-    y_sat_gpkg = abs_hum_gpkg_from_w(w_sat)
-
-    # RH isolines
-    rh_list = [10, 20, 30, 40, 50, 60, 70, 80, 90]
-    rh_curves_gpkg = {}
-    for rh in rh_list:
-        Pv = (rh/100.0) * Pws_axis
-        w  = w_from_Pv_kPa(Pv, P_kPa)
-        rh_curves_gpkg[rh] = abs_hum_gpkg_from_w(w)
-
-    # Optional: Enthalpy & specific volume guide families (light)
-    enthalpy_levels = [20, 40, 60, 80]  # kJ/kg
-    v_levels = [0.82]                   # m3/kg (typical label)
-
-    def w_from_enthalpy(T, h):
-        # Invert h = 1.006T + w(2501 + 1.86T) to w(T,h).
-        return (h - 1.006*T) / (2501.0 + 1.86*T)
-
-    def w_from_specific_volume(T, v, P_kPa):
-        # Invert v = R(T+273.15)(1+1.6078w)/P to w(T,v).
-        R = 0.287042
-        return (v*P_kPa/(R*(T+273.15)) - 1.0)/1.6078
-
-    # ------- Figure -------
+    # ── Build figure ──
     fig_psy = go.Figure()
 
-    # Gray grid (optional: keep minimal; Plotly axes grid off, we emulate major lines)
-    x_grid = np.arange(np.ceil(X_MIN/5)*5, np.floor(X_MAX/5)*5 + 0.1, 5)
-    y_grid = np.arange(np.floor(Y_MIN/5)*5, np.floor(Y_MAX/5)*5 + 0.1, 5)
+    # Zone color palette — distinct solid colors matching Climate Consultant
+    zone_palette = {
+        "COMFORT ZONE": "#2ca02c",
+        "NATURAL\nVENTILATION": "#17becf",
+        "EVAPORATIVE\nCOOLING": "#1f77b4",
+        "MASS\nCOOLING": "#ff7f0e",
+        "NIGHT VENT\n& MASS COOL": "#d62728",
+        "A/C &\nDEHUMIDIFICATION": "#9467bd",
+        "PASSIVE SOLAR\nHEATING": "#bcbd22",
+        "INTERNAL\nGAINS": "#8c564b",
+        "ACTIVE\nSOLAR": "#e377c2",
+        "HEATING": "#7f7f7f",
+        "HUMIDIFICATION": "#aec7e8",
+        "Unclassified": "#cccccc",
+    }
 
-    for xv in x_grid:
-        fig_psy.add_shape(type="line", x0=xv, x1=xv, y0=0, y1=y_max,
-                        line=dict(color="rgba(150,150,150,0.25)", width=1), layer="below")
-    for yv in y_grid:
-        fig_psy.add_shape(type="line", x0=X_MIN, x1=X_MAX, y0=yv, y1=yv,
-                        line=dict(color="rgba(150,150,150,0.25)", width=1), layer="below")
+    # ── Givoni zone outlines (drawn first, behind dots) ──
+    zones = None
+    if overlay_choice == "Givoni Bioclimatic Chart":
+        zones = psh.givoni_zones(P_kPa, mean_outdoor_t)
+        for zname, verts in zones.items():
+            xs = [v[0] for v in verts] + [verts[0][0]]
+            ys = [v[1] for v in verts] + [verts[0][1]]
+            zcolor = zone_palette.get(zname, "#999999")
+            # Convert hex to rgba fill
+            r, g, b = int(zcolor[1:3], 16), int(zcolor[3:5], 16), int(zcolor[5:7], 16)
+            fig_psy.add_trace(go.Scatter(
+                x=xs, y=ys, mode="lines",
+                line=dict(color=zcolor, width=2),
+                fill="toself", fillcolor=f"rgba({r},{g},{b},0.08)",
+                name=zname.replace("\n", " "), showlegend=False, hoverinfo="name",
+            ))
+            # Label at centroid
+            cx = np.mean([v[0] for v in verts])
+            cy = np.mean([v[1] for v in verts])
+            fig_psy.add_annotation(
+                x=cx, y=cy, text=f"<b>{zname}</b>", showarrow=False,
+                font=dict(size=9, color=zcolor), align="center",
+                bgcolor="rgba(0,0,0,0.5)", borderpad=2,
+            )
 
-    # Saturation curve
+    elif overlay_choice == "ASHRAE 55 Comfort Zone":
+        for label, poly, color in [
+            ("Summer Comfort", [(23.5,1),(23.5,12),(26.5,12),(26.5,1)], "rgba(255,80,80,0.15)"),
+            ("Winter Comfort", [(20,1),(20,12),(24,12),(24,1)], "rgba(80,80,255,0.15)"),
+        ]:
+            xs = [v[0] for v in poly] + [poly[0][0]]
+            ys = [v[1] for v in poly] + [poly[0][1]]
+            fig_psy.add_trace(go.Scatter(
+                x=xs, y=ys, mode="lines", fill="toself", fillcolor=color,
+                line=dict(color="rgba(100,100,100,0.6)", width=1.2),
+                name=label, showlegend=True, hoverinfo="name",
+            ))
+
+    # ── Saturation curve ──
+    y_sat = psh.gpkg(psh.w_sat(T_axis, P_kPa))
     fig_psy.add_trace(go.Scatter(
-        x=T_axis, y=y_sat_gpkg, mode="lines",
-        line=dict(width=2.5, color="rgba(120,120,120,1.0)"),
-        name="Saturation (100% RH)", hovertemplate="Tdb %{x:.1f}°C<br>Abs %{y:.2f} g/kg<extra></extra>",
-        showlegend=False
+        x=T_axis, y=y_sat, mode="lines",
+        line=dict(width=2.5, color="#333333"),
+        name="Saturation", showlegend=False,
+        hovertemplate="100%% RH<br>T: %{x:.1f}°C<br>W: %{y:.2f} g/kg<extra></extra>",
     ))
-    # Inline label for Saturation
-    valid_sat = (y_sat_gpkg <= Y_MAX) & (T_axis <= X_MAX)
-    if valid_sat.any():
-        idx = np.where(valid_sat)[0][-1]
-        fig_psy.add_annotation(x=T_axis[idx], y=y_sat_gpkg[idx], text="Saturation (100% RH)",
-                               xanchor="right", yanchor="bottom", showarrow=False,
-                               font=dict(size=11, color="rgba(220,220,220,0.95)"))
 
-    # RH isolines (dashed gray)
-    for rh in rh_list:
+    # ── RH isolines ──
+    if show_rh:
+        for rh_val in [10, 20, 30, 40, 50, 60, 70, 80, 90]:
+            y_rh = psh.rh_curve(T_axis, rh_val, P_kPa)
+            fig_psy.add_trace(go.Scatter(
+                x=T_axis, y=y_rh, mode="lines",
+                line=dict(width=0.7, dash="dot", color="rgba(100,100,100,0.5)"),
+                showlegend=False, hoverinfo="skip",
+            ))
+
+    # ── Enthalpy lines ──
+    if show_enthalpy:
+        for h_val in [10, 20, 30, 40, 50, 60, 70, 80, 100]:
+            y_h = psh.enthalpy_w_line(T_axis, h_val)
+            valid = (y_h >= y_min) & (y_h <= y_max * 1.1)
+            if valid.any():
+                fig_psy.add_trace(go.Scatter(
+                    x=T_axis[valid], y=np.clip(y_h[valid], y_min, y_max), mode="lines",
+                    line=dict(width=0.6, dash="dash", color="rgba(180,120,0,0.4)"),
+                    showlegend=False, hoverinfo="skip",
+                ))
+
+    # ── Specific volume lines ──
+    if show_volume:
+        for v_val in [0.78, 0.80, 0.82, 0.84, 0.86, 0.88, 0.90]:
+            y_v = psh.volume_w_line(T_axis, v_val, P_kPa)
+            valid = (y_v >= y_min) & (y_v <= y_max)
+            if valid.any():
+                fig_psy.add_trace(go.Scatter(
+                    x=T_axis[valid], y=y_v[valid], mode="lines",
+                    line=dict(width=0.6, dash="dot", color="rgba(60,100,200,0.4)"),
+                    showlegend=False, hoverinfo="skip",
+                ))
+
+    # ── Hourly dots colored by zone ──
+    custom = np.c_[RH_pts, Pv_pts * 1000, h_pts, v_pts, dp_pts, tw_pts]
+    hover_tpl = ("<b>%{text}</b><br>Tdb %{x:.1f}°C<br>W %{y:.2f} g/kg<br>"
+                 "RH %{customdata[0]:.1f}%<br>h %{customdata[2]:.1f} kJ/kg<br>"
+                 "Tdp %{customdata[4]:.1f}°C<br>Twb %{customdata[5]:.1f}°C<extra></extra>")
+
+    if zones is not None:
+        # Classify each hourly point into a zone
+        labels = psh.classify_points_to_zones(T_pts, Y_gpkg, zones)
+        # Plot one trace per zone (for legend)
+        unique_labels = list(dict.fromkeys(labels))  # preserve order
+        for zlabel in unique_labels:
+            mask = labels == zlabel
+            if not mask.any():
+                continue
+            dot_color = zone_palette.get(zlabel, "#cccccc")
+            fig_psy.add_trace(go.Scatter(
+                x=T_pts[mask], y=Y_gpkg[mask], mode="markers",
+                marker=dict(size=4, color=dot_color, opacity=0.7),
+                name=zlabel.replace("\n", " "),
+                showlegend=True,
+                customdata=custom[mask],
+                text=[zlabel.replace("\n", " ")] * int(mask.sum()),
+                hovertemplate=hover_tpl,
+            ))
+    else:
+        # No Givoni overlay — color dots by temperature with a colorbar key
         fig_psy.add_trace(go.Scatter(
-            x=T_axis, y=rh_curves_gpkg[rh], mode="lines",
-            line=dict(width=1.2, dash="dot", color="rgba(120,120,120,0.8)"),
-            name=f"{rh}% RH", showlegend=False,
-            hovertemplate=f"{rh}% RH<br>Tdb %{{x:.1f}}°C<br>Abs %{{y:.2f}} g/kg<extra></extra>"
+            x=T_pts, y=Y_gpkg, mode="markers",
+            marker=dict(
+                size=4, opacity=0.6, color=T_pts, colorscale="Turbo",
+                showscale=True,
+                colorbar=dict(
+                    title="Dry Bulb<br>°C", len=0.6, y=0.3,
+                    thickness=14, tickfont=dict(size=10),
+                ),
+            ),
+            name="Hourly Data", showlegend=True, customdata=custom,
+            text=["Hourly"] * len(T_pts),
+            hovertemplate=hover_tpl,
         ))
 
-    # Optional: enthalpy & specific volume helpers
-    if show_enthalpy:
-        for h in enthalpy_levels:
-            w_line = w_from_enthalpy(T_axis, h)
-            y_line = abs_hum_gpkg_from_w(w_line)
-            fig_psy.add_trace(go.Scatter(
-                x=T_axis, y=y_line, mode="lines",
-                line=dict(width=1.25, dash="dash", color="rgba(255,165,0,0.85)"),
-                name=(f"h={h} kJ/kg"), hoverinfo="skip", showlegend=False
-            ))
-            valid = (y_line >= Y_MIN) & (y_line <= Y_MAX - 1) & (T_axis >= X_MIN + 1) & (T_axis <= X_MAX - 1)
-            if valid.any():
-                idx = np.where(valid)[0][-1] # rightmost valid
-                fig_psy.add_annotation(x=T_axis[idx], y=y_line[idx], text=f"h={h}",
-                                       xanchor="left", yanchor="bottom", showarrow=False,
-                                       font=dict(size=10, color="rgba(255,180,0,0.85)"))
+    # ── RH labels on right margin ──
+    for rh_val in [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]:
+        y_at_xmax = float(psh.gpkg(psh.w_from_Pv_kPa(
+            np.array([(rh_val / 100.0) * psh.p_ws_kPa(np.array([x_max]))[0]]), P_kPa))[0])
+        if y_min < y_at_xmax < y_max:
+            fig_psy.add_annotation(
+                x=x_max, y=y_at_xmax, text=f"{rh_val}%", xanchor="left",
+                showarrow=False, font=dict(size=9, color="#555555"),
+            )
 
-        for v in v_levels:
-            w_line = w_from_specific_volume(T_axis, v, P_kPa)
-            y_line = abs_hum_gpkg_from_w(w_line)
-            fig_psy.add_trace(go.Scatter(
-                x=T_axis, y=y_line, mode="lines",
-                line=dict(width=1.25, dash="dot", color="rgba(90,140,255,0.85)"),
-                name=(f"v={v:.2f} m3/kg"), hoverinfo="skip", showlegend=False
-            ))
-            valid = (y_line >= Y_MIN + 1) & (y_line <= Y_MAX - 1) & (T_axis >= X_MIN + 1) & (T_axis <= X_MAX - 1)
-            if valid.any():
-                idx = np.where(valid)[0][0] # leftmost valid
-                fig_psy.add_annotation(x=T_axis[idx], y=y_line[idx], text=f"v={v:.2f} m³/kg",
-                                       xanchor="left", yanchor="bottom", showarrow=False,
-                                       font=dict(size=10, color="rgba(120,170,255,0.85)"))
-
-    # RH % labels along the right margin (like PVSyst look)
-    for rh in rh_list:
-        x_lab = X_MAX - 0.2
-        y_curve = np.interp(x_lab, T_axis, rh_curves_gpkg[rh])
-        if Y_MIN <= y_curve <= Y_MAX:
-            fig_psy.add_annotation(x=X_MAX, y=y_curve, text=f"{rh}%",
-                                xanchor="left", showarrow=False,
-                                font=dict(size=11, color="rgba(120,120,120,0.9)"))
-
-    # Scatter points (hourly conditions)
-    custom = np.c_[RH_pts, Pv_pts, h_pts, v_pts, dp_pts, tw_pts]
-    fig_psy.add_trace(go.Scatter(
-        x=T_pts, y=Y_pts_gpkg, mode="markers",
-        marker=dict(size=4, opacity=0.35, color="royalblue"),
-        name="Hourly conditions",
-        showlegend=False,
-        customdata=custom,
-        hovertemplate=(
-            "<b>Hourly</b><br>"
-            "Tdb %{x:.2f} °C<br>"
-            "Abs %{y:.2f} g/kg<br>"
-            "RH %{customdata[0]:.1f}%<br>"
-            "Pv %{customdata[1]:.3f} kPa<br>"
-            "h %{customdata[2]:.2f} kJ/kg<br>"
-            "v %{customdata[3]:.3f} m3/kg<br>"
-            "Tdp %{customdata[4]:.2f} °C<br>"
-            "Twb %{customdata[5]:.2f} °C<extra></extra>"
-        )
-    ))
-
-    
-
-    # Axes & layout (minimal legend; neutral theme)
+    # ── Layout (white background like Climate Consultant) ──
     fig_psy.update_xaxes(
-        range=[X_MIN, X_MAX],
-        dtick=10,
-        ticks="outside",
-        ticklen=6,
-        gridcolor="rgba(255,255,255,0.06)",
-        gridwidth=0.6,
-        zeroline=False,
-        showline=True,
-        linecolor="rgba(255,255,255,0.25)",
+        range=[x_min, x_max], dtick=5,
         title="Dry Bulb Temperature (°C)",
+        showgrid=True, gridcolor="rgba(200,200,200,0.3)",
+        zeroline=False, showline=True, linecolor="#aaaaaa",
+        ticks="outside", ticklen=5,
     )
     fig_psy.update_yaxes(
-        range=[Y_MIN, Y_MAX],
-        dtick=5,
-        ticks="outside",
-        ticklen=6,
-        gridcolor="rgba(255,255,255,0.06)",
-        gridwidth=0.6,
-        zeroline=False,
-        showline=True,
-        linecolor="rgba(255,255,255,0.25)",
-        title="Absolute Humidity (g/kg)",
+        range=[y_min, y_max], dtick=5,
+        title="Humidity Ratio (g/kg dry air)",
+        showgrid=True, gridcolor="rgba(200,200,200,0.3)",
+        zeroline=False, showline=True, linecolor="#aaaaaa",
+        ticks="outside", ticklen=5,
     )
-
-    for tr in fig_psy.data:
-        n = getattr(tr, "name", "")
-
-        if n.endswith("% RH"):
-            tr.line.width = 0.8
-            tr.line.color = "rgba(255,255,255,0.28)"
-            tr.hoverinfo = "skip"
-
-        if n.startswith("h="):  # enthalpy
-            tr.line.width = 1.0
-            tr.line.color = "rgba(255,180,0,0.65)"
-            tr.hoverinfo = "skip"
-
-        if n.startswith("v="):  # specific volume
-            tr.line.width = 1.0
-            tr.line.color = "rgba(120,170,255,0.55)"
-            tr.hoverinfo = "skip"
-
-        if n == "Saturation (100% RH)":
-            tr.line.width = 3.0
-            tr.line.color = "rgba(220,220,220,0.95)"
-
-        if n == "Hourly conditions":
-            tr.mode = "markers"
-            tr.marker.size = 5
-            tr.marker.opacity = 0.45
-
-
     fig_psy.update_layout(
-        margin=dict(l=90, r=40, t=70, b=80),  # extra right for the legend removed
-        height=680,
-        showlegend=False,
+        height=720, margin=dict(l=70, r=60, t=80, b=80),
+        showlegend=True,
         hovermode="closest",
-        plot_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="#ffffff",
         paper_bgcolor="rgba(0,0,0,0)",
-        title=dict(text="Psychrometric Chart", x=0.01, xanchor="left", yanchor="top", pad=dict(t=10, b=10)),
+        title=dict(text="Psychrometric Chart – ASHRAE Style", x=0.01, xanchor="left", yanchor="top", font=dict(size=18)),
+        legend=dict(
+            orientation="v", x=1.02, y=1, xanchor="left", yanchor="top",
+            bgcolor="rgba(0,0,0,0)", font=dict(size=10),
+            itemsizing="constant",
+        ),
     )
-    fig_psy.add_annotation(
-        xref="paper", yref="paper", x=0.0, y=1.12,
-        text="Based on EPW hourly data range.", showarrow=False,
-        font=dict(size=11, color="rgba(120,120,120,0.9)")
-    )
-    clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
-    st.plotly_chart(
-        fig_psy,
-        use_container_width=True,
-        config={
-            "displaylogo": False,
-            "modeBarButtonsToRemove": ["select2d", "lasso2d"],
-            "toImageButtonOptions": {"filename": f"{clean_loc}_psychrometric_chart", "format": "png", "scale": 2}
-        },
-    )
-    _add_manual_pdf_figure("Annual Psychrometric Points", fig_psy)
-    # Download buttons for Psychrometric Chart
+
+    clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
+    st.plotly_chart(fig_psy, use_container_width=True, config={"displaylogo": False, "modeBarButtonsToRemove": ["select2d","lasso2d"], "toImageButtonOptions": {"filename": f"{clean_loc}_psychrometric_chart", "format": "png", "scale": 2}})
+    _add_manual_pdf_figure("Psychrometric Chart", fig_psy)
+
+    # Downloads
     d1, d2 = st.columns(2)
     with d1:
         try:
-            # Explicitly safe dimensions to prevent memory crash
             svg_bytes = fig_psy.to_image(format="svg", width=1200, height=900, scale=2)
-            st.download_button("📥 Download Chart (SVG)", svg_bytes, f"{clean_loc}_psychrometric_chart.svg", "image/svg+xml", key="dl_psy_png")
+            st.download_button("📥 Download Chart (SVG)", svg_bytes, f"{clean_loc}_psychrometric_chart.svg", "image/svg+xml", key="dl_psy_svg")
         except Exception as e:
-            st.warning(f"Download Chart (SVG) failed: {e}")
+            st.warning(f"SVG export failed: {e}")
     with d2:
         try:
             html_bytes = fig_psy.to_html(include_plotlyjs="cdn").encode("utf-8")
             st.download_button("📥 Download Chart (HTML)", html_bytes, f"{clean_loc}_psychrometric_chart.html", "text/html", key="dl_psy_html")
         except Exception as e:
-            st.warning(f"Download Chart (HTML) failed: {e}")
+            st.warning(f"HTML export failed: {e}")
+
+    # Zone summary
+    if overlay_choice == "Givoni Bioclimatic Chart":
+        st.markdown("### Bioclimatic Zone Summary")
+        st.caption("Hours in each Givoni strategy zone. Points may overlap multiple zones.")
+        zones = psh.givoni_zones(P_kPa, mean_outdoor_t)
+        zone_hours = psh.count_hours_in_zones(T_pts, Y_gpkg, zones)
+        total = len(T_pts)
+        rows = []
+        for zname, hrs in sorted(zone_hours.items(), key=lambda x: -x[1]):
+            pct = (hrs / total * 100) if total > 0 else 0
+            rows.append({"Strategy Zone": zname.replace("\n"," "), "Hours": hrs, "% of Period": f"{pct:.1f}%"})
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+
+
+
+
 
 
 def create_wind_rose(df):
@@ -10712,18 +10650,18 @@ def main():
     st.markdown(SECONDARY_CSS, unsafe_allow_html=True)
     _install_plotly_capture_hook()
 
-    # 2. Evaluate Effective Routing Page State
-    effective_page = st.session_state.get("nav_page", DEFAULT_PAGE)
-
-    # 3. Render Header (Globally Fixed Sticky UI Bar)
+    # 2. Render Header (Globally Fixed Sticky UI Bar)
     render_header()
 
-    # 4. Render Sidebar (handles navigation state)
+    # 3. Render Sidebar (handles navigation state)
     render_sidebar()
 
-    # 5. Controller Logic (Load EPW, etc.)
+    # 4. Controller Logic (Load EPW, etc.)
     show_epw_status()
     setup_cdf()
+
+    # 5. Evaluate Effective Routing Page State (AFTER sidebar so nav_page is current)
+    effective_page = st.session_state.get("nav_page", DEFAULT_PAGE)
 
     # 6. Page Routing Execution
     
@@ -10755,15 +10693,12 @@ def main():
     st.markdown(
         """
         <div class="bevl-footer">
-            <div style="margin-bottom:0.5rem">
-                <strong>BEVL Lab</strong> &bull; UB School of Architecture & Planning
-            </div>
-            <div style="opacity:0.6; font-size: 0.85rem">
-                Research-grade tools for the built environment.
-                <br/>
-                <a href="https://archplan.buffalo.edu/research/research-centers/bevl.html" target="_blank" style="color:inherit;text-decoration:underline;">Visit Lab</a> &bull; 
-                <a href="https://github.com/UB-BEVL/climateclock/blob/main/README.md" target="_blank" style="color:inherit;text-decoration:underline;">Documentation</a>
-            </div>
+            <strong>BEVL Lab</strong> &bull; UB School of Architecture & Planning
+            <br/>
+            <span style="opacity:0.6">Research-grade tools for the built environment.</span>
+            &nbsp;
+            <a href="https://archplan.buffalo.edu/research/research-centers/bevl.html" target="_blank">Visit Lab</a> &bull;
+            <a href="https://github.com/UB-BEVL/climateclock/blob/main/README.md" target="_blank">Docs</a>
         </div>
         """,
         unsafe_allow_html=True,
