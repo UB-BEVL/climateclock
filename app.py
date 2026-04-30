@@ -19,7 +19,7 @@ import plotly.express as px
 import plotly.io as pio
 from plotly.subplots import make_subplots
 import matplotlib
-matplotlib.use('Agg')  # Use Agg backend for headless environments (Streamlit Cloud)
+matplotlib.use('Agg')  # MUST be set before importing pyplot (required for Streamlit Cloud headless environment)
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 try:
