@@ -19,7 +19,6 @@ import plotly.express as px
 import plotly.io as pio
 from plotly.subplots import make_subplots
 import matplotlib
-matplotlib.use('Agg')  # MUST be set before importing pyplot (required for Streamlit Cloud headless environment)
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 try:
@@ -230,6 +229,13 @@ for _k, _v in [
 ]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
+
+# Configure matplotlib for headless/Streamlit Cloud environment
+try:
+    matplotlib.use('Agg')
+except Exception:
+    pass  # Matplotlib backend might already be set
+
 # Prevent footer "ghosting" during reruns/navigation: hide any old <footer> ASAP.
 # The app footer we render later uses class "bevl-footer" and stays visible.
 # Prevent footer "ghosting" during reruns/navigation: hide any old <footer> ASAP.
