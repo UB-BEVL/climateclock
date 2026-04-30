@@ -43,6 +43,20 @@ import streamlit.runtime.scriptrunner as _sr
 from fpdf import FPDF
 import tempfile
 
+try:
+    _kaleido_scope = getattr(pio, "kaleido", None)
+    _kaleido_scope = getattr(_kaleido_scope, "scope", None)
+    if _kaleido_scope is not None:
+        chromium_args = list(getattr(_kaleido_scope, "chromium_args", []) or [])
+        for arg in ("--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"):
+            if arg not in chromium_args:
+                chromium_args.append(arg)
+        _kaleido_scope.chromium_args = chromium_args
+        if hasattr(_kaleido_scope, "mathjax"):
+            _kaleido_scope.mathjax = None
+except Exception:
+    pass
+
 
 _COMPASS_TO_DEG = {
     "N": 0, "NNE": 22.5, "NE": 45, "ENE": 67.5,
