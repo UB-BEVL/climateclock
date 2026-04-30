@@ -1,0 +1,10 @@
+[client]
+showErrorDetails = true
+
+[logger]
+level = "info"
+
+[server]
+headless = true
+runOnSave = false
+maxUploadSize = 200
