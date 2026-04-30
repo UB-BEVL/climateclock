@@ -3654,8 +3654,60 @@ def _fig_to_tmp_png(fig, width: int = 1400, height: int = 730, scale: int = 2) -
     except Exception:
         pass
 
-    # Note: 1400x730 is selected for the 2-chart-per-page grid layout aspect ratio
-    img_bytes = pio.to_image(fig, format="png", width=width, height=height, scale=scale)
+    # Note: 1400x730 is selected for the 2-chart-per-page grid layout aspect ratio.
+    # Large Kaleido renders can fail on Cloud, so retry progressively smaller exports.
+    export_attempts = [
+        (width, height, scale),
+        (max(1100, width // 2), max(575, height // 2), 1),
+        (900, 500, 1),
+    ]
+    img_bytes = None
+    last_error = None
+    for attempt_width, attempt_height, attempt_scale in export_attempts:
+        try:
+            img_bytes = pio.to_image(
+                fig,
+                format="png",
+                width=attempt_width,
+                height=attempt_height,
+                scale=attempt_scale,
+                engine="kaleido",
+            )
+            break
+        except Exception as exc:
+            last_error = exc
+            continue
+
+    if img_bytes is None:
+        # Last resort: try SVG, which is often more reliable on headless Cloud environments.
+        svg_attempts = [
+            (width, height, 1),
+            (max(1100, width // 2), max(575, height // 2), 1),
+            (900, 500, 1),
+        ]
+        svg_bytes = None
+        for attempt_width, attempt_height, attempt_scale in svg_attempts:
+            try:
+                svg_bytes = pio.to_image(
+                    fig,
+                    format="svg",
+                    width=attempt_width,
+                    height=attempt_height,
+                    scale=attempt_scale,
+                    engine="kaleido",
+                )
+                break
+            except Exception as exc:
+                last_error = exc
+                continue
+        if svg_bytes is None:
+            raise RuntimeError(f"Figure export failed: {last_error}")
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".svg")
+        tmp.write(svg_bytes)
+        tmp.close()
+        return tmp.name
+
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     tmp.write(img_bytes)
     tmp.close()
