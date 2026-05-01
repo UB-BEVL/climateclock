@@ -2427,6 +2427,12 @@ def render_sidebar():
                 st.info("👈 Load a weather file first, then click Generate PDF.")
             else:
                 st.caption("Generate directly from the Dashboard to export captured visualizations.")
+                st.checkbox(
+                    "Include advanced auto-generated analytics (beta)",
+                    value=False,
+                    key="pdf_enable_advanced_figures",
+                    help="Adds seasonal psychrometrics, extra wind analytics, and derived heatmaps. Keep off if export stability is a priority.",
+                )
             
             if st.button("Generate PDF", use_container_width=True, disabled=not has_data):
                 if not has_data:
@@ -4527,7 +4533,22 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
     except Exception:
         return extra
 
-    return extra
+    # Keep advanced additions bounded so PDF export remains stable on Cloud.
+    preferred_order = [
+        "Dry Bulb Heatmap", "Dew Point Heatmap", "RH Heatmap", "MRT Heatmap", "UTCI Heatmap",
+        "Degree Day Summary",
+        "Annual Psychrometric Analysis", "Seasonal Psychrometric Analysis", "Monthly Psychrometric Analysis", "Hourly Psychrometric Paths",
+        "Thermal Comfort Frequency by Season and Time of Day",
+        "Annual Wind Rose", "Winter Wind Rose", "Summer Wind Rose",
+        "Wind Speed Frequency Distribution", "Annual Hourly Wind Speed Profile", "Seasonal Hourly Wind Speed Profiles", "Wind Speed Matrix", "Directional Wind Power Density Classes",
+    ]
+    max_extra_figs = 16
+    ordered = [name for name in preferred_order if name in extra]
+    for k in extra.keys():
+        if k not in ordered:
+            ordered.append(k)
+    trimmed = {k: extra[k] for k in ordered[:max_extra_figs]}
+    return trimmed
 
 
 def build_climate_pdf() -> bytes:
@@ -4542,7 +4563,8 @@ def build_climate_pdf() -> bytes:
     loc_meta = {k: _cpt(v) for k, v in _location_meta(header).items()}
     source = _cpt(st.session_state.get("source_label", "EPW File"))
     figs = _merged_pdf_figures()
-    extra_figs = _build_additional_pdf_figures(cdf)
+    advanced_enabled = bool(st.session_state.get("pdf_enable_advanced_figures", False))
+    extra_figs = _build_additional_pdf_figures(cdf) if advanced_enabled else {}
     for k, v in extra_figs.items():
         if k not in figs:
             figs[k] = v
@@ -4738,7 +4760,7 @@ def build_climate_pdf() -> bytes:
             export_err = ""
             img_path = None
             try:
-                img_path = _fig_to_tmp_png(fig, width=1600, height=900, scale=2)
+                img_path = _fig_to_tmp_png(fig, width=1200, height=675, scale=2)
                 temp_images.append(img_path)
             except Exception as exc:
                 export_err = str(exc)
