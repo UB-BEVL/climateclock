@@ -430,12 +430,81 @@ def _build_accessible_plotly_template(mode: str = "dark") -> go.layout.Template:
     return template
 
 
-#pio.templates["bevl_dark"] = _build_accessible_plotly_template("dark")
-#pio.templates["bevl_light"] = _build_accessible_plotly_template("light")
+pio.templates["bevl_dark"] = _build_accessible_plotly_template("dark")
+pio.templates["bevl_light"] = _build_accessible_plotly_template("light")
 
 DEFAULT_TEMPLATE = "bevl_dark"
-#px.defaults.template = DEFAULT_TEMPLATE
-#pio.templates.default = DEFAULT_TEMPLATE
+try:
+    # Apply sensible default template based on Streamlit theme base (light/dark)
+    chosen = "bevl_dark" if THEME_BASE == "dark" else "bevl_light"
+    px.defaults.template = chosen
+    pio.templates.default = chosen
+except Exception:
+    px.defaults.template = DEFAULT_TEMPLATE
+    pio.templates.default = DEFAULT_TEMPLATE
+
+
+def _apply_global_plot_style(fig_obj: object) -> object:
+    """Apply the app-wide Plotly template and ensure non-transparent backgrounds and readable fonts.
+
+    This overrides per-figure transparent backgrounds so charts render consistently for
+    both on-screen display and PDF export.
+    """
+    try:
+        import plotly.graph_objects as go
+        # Normalize to a Figure
+        if not isinstance(fig_obj, go.Figure):
+            fig_obj = go.Figure(fig_obj)
+
+        mode = "dark" if THEME_BASE == "dark" else "light"
+        template_name = "bevl_dark" if mode == "dark" else "bevl_light"
+        # Apply template (this also sets font colors, bg colors, axes defaults)
+        try:
+            fig_obj.update_layout(template=template_name)
+        except Exception:
+            pass
+
+        # Ensure backgrounds are not transparent (some figures explicitly set rgba(0,0,0,0)).
+        t = pio.templates.get(template_name)
+        if t and getattr(t, "layout", None):
+            bg = getattr(t.layout, "paper_bgcolor", None)
+            plotbg = getattr(t.layout, "plot_bgcolor", None)
+            fontcol = getattr(getattr(t.layout, "font", None), "color", None)
+            if bg is not None:
+                fig_obj.layout.paper_bgcolor = bg
+            if plotbg is not None:
+                fig_obj.layout.plot_bgcolor = plotbg
+            if fontcol is not None:
+                try:
+                    fig_obj.update_layout(font=dict(color=fontcol))
+                except Exception:
+                    pass
+
+        # Ensure axes tick/title colors follow font color when possible
+        try:
+            fc = fig_obj.layout.font.color if getattr(fig_obj.layout, "font", None) else None
+            if fc:
+                fig_obj.update_xaxes(tickfont=dict(color=fc), title_font=dict(color=fc), linecolor=fc)
+                fig_obj.update_yaxes(tickfont=dict(color=fc), title_font=dict(color=fc), linecolor=fc)
+        except Exception:
+            pass
+
+        return fig_obj
+    except Exception:
+        return fig_obj
+
+
+def _st_plotly_chart(fig_obj: object, *args, **kwargs):
+    """Wrapper around `st.plotly_chart` that applies the global plot style first.
+
+    Use this everywhere instead of `st.plotly_chart` to ensure consistent
+    background and font colors across the app and exported images.
+    """
+    try:
+        fig_obj = _apply_global_plot_style(fig_obj)
+    except Exception:
+        pass
+    return st.plotly_chart(fig_obj, *args, **kwargs)
 
 # Default station source fallback (can be overridden)
 STATION_SOURCE = "https://raw.githubusercontent.com/CenterForTheBuiltEnvironment/clima/main/assets/data/epw_location.json"
@@ -2591,12 +2660,12 @@ def _interactive_map_fragment() -> None:
         try:
             if pdf_pending or not on_select_page:
                 map_key = "station_map_pdf_pending" if pdf_pending else "station_map_static_only"
-                st.plotly_chart(fig_map, use_container_width=True, key=map_key)
+                _st_plotly_chart(fig_map, use_container_width=True, key=map_key)
                 if pdf_pending:
                     st.caption("Map click-to-load is paused while PDF generation is in progress.")
                 return
 
-            event = st.plotly_chart(
+            event = _st_plotly_chart(
                 fig_map,
                 use_container_width=True,
                 on_select="rerun",
@@ -2604,7 +2673,7 @@ def _interactive_map_fragment() -> None:
                 key="station_map_interactive",
             )
         except Exception:
-            st.plotly_chart(fig_map, use_container_width=True, key="station_map_static")
+            _st_plotly_chart(fig_map, use_container_width=True, key="station_map_static")
             st.caption("Map click-to-load is temporarily unavailable. Use Station Search below to load a station.")
             return
 
@@ -3637,34 +3706,32 @@ class ClimateReportPDF(FPDF):
 
 def _fig_to_tmp_png(fig, width: int = 1400, height: int = 730, scale: int = 2) -> str:
     """Export a Plotly figure to a temporary PNG file and return its path."""
-    # Force pure, elegant styling
+    # Apply app-wide styling so exported charts match on-screen visuals
     try:
         import plotly.graph_objects as go
         if isinstance(fig, go.Figure):
             fig = go.Figure(fig)
-            fig.update_layout(
-                template="plotly_white",
-                paper_bgcolor="white",
-                plot_bgcolor="white",
-                font=dict(color="#222222", family="Helvetica, Arial, sans-serif"),
-                title=dict(font=dict(size=16, color="#111111")),
-                margin=dict(t=50, l=40, r=20, b=40),
-                showlegend=True,
-            )
-            fig.update_xaxes(
-                gridcolor="#f0f0f0", 
-                zerolinecolor="#e2e8f0", 
-                linecolor="#cbd5e1",
-                tickfont=dict(color="#64748b"), 
-                title_font=dict(color="#334155")
-            )
-            fig.update_yaxes(
-                gridcolor="#f0f0f0", 
-                zerolinecolor="#e2e8f0", 
-                linecolor="#cbd5e1",
-                tickfont=dict(color="#64748b"), 
-                title_font=dict(color="#334155")
-            )
+            try:
+                fig = _apply_global_plot_style(fig)
+            except Exception:
+                pass
+
+            try:
+                fig.update_layout(
+                    margin=dict(t=50, l=40, r=20, b=40),
+                    title=dict(font=dict(size=16)),
+                    showlegend=True,
+                )
+            except Exception:
+                pass
+
+            try:
+                fc = fig.layout.font.color if getattr(fig.layout, "font", None) else None
+                gridcol = "rgba(148, 163, 184, 0.12)"
+                fig.update_xaxes(gridcolor=gridcol, zerolinecolor=gridcol, linecolor=fc or gridcol, tickfont=dict(color=fc) if fc else None)
+                fig.update_yaxes(gridcolor=gridcol, zerolinecolor=gridcol, linecolor=fc or gridcol, tickfont=dict(color=fc) if fc else None)
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -3677,6 +3744,7 @@ def _fig_to_tmp_png(fig, width: int = 1400, height: int = 730, scale: int = 2) -
     ]
     img_bytes = None
     last_error = None
+    engine_used = None
     for attempt_width, attempt_height, attempt_scale in export_attempts:
         try:
             img_bytes = pio.to_image(
@@ -3687,6 +3755,7 @@ def _fig_to_tmp_png(fig, width: int = 1400, height: int = 730, scale: int = 2) -
                 scale=attempt_scale,
                 engine="kaleido",
             )
+            engine_used = "kaleido_png"
             break
         except Exception as exc:
             last_error = exc
@@ -3710,6 +3779,7 @@ def _fig_to_tmp_png(fig, width: int = 1400, height: int = 730, scale: int = 2) -
                     scale=attempt_scale,
                     engine="kaleido",
                 )
+                engine_used = "kaleido_svg"
                 break
             except Exception as exc:
                 last_error = exc
@@ -3719,9 +3789,24 @@ def _fig_to_tmp_png(fig, width: int = 1400, height: int = 730, scale: int = 2) -
             try:
                 import matplotlib.pyplot as plt
                 from matplotlib.figure import Figure
-                
-                mpl_fig = Figure(figsize=(14, 7.3), dpi=100)
+                # Derive background/font from the active Plotly template so visuals match
+                try:
+                    tpl_name = pio.templates.default or "bevl_dark"
+                    tpl = pio.templates.get(tpl_name)
+                    bg = getattr(tpl.layout, "paper_bgcolor", None) if tpl and getattr(tpl, "layout", None) else None
+                    fontcol = getattr(getattr(tpl.layout, "font", None), "color", None) if tpl and getattr(tpl, "layout", None) else None
+                except Exception:
+                    bg = None
+                    fontcol = None
+
+                if not bg:
+                    bg = "#0f172a" if THEME_BASE == "dark" else "#ffffff"
+                if not fontcol:
+                    fontcol = "#e2e8f0" if THEME_BASE == "dark" else "#111111"
+
+                mpl_fig = Figure(figsize=(14, 7.3), dpi=100, facecolor=bg)
                 ax = mpl_fig.add_subplot(111)
+                ax.set_facecolor(bg)
                 
                 # Extract data from Plotly figure and render with matplotlib
                 if hasattr(fig, 'data') and len(fig.data) > 0:
@@ -3731,7 +3816,11 @@ def _fig_to_tmp_png(fig, width: int = 1400, height: int = 730, scale: int = 2) -
                             z_data = getattr(trace, 'z', None)
                             if z_data is not None:
                                 im = ax.imshow(z_data, cmap='YlOrRd', aspect='auto')
-                                mpl_fig.colorbar(im, ax=ax)
+                                cbar = mpl_fig.colorbar(im, ax=ax)
+                                try:
+                                    cbar.ax.yaxis.set_tick_params(color=fontcol)
+                                except Exception:
+                                    pass
                         elif trace_type in ('scatter', 'scattergl'):
                             x = getattr(trace, 'x', [])
                             y = getattr(trace, 'y', [])
@@ -3752,13 +3841,24 @@ def _fig_to_tmp_png(fig, width: int = 1400, height: int = 730, scale: int = 2) -
                         title = getattr(layout, 'title', None)
                         if title is not None:
                             title_text = getattr(title, 'text', str(title)) if hasattr(title, 'text') else str(title)
-                            ax.set_title(title_text, fontsize=14, fontweight='bold')
+                            ax.set_title(title_text, fontsize=14, fontweight='bold', color=fontcol)
                     
-                    ax.legend(loc='best', fontsize=9)
-                    ax.grid(True, alpha=0.3)
+                    leg = ax.legend(loc='best', fontsize=9)
+                    try:
+                        for text in leg.get_texts():
+                            text.set_color(fontcol)
+                    except Exception:
+                        pass
+                    ax.grid(True, alpha=0.3, color=('white' if THEME_BASE == 'dark' else '#333333'), linestyle='--')
+                    try:
+                        ax.tick_params(colors=fontcol)
+                        for spine in ax.spines.values():
+                            spine.set_color(fontcol)
+                    except Exception:
+                        pass
                 
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                mpl_fig.savefig(tmp.name, format='png', dpi=100, bbox_inches='tight')
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mpl.png")
+                mpl_fig.savefig(tmp.name, format='png', dpi=100, bbox_inches='tight', facecolor=mpl_fig.get_facecolor())
                 plt.close(mpl_fig)
                 tmp.close()
                 return tmp.name
@@ -3770,7 +3870,14 @@ def _fig_to_tmp_png(fig, width: int = 1400, height: int = 730, scale: int = 2) -
         tmp.close()
         return tmp.name
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    # Choose suffix to make debugging easier (which engine produced the image)
+    suffix = ".png"
+    if engine_used == "kaleido_png":
+        suffix = ".kaleido.png"
+    elif engine_used == "kaleido_svg":
+        suffix = ".kaleido.svg"
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     tmp.write(img_bytes)
     tmp.close()
     return tmp.name
@@ -4073,14 +4180,40 @@ def build_climate_pdf() -> bytes:
     for title in available_titles:
         tag = _section_tag(title)
         sections[tag].append(title)
-        
-    known_section_groups = ["Temperature & Humidity", "Solar & Sky Analysis", "Wind Data", "Psychrometrics", "Thermal Comfort", "Overview Metadata"]
+
+    # Prefer PDF section ordering that follows the dashboard tab order
+    ui_tab_order = [
+        "Overview & Stats",
+        "Comfort & Loads",
+        "Temp & Humidity",
+        "Solar Analysis",
+        "Psychrometrics",
+        "Wind",
+        "Raw Data",
+    ]
+
+    # Map each UI tab to one or more section tags produced by _section_tag()
+    tab_to_section_map = {
+        "Overview & Stats": ["Overview Metadata", "Solar & Sky Analysis", "Temperature & Humidity", "Thermal Comfort", "Wind Data", "Psychrometrics"],
+        "Comfort & Loads": ["Thermal Comfort", "Overview Metadata"],
+        "Temp & Humidity": ["Temperature & Humidity", "Overview Metadata"],
+        "Solar Analysis": ["Solar & Sky Analysis", "Overview Metadata"],
+        "Psychrometrics": ["Psychrometrics", "Overview Metadata"],
+        "Wind": ["Wind Data", "Overview Metadata"],
+        "Raw Data": ["Overview Metadata"],
+    }
+
     ordered_sections = []
-    for ks in known_section_groups:
-        if ks in sections:
-            ordered_sections.append((ks, sections[ks]))
+    added = set()
+    for tab in ui_tab_order:
+        for sect in tab_to_section_map.get(tab, []):
+            if sect in sections and sect not in added:
+                ordered_sections.append((sect, sections[sect]))
+                added.add(sect)
+
+    # Append any remaining section groups not covered above
     for s, titles in sections.items():
-        if s not in known_section_groups:
+        if s not in added:
             ordered_sections.append((s, titles))
 
     temp_images: List[str] = []
@@ -4557,7 +4690,7 @@ def render_dashboard_page():
             else:
                 fig = build_diurnal_heatmap_figure(heatmap_dict, cdf, header)
                 if fig:
-                    st.plotly_chart(fig, use_container_width=False, config={"responsive": False})
+                    _st_plotly_chart(fig, use_container_width=False, config={"responsive": False})
                     _add_manual_pdf_figure("Annual Diurnal Resource Heatmap", fig)
                     # Downloads reflecting current thresholds
                     city_clean = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
@@ -4887,7 +5020,7 @@ def render_dashboard_page():
                 )
                 fig_comfort.update_yaxes(title_text="Hours", secondary_y=False)
                 fig_comfort.update_yaxes(title_text="Comfort %", range=[0, 100], secondary_y=True)
-                st.plotly_chart(fig_comfort, use_container_width=True)
+                _st_plotly_chart(fig_comfort, use_container_width=True)
                 _add_manual_pdf_figure("Comfort Loads", fig_comfort)
             # Point-in-time probe: inspect weather and comfort metrics together at a chosen hour
             with st.expander("Point-in-time probe", expanded=False):
@@ -5538,7 +5671,7 @@ def render_trends_page():
 # -------------------------------------------------------------------------
 
 
-    st.plotly_chart(fig, use_container_width=True)
+    _st_plotly_chart(fig, use_container_width=True)
     _add_manual_pdf_figure("Annual Climate Statistics", fig)
     # Download buttons for Trends
     d1, d2 = st.columns(2)
@@ -5590,7 +5723,7 @@ def _render_bar_chart(cdf, col, title_suffix, y_label, color, key_suffix):
         legend=dict(orientation="h", x=0, y=1.02),
         bargap=0.15
     )
-    st.plotly_chart(fig, use_container_width=True)
+    _st_plotly_chart(fig, use_container_width=True)
     _add_manual_pdf_figure(f"{col} Monthly Bar", fig)
     d1, d2 = st.columns(2)
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
@@ -5650,7 +5783,7 @@ def _render_daily_scatter(cdf, col, title_suffix, y_label, line_color, key_suffi
     fig_sc.for_each_annotation(lambda a: a.update(text=pd.Timestamp(2001, int(a.text.split("=")[-1]), 1).strftime("%b"), y=a.y - 0.03))
     fig_sc.update_layout(legend=dict(orientation="h", x=0, xanchor="left", y=1.08, yanchor="bottom"), margin=dict(t=105, b=70, l=50, r=30))
     cname = get_clean_city_name().replace(" ", "_")
-    st.plotly_chart(fig_sc, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_{col}_scatter", "format": "png", "scale": 2}, "displayModeBar": True})
+    _st_plotly_chart(fig_sc, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_{col}_scatter", "format": "png", "scale": 2}, "displayModeBar": True})
     _add_manual_pdf_figure(f"{col} Hourly Dot Plot", fig_sc)
     d1, d2 = st.columns(2)
     with d1:
@@ -5762,9 +5895,9 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
     month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
     fig.update_xaxes(tickvals=month_days, ticktext=month_names, ticklen=5, range=[0.5, 366.5])
     fig.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"], autorange="reversed", ticklen=5, range=[-0.5, 23.5])
-    fig.update_layout(height=450, margin=dict(t=30, b=40, l=50, r=20), legend=dict(y=1, yanchor="top", x=1.02, xanchor="left", traceorder="reversed"), plot_bgcolor="#ffffff")
+    fig.update_layout(height=450, margin=dict(t=30, b=40, l=50, r=20), legend=dict(y=1, yanchor="top", x=1.02, xanchor="left", traceorder="reversed"))
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
-    st.plotly_chart(fig, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{clean_loc}_{col}_{key_suffix}", "format": "png"}, "displayModeBar": True})
+    _st_plotly_chart(fig, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{clean_loc}_{col}_{key_suffix}", "format": "png"}, "displayModeBar": True})
     _add_manual_pdf_figure(f"{col} Annual Heatmap", fig)
     d1, d2 = st.columns(2)
     with d1:
@@ -5795,7 +5928,7 @@ def _render_heatmap(cdf, col, title_suffix, y_label, color_scale):
         height=350, color_continuous_scale=color_scale
     )
     fig_hm.update_xaxes(side="bottom")
-    st.plotly_chart(fig_hm, use_container_width=True)
+    _st_plotly_chart(fig_hm, use_container_width=True)
     _add_manual_pdf_figure(f"{col} Annual Heatmap", fig_hm)
     d1, d2 = st.columns(2)
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
@@ -6028,7 +6161,7 @@ def render_solar_page():
                 height=340,
                 margin=dict(l=0, r=0, t=40, b=0),
             )
-            st.plotly_chart(fig_solar, use_container_width=True)
+            _st_plotly_chart(fig_solar, use_container_width=True)
             _add_manual_pdf_figure("Monthly Solar Insolation", fig_solar)
         if "totskycvr" in cdf:
             cc = cdf[["totskycvr"]].copy()
@@ -6056,7 +6189,7 @@ def render_solar_page():
                 labels={"month": "Month", "pct": "% of hours", "category": ""},
                 title="Cloud coverage by month (stacked frequency)",
             )
-            st.plotly_chart(fig_cloud, use_container_width=True)
+            _st_plotly_chart(fig_cloud, use_container_width=True)
             _add_manual_pdf_figure("Cloud Coverage", fig_cloud)
             tmp = pd.DataFrame({"doy": cdf.index.dayofyear, "hour": cdf.index.hour, "val": cdf["totskycvr"]}).dropna()
             if not tmp.empty:
@@ -6070,7 +6203,7 @@ def render_solar_page():
                     height=340,
                     color_continuous_scale="Blues",
                 )
-                st.plotly_chart(fig_cloud_hm, use_container_width=True)
+                _st_plotly_chart(fig_cloud_hm, use_container_width=True)
                 _add_manual_pdf_figure("Cloud Coverage Heatmap", fig_cloud_hm)
         return
     
@@ -7537,7 +7670,7 @@ def render_solar_page():
         marker_every=marker_every
     )
     cname = get_clean_city_name().replace(" ", "_")
-    st.plotly_chart(fig2d, use_container_width=True, config={"displayModeBar": True, "toImageButtonOptions": {"filename": f"{cname}_sunpath_2d", "format": "png", "scale": 2}})
+    _st_plotly_chart(fig2d, use_container_width=True, config={"displayModeBar": True, "toImageButtonOptions": {"filename": f"{cname}_sunpath_2d", "format": "png", "scale": 2}})
     _add_manual_pdf_figure("Sun Path 2D", fig2d)
     # --- Render Solar Info Panel ---
     if info_dict.get("azimuth") is not None:
@@ -7583,7 +7716,7 @@ def render_solar_page():
     if isinstance(fig3d, (dict, list)):
         fig3d = go.Figure(fig3d)
     if isinstance(fig3d, go.Figure):
-        st.plotly_chart(
+        _st_plotly_chart(
             fig3d,
             use_container_width=True,
             config={
@@ -7900,7 +8033,7 @@ def render_solar_page():
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)"
     )
-    st.plotly_chart(fig_cart, use_container_width=True, config={"displayModeBar": True, "toImageButtonOptions": {"filename": f"{cname}_sunpath_cartesian", "format": "png", "scale": 2}})
+    _st_plotly_chart(fig_cart, use_container_width=True, config={"displayModeBar": True, "toImageButtonOptions": {"filename": f"{cname}_sunpath_cartesian", "format": "png", "scale": 2}})
     _add_manual_pdf_figure("Sun Path Cartesian", fig_cart)
     # Solar Irradiance Components (GHI, DNI, DHI) — above cloud coverage
     import plotly.express as px
@@ -7963,7 +8096,7 @@ def render_solar_page():
                                tickvals=[1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335],
                                ticktext=['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
         fig_solar.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
-        st.plotly_chart(fig_solar, use_container_width=True)
+        _st_plotly_chart(fig_solar, use_container_width=True)
         _add_manual_pdf_figure("Monthly Solar Insolation", fig_solar)
         # Individual heatmaps for DHI and DNI
         for _irr_label, _irr_col, _irr_scale, _irr_cname in [
@@ -7980,7 +8113,7 @@ def render_solar_page():
                                     height=360, color_continuous_scale=_irr_scale)
                     _fig_irr.update_xaxes(tickvals=_month_days, ticktext=_month_names, side="bottom")
                     _fig_irr.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"])
-                    st.plotly_chart(_fig_irr, use_container_width=True)
+                    _st_plotly_chart(_fig_irr, use_container_width=True)
                     pdf_store = st.session_state.setdefault("pdf_figures", {})
                     if "Irradiance Heatmap" not in pdf_store:
                         pdf_store["Irradiance Heatmap"] = _fig_irr
@@ -8015,7 +8148,7 @@ def render_solar_page():
             labels={"month":"Month", "pct":"% of hours", "category":""},
             title="Cloud coverage by month (stacked frequency)"
         )
-        st.plotly_chart(fig_cloud, use_container_width=True)
+        _st_plotly_chart(fig_cloud, use_container_width=True)
         _add_manual_pdf_figure("Cloud Coverage", fig_cloud)
         # Hourly scatter faceted by month with smoothed mean overlay
         vcol = "totskycvr"
@@ -8089,7 +8222,7 @@ def render_solar_page():
             margin=dict(t=110, b=40, l=40, r=20)
         )
 
-        st.plotly_chart(fig_sc, use_container_width=True)
+        _st_plotly_chart(fig_sc, use_container_width=True)
         _add_manual_pdf_figure("Cloud Coverage Scatter", fig_sc)
         # ---- Annual heatmap (day-of-year × hour) ----
         tmp = pd.DataFrame({
@@ -8109,7 +8242,7 @@ def render_solar_page():
         month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
         fig_hm.update_xaxes(tickvals=month_days, ticktext=month_names)
         fig_hm.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"])
-        st.plotly_chart(fig_hm, use_container_width=True)
+        _st_plotly_chart(fig_hm, use_container_width=True)
         _add_manual_pdf_figure("Cloud Coverage Heatmap", fig_hm)
 def render_psychrometrics_page():
     cdf = st.session_state.get("cdf")
@@ -8351,7 +8484,6 @@ def render_psychrometrics_page():
         height=720, margin=dict(l=70, r=60, t=80, b=80),
         showlegend=True,
         hovermode="closest",
-        plot_bgcolor="#ffffff",
         paper_bgcolor="rgba(0,0,0,0)",
         title=dict(text="Psychrometric Chart – ASHRAE Style", x=0.01, xanchor="left", yanchor="top", font=dict(size=18)),
         legend=dict(
@@ -8362,7 +8494,7 @@ def render_psychrometrics_page():
     )
 
     clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
-    st.plotly_chart(fig_psy, use_container_width=True, config={"displaylogo": False, "modeBarButtonsToRemove": ["select2d","lasso2d"], "toImageButtonOptions": {"filename": f"{clean_loc}_psychrometric_chart", "format": "png", "scale": 2}})
+    _st_plotly_chart(fig_psy, use_container_width=True, config={"displaylogo": False, "modeBarButtonsToRemove": ["select2d","lasso2d"], "toImageButtonOptions": {"filename": f"{clean_loc}_psychrometric_chart", "format": "png", "scale": 2}})
     _add_manual_pdf_figure("Psychrometric Chart", fig_psy)
 
     # Downloads
@@ -8529,7 +8661,7 @@ def render_wind_page():
         st.warning(f"Wind Rose failed to render: {_wr_err}")
 
     if fig:
-        st.plotly_chart(fig, use_container_width=True,
+        _st_plotly_chart(fig, use_container_width=True,
                         config={"displayModeBar": True})
         _add_manual_pdf_figure("Annual Wind Rose", fig)
         d1, d2 = st.columns(2)
@@ -8995,7 +9127,7 @@ def render_live_data_page():
         ])
         fig_temp_bar.update_layout(title="Observed sensor temperature (entire period)", yaxis_title="Temperature (°C)", height=280, margin=dict(l=10,r=10,t=32,b=16))
         cname = get_clean_city_name().replace(" ", "_")
-        st.plotly_chart(fig_temp_bar, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_sensor_temp_bar", "format": "png", "scale": 2}, "displayModeBar": True})
+        _st_plotly_chart(fig_temp_bar, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_sensor_temp_bar", "format": "png", "scale": 2}, "displayModeBar": True})
         st.caption("Sensor temperatures over the selected period. Shows the observed range and average conditions on site.")
 
         if rh_stats:
@@ -9003,7 +9135,7 @@ def render_live_data_page():
                 go.Bar(x=["Min", "Mean", "Max"], y=[rh_stats[k] for k in ["min", "mean", "max"]], marker_color="#4c78a8")
             ])
             fig_rh_bar.update_layout(title="Observed sensor humidity (entire period)", yaxis_title="Relative Humidity (%)", height=280, margin=dict(l=10,r=10,t=32,b=16))
-            st.plotly_chart(fig_rh_bar, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_sensor_rh_bar", "format": "png", "scale": 2}, "displayModeBar": True})
+            _st_plotly_chart(fig_rh_bar, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_sensor_rh_bar", "format": "png", "scale": 2}, "displayModeBar": True})
             st.caption("Sensor humidity over the selected period.")
 
     st.divider()
@@ -9074,7 +9206,7 @@ def render_live_data_page():
                 height=340,
                 margin=dict(l=10, r=10, t=46, b=20),
             )
-            st.plotly_chart(fig_hour, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_hourly_bias", "format": "png", "scale": 2}, "displayModeBar": True})
+            _st_plotly_chart(fig_hour, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_hourly_bias", "format": "png", "scale": 2}, "displayModeBar": True})
             st.caption("Positive values mean the site is warmer than the climate baseline at that hour; nighttime bias suggests urban heat island effects.")
 
             # Monthly bias bar
@@ -9088,7 +9220,7 @@ def render_live_data_page():
                 height=340,
                 margin=dict(l=10, r=10, t=46, b=36),
             )
-            st.plotly_chart(fig_month, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_monthly_bias", "format": "png", "scale": 2}, "displayModeBar": True})
+            _st_plotly_chart(fig_month, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_monthly_bias", "format": "png", "scale": 2}, "displayModeBar": True})
             st.caption("Positive = warmer than the typical climate month; Negative = cooler. Monthly bias is shown only where sensor data exists; blank months mean no observations, not zero bias.")
 
             # Overheating comparison
@@ -9106,7 +9238,7 @@ def render_live_data_page():
                 margin=dict(l=10, r=10, t=50, b=30)
             )
             cname = get_clean_city_name().replace(" ", "_")
-            st.plotly_chart(fig_hot, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_overheating_comparison", "format": "png", "scale": 2}, "displayModeBar": True})
+            _st_plotly_chart(fig_hot, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_overheating_comparison", "format": "png", "scale": 2}, "displayModeBar": True})
             st.caption("Higher values mean more hours above 30°C. Overheating elevates heat stress risk.")
 
             # Comfort comparison
@@ -9123,7 +9255,7 @@ def render_live_data_page():
                 legend=dict(orientation="h"),
                 margin=dict(l=10, r=10, t=50, b=30)
             )
-            st.plotly_chart(fig_comfort, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_comfort_comparison", "format": "png", "scale": 2}, "displayModeBar": True})
+            _st_plotly_chart(fig_comfort, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_comfort_comparison", "format": "png", "scale": 2}, "displayModeBar": True})
             st.caption("Comfort band (18–26°C) is a typical indoor comfort target. Higher share indicates more comfortable conditions.")
 
     st.divider()
@@ -9366,7 +9498,7 @@ def render_live_data_page():
                     ),
                 )
                 cname = get_clean_city_name().replace(" ", "_")
-                st.plotly_chart(fig, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_{title.replace(' ', '_')}_calendar", "format": "png", "scale": 2}, "displayModeBar": True})
+                _st_plotly_chart(fig, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_{title.replace(' ', '_')}_calendar", "format": "png", "scale": 2}, "displayModeBar": True})
                 st.caption("🛈 Sensor shown as hourly resampled + 1h centered rolling mean. EPW is typical-year baseline.")
                 return True
 
@@ -9451,7 +9583,7 @@ def render_live_data_page():
                 )
                 _add_season_shading(fig)
                 cname = get_clean_city_name().replace(" ", "_")
-                st.plotly_chart(fig, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_{title.replace(' ', '_')}_climatology", "format": "png", "scale": 2}, "displayModeBar": True})
+                _st_plotly_chart(fig, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_{title.replace(' ', '_')}_climatology", "format": "png", "scale": 2}, "displayModeBar": True})
                 st.caption("🛈 Sensor shown as hourly resampled + 1h centered rolling mean. EPW is typical-year baseline.")
 
             st.markdown("### 🌡️ Dry-Bulb Temperature")
@@ -9535,7 +9667,7 @@ def render_live_data_page():
                     margin=dict(l=10, r=10, t=40, b=20)
                 )
                 cname = get_clean_city_name().replace(" ", "_")
-                st.plotly_chart(fig_hot, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_overheating_detailed", "format": "png", "scale": 2}, "displayModeBar": True})
+                _st_plotly_chart(fig_hot, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_overheating_detailed", "format": "png", "scale": 2}, "displayModeBar": True})
                 st.caption("Detailed thresholds let you inspect moderate heat (>26°C) versus high heat (>30°C) without crowding the main view.")
 
     st.divider()
@@ -10092,7 +10224,7 @@ def render_sensor_comparison_page():
             except Exception:
                 fig_primary.update_xaxes(autorange=True)
 
-            st.plotly_chart(fig_primary, use_container_width=True)
+            _st_plotly_chart(fig_primary, use_container_width=True)
 
     # Distribution (full width) — histogram for numeric metrics
     with st.container(border=True):
@@ -10127,7 +10259,7 @@ def render_sensor_comparison_page():
                 else:
                     st.info("Metric appears categorical/low-cardinality; distribution histogram unavailable.")
 
-        st.plotly_chart(fig_dist, use_container_width=True)
+        _st_plotly_chart(fig_dist, use_container_width=True)
 
     # Secondary Metric Trend (full width)
     with st.container(border=True):
@@ -10213,7 +10345,7 @@ def render_sensor_comparison_page():
                 except Exception:
                     fig_secondary.update_xaxes(autorange=True)
 
-                st.plotly_chart(fig_secondary, use_container_width=True)
+                _st_plotly_chart(fig_secondary, use_container_width=True)
     
     # Row 3: Raw Data Table (Full Width)
     
@@ -10472,7 +10604,7 @@ def render_short_term_prediction_page():
                 st.markdown(cards_html, unsafe_allow_html=True)
 
         st.markdown("#### Hourly Detail")
-        st.plotly_chart(
+        _st_plotly_chart(
             fc.plot_forecast(forecast_df, recent_history=history_series),
             use_container_width=True,
         )
@@ -10486,13 +10618,13 @@ def render_short_term_prediction_page():
         st.info("Forecasts are sourced from Open-Meteo leveraging deterministic ECMWF/GFS outputs.")
 
         st.markdown("#### Solar Potential & Irradiance")
-        st.plotly_chart(fc.plot_solar_potential(forecast_df), use_container_width=True)
+        _st_plotly_chart(fc.plot_solar_potential(forecast_df), use_container_width=True)
 
         st.markdown("#### EPW vs forecast bias")
-        st.plotly_chart(fc.plot_bias(bias_df if bias_df is not None else pd.DataFrame()), use_container_width=True)
+        _st_plotly_chart(fc.plot_bias(bias_df if bias_df is not None else pd.DataFrame()), use_container_width=True)
 
         st.markdown("#### Overheating flags")
-        st.plotly_chart(fc.plot_overheating(forecast_df), use_container_width=True)
+        _st_plotly_chart(fc.plot_overheating(forecast_df), use_container_width=True)
 
         st.markdown("#### Forecast Data & EPW Export")
         
@@ -10639,7 +10771,7 @@ def render_future_climate_page():
                 template=PLOTLY_TEMPLATE
             )
             st.markdown("#### Climate shift (monthly means)")
-            st.plotly_chart(fig_future, use_container_width=True)
+            _st_plotly_chart(fig_future, use_container_width=True)
 
             # ----- Comfort & load comparison -----
             st.markdown("#### Comfort & load outlook")
@@ -10747,7 +10879,7 @@ def render_future_climate_page():
                         yaxis_title="Hours / %",
                         hovermode="x unified",
                     )
-                    st.plotly_chart(fig_compare, use_container_width=True)
+                    _st_plotly_chart(fig_compare, use_container_width=True)
 
             d1, d2 = st.columns(2)
             for year in fepw.TARGET_YEARS:
