@@ -343,10 +343,6 @@ st.session_state.setdefault("pdf_figures", {})
 st.session_state.setdefault("pdf_figures_auto", {})
 
 
-# Legacy cleanup: clear stale deferred-export flag from earlier sessions.
-if st.session_state.get("pdf_dashboard_autobuild_pending"):
-    st.session_state["pdf_dashboard_autobuild_pending"] = False
-
 # Navigation definitions
 NAV_ITEMS = [
     ("Select weather file", "Select weather file"),
@@ -386,6 +382,20 @@ except Exception:
     pass
 
 
+CHART_FONT_FAMILY = "Inter, Poppins, Segoe UI, Helvetica, Arial, sans-serif"
+CHART_COLORWAY = [
+    "#3b82f6",  # blue
+    "#f97316",  # orange
+    "#06b6d4",  # cyan
+    "#8b5cf6",  # violet
+    "#22c55e",  # green
+    "#e11d48",  # rose
+]
+REPORT_EXPORT_WIDTH = 1280
+REPORT_EXPORT_HEIGHT = 720
+REPORT_EXPORT_SCALE = 2
+
+
 def _build_accessible_plotly_template(mode: str = "dark") -> go.layout.Template:
     """Ensure high-contrast Plotly defaults across the app."""
     dark_mode = mode == "dark"
@@ -397,7 +407,8 @@ def _build_accessible_plotly_template(mode: str = "dark") -> go.layout.Template:
     template.layout = go.Layout(
         paper_bgcolor=background,
         plot_bgcolor=background,
-        font=dict(color=font_color, family="Inter, Poppins, Segoe UI, sans-serif"),
+        font=dict(color=font_color, family=CHART_FONT_FAMILY, size=12),
+        title=dict(font=dict(color=font_color, family=CHART_FONT_FAMILY, size=18), x=0.01, xanchor="left"),
         xaxis=dict(
             gridcolor=grid_color,
             zerolinecolor=grid_color,
@@ -416,17 +427,11 @@ def _build_accessible_plotly_template(mode: str = "dark") -> go.layout.Template:
             automargin=True,
             mirror=True,
         ),
-        legend=dict(font=dict(color=font_color), bgcolor=background, bordercolor=grid_color, borderwidth=0),
+        legend=dict(font=dict(color=font_color, family=CHART_FONT_FAMILY, size=11), bgcolor=background, bordercolor=grid_color, borderwidth=0),
+        hoverlabel=dict(bgcolor=background, font=dict(color=font_color, family=CHART_FONT_FAMILY)),
         margin=dict(l=48, r=32, t=60, b=48),
     )
-    template.layout.colorway = [
-        "#3b82f6",  # blue
-        "#f97316",  # orange
-        "#06b6d4",  # cyan
-        "#8b5cf6",  # violet
-        "#22c55e",  # green
-        "#e11d48",  # rose
-    ]
+    template.layout.colorway = CHART_COLORWAY
     return template
 
 
@@ -439,9 +444,25 @@ try:
     chosen = "bevl_dark" if THEME_BASE == "dark" else "bevl_light"
     px.defaults.template = chosen
     pio.templates.default = chosen
+    PLOTLY_TEMPLATE = chosen
 except Exception:
     px.defaults.template = DEFAULT_TEMPLATE
     pio.templates.default = DEFAULT_TEMPLATE
+    PLOTLY_TEMPLATE = DEFAULT_TEMPLATE
+
+
+def _dashboard_template_name() -> str:
+    return "bevl_dark" if THEME_BASE == "dark" else "bevl_light"
+
+
+def _clone_dashboard_figure(fig_obj: object) -> object:
+    """Return a styled Plotly Figure snapshot using the same theme as the dashboard."""
+    try:
+        fig = fig_obj if isinstance(fig_obj, go.Figure) else go.Figure(fig_obj)
+        fig = go.Figure(fig)
+        return _apply_global_plot_style(fig)
+    except Exception:
+        return fig_obj
 
 
 def _apply_global_plot_style(fig_obj: object) -> object:
@@ -456,8 +477,7 @@ def _apply_global_plot_style(fig_obj: object) -> object:
         if not isinstance(fig_obj, go.Figure):
             fig_obj = go.Figure(fig_obj)
 
-        mode = "dark" if THEME_BASE == "dark" else "light"
-        template_name = "bevl_dark" if mode == "dark" else "bevl_light"
+        template_name = _dashboard_template_name()
         # Apply template (this also sets font colors, bg colors, axes defaults)
         try:
             fig_obj.update_layout(template=template_name)
@@ -476,7 +496,10 @@ def _apply_global_plot_style(fig_obj: object) -> object:
                 fig_obj.layout.plot_bgcolor = plotbg
             if fontcol is not None:
                 try:
-                    fig_obj.update_layout(font=dict(color=fontcol))
+                    fig_obj.update_layout(
+                        font=dict(color=fontcol, family=CHART_FONT_FAMILY),
+                        hoverlabel=dict(font=dict(color=fontcol, family=CHART_FONT_FAMILY)),
+                    )
                 except Exception:
                     pass
 
@@ -486,6 +509,10 @@ def _apply_global_plot_style(fig_obj: object) -> object:
             if fc:
                 fig_obj.update_xaxes(tickfont=dict(color=fc), title_font=dict(color=fc), linecolor=fc)
                 fig_obj.update_yaxes(tickfont=dict(color=fc), title_font=dict(color=fc), linecolor=fc)
+                fig_obj.update_layout(
+                    legend=dict(font=dict(color=fc, family=CHART_FONT_FAMILY)),
+                    title=dict(font=dict(color=fc, family=CHART_FONT_FAMILY)),
+                )
         except Exception:
             pass
 
@@ -579,11 +606,12 @@ def _capture_plotly_figure(fig_obj: Any) -> Any:
 
     try:
         fig = fig_obj if isinstance(fig_obj, go.Figure) else go.Figure(fig_obj)
+        fig = _clone_dashboard_figure(fig)
     except Exception:
         return fig_obj
 
     current_page = str(st.session_state.get("nav_page", "") or "").strip()
-    if current_page == "Select weather file":
+    if current_page != "Dashboard":
         return fig_obj
 
     def _is_map_figure(fig_obj_local: go.Figure) -> bool:
@@ -2426,13 +2454,7 @@ def render_sidebar():
             if not has_data:
                 st.info("👈 Load a weather file first, then click Generate PDF.")
             else:
-                st.caption("Generate directly from the Dashboard to export captured visualizations.")
-                st.checkbox(
-                    "Include advanced auto-generated analytics (beta)",
-                    value=False,
-                    key="pdf_enable_advanced_figures",
-                    help="Adds seasonal psychrometrics, extra wind analytics, and derived heatmaps. Keep off if export stability is a priority.",
-                )
+                st.caption("Generate directly from captured Dashboard figures so the report matches the charts you see in the app.")
             
             if st.button("Generate PDF", use_container_width=True, disabled=not has_data):
                 if not has_data:
@@ -2443,11 +2465,8 @@ def render_sidebar():
                     else:
                         figs_now = _merged_pdf_figures()
                         if not figs_now:
-                            st.session_state["pdf_download_bytes"] = None
-                            st.session_state["pdf_download_name"] = None
-                            st.session_state["pdf_download_error"] = (
-                                "No Dashboard visualizations are captured yet. Visit Dashboard tabs once, then click Generate PDF."
-                            )
+                            _request_dashboard_pdf_build()
+                            st.info("Capturing Dashboard figures for the report. The download will appear after this render completes.")
                         else:
                             try:
                                 with st.spinner("Preparing PDF..."):
@@ -2478,7 +2497,7 @@ def render_sidebar():
                 st.success(f"✓ PDF ready with {fig_count} visualization(s)")
                 st.caption("Expand to see captured visualizations.")
                 for _title in _merged_pdf_figures().keys():
-                    st.caption(f"• {_title}")
+                    st.caption(f"• {format_figure_title(_title)}")
             elif pdf_error:
                 st.button(
                     "⬇️ Download PDF Report",
@@ -3662,6 +3681,14 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
     return fig
 
 # ========== PDF REPORT EXPORT ==========
+PDF_INK = (31, 41, 55)
+PDF_MUTED = (100, 116, 139)
+PDF_FAINT = (226, 232, 240)
+PDF_ACCENT = (14, 116, 144)
+PDF_RULE = (203, 213, 225)
+PDF_SOFT_BG = (248, 250, 252)
+
+
 class ClimateReportPDF(FPDF):
     """Branded PDF report with clean, minimalist aesthetics inspired by true scientific journals."""
 
@@ -3676,194 +3703,111 @@ class ClimateReportPDF(FPDF):
         # Skip header on cover page
         if self.page_no() == 1:
             return
-            
-        self.set_fill_color(255, 255, 255) # Pure white
+
+        self.set_fill_color(255, 255, 255)
         self.rect(0, 0, 210, 297, "F")
-        
-        # Crisp minimal typography
-        self.set_font("Helvetica", "B", 10)
-        self.set_text_color(80, 80, 80) # Dark Gray
-        self.set_xy(15, 12)
-        self.cell(130, 5, self.location_label.upper(), ln=0, align="L")
-        self.set_font("Helvetica", "", 9)
-        self.set_text_color(120, 120, 120)
-        self.cell(50, 5, str(self.current_section)[:34], ln=0, align="R")
-        
-        # Clean thin separator
-        self.set_draw_color(210, 210, 210) # Light grey
-        self.set_line_width(0.2)
-        self.line(15, 18, 195, 18)
+
+        self.set_font("Helvetica", "B", 8.5)
+        self.set_text_color(*PDF_MUTED)
+        self.set_xy(16, 10)
+        self.cell(82, 5, "CLIMATE ANALYSIS DATABOOK", ln=0, align="L")
+        self.set_font("Helvetica", "", 8.5)
+        self.set_text_color(*PDF_MUTED)
+        self.set_xy(98, 10)
+        self.cell(96, 5, _pdf_safe_text(str(self.current_section)[:48]), ln=0, align="R")
+
+        self.set_draw_color(*PDF_RULE)
+        self.set_line_width(0.18)
+        self.line(16, 17, 194, 17)
 
     def footer(self):
         if self.page_no() == 1:
             return
-            
+
         self.set_y(-15)
-        # Separator line at bottom
-        self.set_draw_color(210, 210, 210)
+        self.set_draw_color(*PDF_RULE)
+        self.set_line_width(0.18)
         self.line(15, 282, 195, 282)
-        
-        self.set_font("Helvetica", "I", 8)
-        self.set_text_color(160, 160, 160) # Light Gray
-        self.set_x(15)
-        self.cell(70, 4, f"Generated: {self.generated_on}", ln=0, align="L")
+
+        self.set_font("Helvetica", "", 7.5)
+        self.set_text_color(*PDF_MUTED)
+        self.set_x(16)
+        self.cell(70, 4, _pdf_safe_text(self.location_label[:44]), ln=0, align="L")
         self.set_font("Helvetica", "", 8)
-        self.set_text_color(145, 145, 145)
-        self.cell(65, 4, str(self.current_section)[:40], ln=0, align="C")
-        
-        self.set_font("Helvetica", "", 9)
-        self.set_text_color(120, 120, 120)
+        self.set_text_color(*PDF_MUTED)
+        self.cell(48, 4, f"Generated {self.generated_on}", ln=0, align="C")
+
         self.set_x(105)
         self.cell(90, 4, f"Page {self.page_no()} of {{nb}}", ln=0, align="R")
 
 
-def _fig_to_tmp_png(fig, width: int = 1400, height: int = 730, scale: int = 2) -> str:
-    """Export a Plotly figure to a temporary PNG file and return its path."""
-    # Apply app-wide styling so exported charts match on-screen visuals
+def _export_dimensions_for_figure(fig: go.Figure, width: int, height: int) -> Tuple[int, int]:
+    """Choose a stable export viewport without changing the figure layout itself."""
+    export_width = width or REPORT_EXPORT_WIDTH
+    export_height = height or REPORT_EXPORT_HEIGHT
+
     try:
-        import plotly.graph_objects as go
-        if isinstance(fig, go.Figure):
-            fig = go.Figure(fig)
-            try:
-                fig = _apply_global_plot_style(fig)
-            except Exception:
-                pass
-
-            try:
-                fig.update_layout(
-                    margin=dict(t=50, l=40, r=20, b=40),
-                    title=dict(font=dict(size=16)),
-                    showlegend=True,
-                )
-            except Exception:
-                pass
-
-            try:
-                fc = fig.layout.font.color if getattr(fig.layout, "font", None) else None
-                gridcol = "rgba(148, 163, 184, 0.12)"
-                fig.update_xaxes(gridcolor=gridcol, zerolinecolor=gridcol, linecolor=fc or gridcol, tickfont=dict(color=fc) if fc else None)
-                fig.update_yaxes(gridcolor=gridcol, zerolinecolor=gridcol, linecolor=fc or gridcol, tickfont=dict(color=fc) if fc else None)
-            except Exception:
-                pass
+        layout_width = getattr(fig.layout, "width", None)
+        if layout_width:
+            export_width = int(layout_width)
     except Exception:
         pass
 
-    # Note: 1400x730 is selected for the 2-chart-per-page grid layout aspect ratio.
-    # Large Kaleido renders can fail on Cloud, so retry progressively smaller exports.
+    try:
+        layout_height = getattr(fig.layout, "height", None)
+        if layout_height:
+            export_height = int(layout_height)
+    except Exception:
+        pass
+
+    try:
+        trace_types = {str(getattr(tr, "type", "")).lower() for tr in (fig.data or [])}
+        if "barpolar" in trace_types or "scatterpolar" in trace_types:
+            export_height = max(export_height, min(export_width, 900))
+        elif len(getattr(fig.layout, "annotations", []) or []) >= 8:
+            export_height = max(export_height, 820)
+    except Exception:
+        pass
+
+    return max(900, int(export_width)), max(520, int(export_height))
+
+
+def _fig_to_tmp_png(fig, width: int = REPORT_EXPORT_WIDTH, height: int = REPORT_EXPORT_HEIGHT, scale: int = REPORT_EXPORT_SCALE) -> str:
+    """Export the captured dashboard Plotly figure to a temporary PNG file."""
+    fig_for_export = _clone_dashboard_figure(fig)
+    if not isinstance(fig_for_export, go.Figure):
+        raise RuntimeError("PDF export only supports captured Plotly figures.")
+
+    export_width, export_height = _export_dimensions_for_figure(fig_for_export, width, height)
     export_attempts = [
-        (width, height, scale),
-        (max(1100, width // 2), max(575, height // 2), 1),
-        (900, 500, 1),
+        (export_width, export_height, scale),
+        (export_width, export_height, 1),
+        (max(900, int(export_width * 0.82)), max(520, int(export_height * 0.82)), 1),
     ]
-    img_bytes = None
+
     last_error = None
-    engine_used = None
     for attempt_width, attempt_height, attempt_scale in export_attempts:
         try:
             img_bytes = pio.to_image(
-                fig,
+                fig_for_export,
                 format="png",
                 width=attempt_width,
                 height=attempt_height,
                 scale=attempt_scale,
                 engine="kaleido",
+                validate=False,
             )
-            engine_used = "kaleido_png"
-            break
-        except Exception as exc:
-            last_error = exc
-            continue
-
-    if img_bytes is None:
-        # Cloud-safe fallback: render with matplotlib instead of requiring browser-backed SVG export.
-        try:
-            import matplotlib.pyplot as plt
-            from matplotlib.figure import Figure
-            # Derive background/font from the active Plotly template so visuals match
-            try:
-                tpl_name = pio.templates.default or "bevl_dark"
-                tpl = pio.templates.get(tpl_name)
-                bg = getattr(tpl.layout, "paper_bgcolor", None) if tpl and getattr(tpl, "layout", None) else None
-                fontcol = getattr(getattr(tpl.layout, "font", None), "color", None) if tpl and getattr(tpl, "layout", None) else None
-            except Exception:
-                bg = None
-                fontcol = None
-
-            if not bg:
-                bg = "#0f172a" if THEME_BASE == "dark" else "#ffffff"
-            if not fontcol:
-                fontcol = "#e2e8f0" if THEME_BASE == "dark" else "#111111"
-
-            mpl_fig = Figure(figsize=(12, 6.75), dpi=100, facecolor=bg)
-            ax = mpl_fig.add_subplot(111)
-            ax.set_facecolor(bg)
-
-            # Extract data from Plotly figure and render with matplotlib
-            if hasattr(fig, 'data') and len(fig.data) > 0:
-                for trace in fig.data:
-                    trace_type = getattr(trace, 'type', 'scatter')
-                    if trace_type == 'heatmap':
-                        z_data = getattr(trace, 'z', None)
-                        if z_data is not None:
-                            im = ax.imshow(z_data, cmap='YlOrRd', aspect='auto')
-                            cbar = mpl_fig.colorbar(im, ax=ax)
-                            try:
-                                cbar.ax.yaxis.set_tick_params(color=fontcol)
-                            except Exception:
-                                pass
-                    elif trace_type in ('scatter', 'scattergl'):
-                        x = getattr(trace, 'x', [])
-                        y = getattr(trace, 'y', [])
-                        mode = getattr(trace, 'mode', 'lines+markers')
-                        name = getattr(trace, 'name', '')
-                        if 'lines' in mode:
-                            ax.plot(x, y, label=name, linewidth=2, alpha=0.7)
-                        if 'markers' in mode:
-                            ax.scatter(x, y, label=name, alpha=0.6)
-                    elif trace_type == 'bar':
-                        x = getattr(trace, 'x', [])
-                        y = getattr(trace, 'y', [])
-                        name = getattr(trace, 'name', '')
-                        ax.bar(x, y, label=name, alpha=0.7)
-
-                if hasattr(fig, 'layout'):
-                    layout = fig.layout
-                    title = getattr(layout, 'title', None)
-                    if title is not None:
-                        title_text = getattr(title, 'text', str(title)) if hasattr(title, 'text') else str(title)
-                        ax.set_title(title_text, fontsize=14, fontweight='bold', color=fontcol)
-
-                leg = ax.legend(loc='best', fontsize=9)
-                try:
-                    for text in leg.get_texts():
-                        text.set_color(fontcol)
-                except Exception:
-                    pass
-                ax.grid(True, alpha=0.3, color=('white' if THEME_BASE == 'dark' else '#333333'), linestyle='--')
-                try:
-                    ax.tick_params(colors=fontcol)
-                    for spine in ax.spines.values():
-                        spine.set_color(fontcol)
-                except Exception:
-                    pass
-
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mpl.png")
-            mpl_fig.savefig(tmp.name, format='png', dpi=100, bbox_inches='tight', facecolor=mpl_fig.get_facecolor())
-            plt.close(mpl_fig)
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".kaleido.png")
+            tmp.write(img_bytes)
             tmp.close()
             return tmp.name
-        except Exception as mpl_error:
-            raise RuntimeError(f"All export methods failed: Kaleido PNG: {last_error}, Matplotlib: {mpl_error}")
+        except Exception as exc:
+            last_error = exc
 
-    # Choose suffix to make debugging easier (which engine produced the image)
-    suffix = ".png"
-    if engine_used == "kaleido_png":
-        suffix = ".kaleido.png"
-
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    tmp.write(img_bytes)
-    tmp.close()
-    return tmp.name
+    raise RuntimeError(
+        "Plotly/Kaleido image export failed. The PDF pipeline intentionally avoids "
+        f"simplified Matplotlib redraws so figures remain faithful to the dashboard. Last error: {last_error}"
+    )
 
 
 def _safe_location_label(header: dict) -> str:
@@ -3945,7 +3889,7 @@ def _section_tag(title: str) -> str:
 
 def _add_manual_pdf_figure(key: str, fig: object) -> None:
     store = st.session_state.get("pdf_figures", {})
-    store[key] = fig
+    store[str(key).strip()] = _clone_dashboard_figure(fig)
     st.session_state["pdf_figures"] = store
 
 
@@ -4027,7 +3971,7 @@ def _finalize_dashboard_pdf_if_pending(effective_page: str) -> None:
     """
     if not st.session_state.get("pdf_dashboard_autobuild_pending", False):
         return
-    if effective_page != "📊 Dashboard":
+    if effective_page != "Dashboard":
         return
 
     figs = _merged_pdf_figures()
@@ -4077,9 +4021,8 @@ REPORT_STRUCTURE = [
     {
         "tab": "Overview & Stats",
         "section": "Overview Metadata",
-        "intro": "This opener presents site context and top-line annual behavior before moving into domain-specific diagnostics.",
+        "intro": "Site context and broad resource patterns are introduced before the report moves into thermal comfort, temperature, solar, psychrometric, and wind diagnostics.",
         "figures": [
-            {"aliases": ["Annual Climate Statistics"], "title": "Annual Climate Statistics"},
             {"aliases": ["Annual Diurnal Resource Heatmap"], "title": "Annual Diurnal Resource Heatmap"},
         ],
     },
@@ -4089,81 +4032,60 @@ REPORT_STRUCTURE = [
         "intro": "Comfort metrics indicate when conditions are naturally acceptable versus when active conditioning or adaptive strategies are required.",
         "figures": [
             {"aliases": ["Comfort Loads"], "title": "Comfort Load Profile"},
-            {"aliases": ["utci_index Annual Heatmap", "UTCI Heatmap"], "title": "UTCI by Hour and Month"},
-            {"aliases": ["pmv_index Annual Heatmap"], "title": "PMV by Hour and Month"},
-            {"aliases": ["di_index Annual Heatmap"], "title": "Discomfort Index by Hour and Month"},
-            {"aliases": ["Thermal Comfort Frequency by Season and Time of Day"], "title": "Thermal Comfort Frequency by Season and Time of Day"},
+            {"aliases": ["di_index Annual Heatmap"], "title": "Discomfort Index by Hour and Day"},
+            {"aliases": ["utci_index Annual Heatmap", "UTCI Heatmap"], "title": "UTCI by Hour and Day"},
+            {"aliases": ["pmv_index Annual Heatmap"], "title": "PMV by Hour and Day"},
         ],
     },
     {
         "tab": "Temp & Humidity",
         "section": "Temperature & Humidity",
-        "intro": "Thermo-hygrometric plots are sequenced from broad annual summaries to finer monthly and diurnal distributions.",
+        "intro": "Thermo-hygrometric plots are sequenced from broad annual summaries to monthly summaries, hourly point clouds, and annual heatmaps.",
         "figures": [
+            {"aliases": ["Annual Climate Statistics"], "title": "Annual Temperature and Humidity Statistics"},
             {"aliases": ["drybulb Monthly Bar"], "title": "Monthly Dry-Bulb Temperature"},
-            {"aliases": ["drybulb Annual Heatmap", "Dry Bulb Heatmap", "Drybulb Temperature Matrix"], "title": "Dry-Bulb Temperature by Hour and Month"},
             {"aliases": ["drybulb Hourly Dot Plot"], "title": "Hourly Dry-Bulb Temperature Distribution"},
+            {"aliases": ["drybulb Annual Heatmap", "Dry Bulb Heatmap", "Drybulb Temperature Matrix"], "title": "Dry-Bulb Temperature by Hour and Day"},
             {"aliases": ["relhum Monthly Bar", "relhum_monthly_bar"], "title": "Monthly Relative Humidity"},
-            {"aliases": ["relhum Annual Heatmap", "RH Heatmap", "relhum_annual_heatmap"], "title": "Relative Humidity by Hour and Month"},
             {"aliases": ["relhum Hourly Dot Plot", "relhum_hourly_dot_plot"], "title": "Hourly Relative Humidity Distribution"},
-            {"aliases": ["Dew Point Heatmap"], "title": "Dew Point by Hour and Month"},
-            {"aliases": ["MRT Heatmap"], "title": "Mean Radiant Temperature by Hour and Month"},
-            {"aliases": ["Degree Day Summary"], "title": "Degree Day Summary (Base 18°C)"},
+            {"aliases": ["relhum Annual Heatmap", "RH Heatmap", "relhum_annual_heatmap"], "title": "Relative Humidity by Hour and Day"},
         ],
     },
     {
         "tab": "Solar Analysis",
         "section": "Solar & Sky Analysis",
-        "intro": "Solar-resource and cloud figures are ordered to move from annual resource summaries into sky-condition detail and path geometry.",
+        "intro": "Solar-resource and cloud figures follow the same sequence as the dashboard: sun-path geometry first, then annual irradiance and sky-condition diagnostics.",
         "figures": [
-            {"aliases": ["Monthly Solar Insolation"], "title": "Monthly Solar Insolation"},
-            {"aliases": ["Solar Annual Heatmap", "Irradiance Heatmap"], "title": "Solar Irradiance by Hour and Month"},
-            {"aliases": ["Solar Daily Scatter"], "title": "Daily Solar Variability"},
-            {"aliases": ["Cloud Coverage"], "title": "Monthly Cloud Coverage Frequency"},
-            {"aliases": ["Cloud Coverage Heatmap"], "title": "Cloud Coverage by Hour and Day"},
-            {"aliases": ["Cloud Coverage Scatter"], "title": "Cloud Coverage Scatter"},
             {"aliases": ["Sun Path 2D"], "title": "Sun Path Diagram (2D)"},
             {"aliases": ["Sun Path 3D"], "title": "Sun Path Diagram (3D)"},
             {"aliases": ["Sun Path Cartesian"], "title": "Sun Path (Cartesian Projection)"},
+            {"aliases": ["Monthly Solar Insolation"], "title": "Monthly Solar Insolation"},
+            {"aliases": ["Solar Annual Heatmap", "Irradiance Heatmap"], "title": "Solar Irradiance by Hour and Day"},
+            {"aliases": ["Cloud Coverage"], "title": "Monthly Cloud Coverage Frequency"},
+            {"aliases": ["Cloud Coverage Scatter"], "title": "Cloud Coverage Scatter"},
+            {"aliases": ["Cloud Coverage Heatmap"], "title": "Cloud Coverage by Hour and Day"},
         ],
     },
     {
         "tab": "Psychrometrics",
         "section": "Psychrometrics",
-        "intro": "Psychrometric diagnostics summarize annual cloud behavior in temperature-moisture space and highlight seasonal shifts.",
+        "intro": "The psychrometric plot frames hourly outdoor states in temperature-moisture space for passive strategy and latent-load interpretation.",
         "figures": [
             {"aliases": ["Psychrometric Chart"], "title": "Psychrometric Chart"},
-            {"aliases": ["Annual Psychrometric Analysis"], "title": "Annual Psychrometric Analysis"},
-            {"aliases": ["Seasonal Psychrometric Analysis"], "title": "Seasonal Psychrometric Analysis"},
-            {"aliases": ["Monthly Psychrometric Analysis"], "title": "Monthly Psychrometric Analysis"},
-            {"aliases": ["Hourly Psychrometric Paths"], "title": "Hourly Psychrometric Paths"},
         ],
     },
     {
         "tab": "Wind",
         "section": "Wind Data",
-        "intro": "Wind figures begin with annual directionality and proceed to seasonal, diurnal, and speed-distribution detail for design interpretation.",
+        "intro": "Wind directionality and magnitude are shown as rendered in the dashboard for exposure, ventilation, and outdoor comfort review.",
         "figures": [
             {"aliases": ["Annual Wind Rose", "annual_wind_rose"], "title": "Annual Wind Rose"},
-            {"aliases": ["Winter Wind Rose"], "title": "Winter Wind Rose"},
-            {"aliases": ["Spring Wind Rose"], "title": "Spring Wind Rose"},
-            {"aliases": ["Summer Wind Rose"], "title": "Summer Wind Rose"},
-            {"aliases": ["Autumn Wind Rose"], "title": "Autumn Wind Rose"},
-            {"aliases": ["Night Wind Rose"], "title": "Night Wind Rose"},
-            {"aliases": ["Morning Wind Rose"], "title": "Morning Wind Rose"},
-            {"aliases": ["Afternoon Wind Rose"], "title": "Afternoon Wind Rose"},
-            {"aliases": ["Evening Wind Rose"], "title": "Evening Wind Rose"},
-            {"aliases": ["Wind Speed Frequency Distribution"], "title": "Wind Speed Frequency Distribution"},
-            {"aliases": ["Annual Hourly Wind Speed Profile"], "title": "Annual Hourly Wind Speed Profile"},
-            {"aliases": ["Seasonal Hourly Wind Speed Profiles"], "title": "Seasonal Hourly Wind Speed Profiles"},
-            {"aliases": ["Wind Speed Matrix"], "title": "Wind Speed by Hour and Month"},
-            {"aliases": ["Directional Wind Power Density Classes"], "title": "Directional Wind Power Density Classes"},
         ],
     },
     {
         "tab": "Raw Data",
-        "section": "Raw Data",
-        "intro": "Additional charts that were captured during the Streamlit session but not explicitly mapped above are listed here.",
+        "section": "Additional Captured Figures",
+        "intro": "Additional dashboard figures captured during this Streamlit session are listed here in capture order.",
         "figures": [],
     },
 ]
@@ -4177,26 +4099,52 @@ def _normalize_report_key(name: str) -> str:
 def format_figure_title(raw_name: str) -> str:
     key = _normalize_report_key(raw_name)
     title_map = {
+        "annual_diurnal_resource_heatmap": "Annual Diurnal Resource Heatmap",
+        "annual_climate_statistics": "Annual Temperature and Humidity Statistics",
+        "comfort_loads": "Comfort Load Profile",
         "relhum_monthly_bar": "Monthly Relative Humidity",
         "relhum_hourly_dot_plot": "Hourly Relative Humidity Distribution",
-        "relhum_annual_heatmap": "Relative Humidity by Hour and Month",
-        "drybulb_annual_heatmap": "Dry-Bulb Temperature by Hour and Month",
-        "utci_index_annual_heatmap": "UTCI by Hour and Month",
-        "di_index_annual_heatmap": "Discomfort Index by Hour and Month",
-        "pmv_index_annual_heatmap": "PMV by Hour and Month",
+        "relhum_annual_heatmap": "Relative Humidity by Hour and Day",
+        "drybulb_annual_heatmap": "Dry-Bulb Temperature by Hour and Day",
+        "utci_index_annual_heatmap": "UTCI by Hour and Day",
+        "di_index_annual_heatmap": "Discomfort Index by Hour and Day",
+        "pmv_index_annual_heatmap": "PMV by Hour and Day",
         "annual_wind_rose": "Annual Wind Rose",
         "drybulb_monthly_bar": "Monthly Dry-Bulb Temperature",
         "drybulb_hourly_dot_plot": "Hourly Dry-Bulb Temperature Distribution",
+        "monthly_solar_insolation": "Monthly Solar Insolation",
+        "irradiance_heatmap": "Solar Irradiance by Hour and Day",
+        "cloud_coverage": "Monthly Cloud Coverage Frequency",
+        "cloud_coverage_scatter": "Cloud Coverage Scatter",
+        "cloud_coverage_heatmap": "Cloud Coverage by Hour and Day",
+        "sun_path_2d": "Sun Path Diagram (2D)",
+        "sun_path_3d": "Sun Path Diagram (3D)",
+        "sun_path_cartesian": "Sun Path (Cartesian Projection)",
+        "psychrometric_chart": "Psychrometric Chart",
     }
     if key in title_map:
         return title_map[key]
-    cleaned = re.sub(r"_+", " ", str(raw_name)).strip()
-    cleaned = re.sub(r"\b(relhum)\b", "Relative Humidity", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\b(drybulb)\b", "Dry-Bulb", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\b(utci)\b", "UTCI", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\b(pmv)\b", "PMV", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\b(di)\b", "Discomfort Index", cleaned, flags=re.IGNORECASE)
-    return cleaned.title()
+
+    cleaned = re.sub(r"[_\-]+", " ", str(raw_name)).strip()
+    replacements = {
+        r"\brelhum\b": "Relative Humidity",
+        r"\brh\b": "Relative Humidity",
+        r"\bdrybulb\b": "Dry-Bulb",
+        r"\butci\b": "UTCI",
+        r"\bpmv\b": "PMV",
+        r"\bdi\b": "Discomfort Index",
+        r"\bghi\b": "GHI",
+        r"\bdni\b": "DNI",
+        r"\bdhi\b": "DHI",
+        r"\bmrt\b": "Mean Radiant Temperature",
+    }
+    for pattern, repl in replacements.items():
+        cleaned = re.sub(pattern, repl, cleaned, flags=re.IGNORECASE)
+    titled = cleaned.title()
+    for acronym in ("UTCI", "PMV", "GHI", "DNI", "DHI"):
+        titled = re.sub(rf"\b{acronym.title()}\b", acronym, titled)
+    titled = titled.replace("Dry-Bulb", "Dry-Bulb")
+    return titled
 
 
 def _resolve_report_sections(figs: Dict[str, object]) -> List[Dict[str, object]]:
@@ -4232,7 +4180,7 @@ def _resolve_report_sections(figs: Dict[str, object]) -> List[Dict[str, object]]
     # Unmapped captured figures are appended in Raw Data section preserving insertion order.
     raw_section = next((s for s in sections if s.get("tab") == "Raw Data"), None)
     if raw_section is None:
-        raw_section = {"tab": "Raw Data", "section": "Raw Data", "intro": "Additional captured visualizations.", "items": []}
+        raw_section = {"tab": "Raw Data", "section": "Additional Captured Figures", "intro": "Additional dashboard figures captured during this Streamlit session.", "items": []}
         sections.append(raw_section)
     for raw_key in figs.keys():
         if raw_key not in used:
@@ -4245,6 +4193,35 @@ def _resolve_report_sections(figs: Dict[str, object]) -> List[Dict[str, object]]
 
 def _figure_caption_text(clean_title: str, raw_key: str, section_name: str) -> str:
     low = _normalize_report_key(raw_key)
+    title_key = _normalize_report_key(clean_title)
+    caption_map = {
+        "annual_diurnal_resource_heatmap": "A compact year-at-a-glance matrix for the main environmental resources. Read across the year and down the hour axis to find recurring daily windows that shape passive design, comfort exposure, and operational timing.",
+        "comfort_loads": "Monthly comfort and load indicators are combined to show where overheating, heat stress, and comfort compliance concentrate. The secondary comfort-percent line should be read against the bar totals rather than as a separate climate variable.",
+        "di_index_annual_heatmap": "The Discomfort Index heatmap classifies humid heat stress by day and hour. Use the legend categories to locate persistent muggy periods where dry-bulb temperature alone may understate occupant stress.",
+        "utci_index_annual_heatmap": "UTCI combines air temperature, humidity, wind, and radiation into outdoor thermal stress categories. Strong bands indicate periods when outdoor exposure requires shade, wind management, or schedule adaptation.",
+        "pmv_index_annual_heatmap": "PMV translates hourly thermal conditions into a thermal sensation scale. The neutral band indicates hours closest to standard comfort assumptions, while warm and cool classes identify conditioning pressure.",
+        "annual_climate_statistics": "The paired temperature and humidity trends show annual timing, daily variability, and comfort-band relationships. Range bars emphasize volatility; smoothed lines reveal the seasonal signal.",
+        "drybulb_monthly_bar": "Monthly dry-bulb bars summarize the selected statistic across the year, making seasonal peaks, troughs, and shoulder-period transitions visible at a glance.",
+        "drybulb_hourly_dot_plot": "Hourly dry-bulb points are faceted by month to show daily spread within each season. Dense vertical clouds indicate high intra-day variability and broader control requirements.",
+        "drybulb_annual_heatmap": "Dry-bulb temperature is mapped by day of year and hour of day. Horizontal warm or cool bands reveal recurring diurnal timing, while vertical shifts show seasonal progression.",
+        "relhum_monthly_bar": "Monthly relative humidity bars summarize the site's moisture profile. Compare high-humidity seasons against dry shoulder months to anticipate latent loads and envelope condensation risk.",
+        "relhum_hourly_dot_plot": "Hourly relative humidity points show how moisture conditions spread across the daily cycle in each month. Wide panels indicate unstable moisture conditions rather than a single monthly norm.",
+        "relhum_annual_heatmap": "Relative humidity is mapped by day and hour to expose persistent moist and dry windows. This view is useful for latent-load screening and passive ventilation timing.",
+        "sun_path_2d": "The 2D sun-path diagram shows solar altitude and azimuth over the selected seasonal window. It is most useful for orientation, shading geometry, and facade exposure checks.",
+        "sun_path_3d": "The 3D sun-path view adds spatial context to solar position and selected environmental coloring. Use it to understand how high and low sun angles relate to massing and sky exposure.",
+        "sun_path_cartesian": "The Cartesian sun-path projection converts azimuth and altitude into a design-friendly coordinate field. Analemmas, seasonal arcs, and hour labels support shading and access studies.",
+        "monthly_solar_insolation": "Daily mean irradiance components are overlaid across the year. Compare GHI, DNI, and DHI to distinguish direct-sun potential from diffuse-sky contribution.",
+        "irradiance_heatmap": "The irradiance heatmap maps solar intensity by day and hour. Bright, continuous bands indicate reliable solar availability; broken bands suggest seasonal or cloud-driven intermittency.",
+        "cloud_coverage": "Monthly sky-cover frequencies show the balance among clear, intermediate, and cloudy conditions. The stacked composition is more important than any single monthly total.",
+        "cloud_coverage_scatter": "Hourly sky-cover points show how cloudiness varies within each month and hour. The smoothed overlay helps separate recurring daily structure from noisy weather events.",
+        "cloud_coverage_heatmap": "Total sky cover is mapped by day and hour to reveal cloudy periods that may suppress solar gain, daylight availability, and passive heating potential.",
+        "psychrometric_chart": "Hourly outdoor states are plotted in psychrometric space with comfort and strategy overlays. Dense clusters indicate dominant climate states; outlying arms show seasonal extremes.",
+        "annual_wind_rose": "Wind-rose sectors show prevailing direction and speed-class frequency. Read the longest sectors first, then compare color distribution to understand whether wind is frequent, strong, or diffuse.",
+    }
+    if low in caption_map:
+        return caption_map[low]
+    if title_key in caption_map:
+        return caption_map[title_key]
     if "wind_rose" in low:
         return "Rose sectors encode wind direction frequency, while color or radius encodes intensity class. Read dominant sectors first, then compare spread to assess ventilation potential and exposure risk."
     if "annual_heatmap" in low or "heatmap" in low:
@@ -4271,29 +4248,41 @@ def _figure_interpretation_text(title: str, cdf: Optional[pd.DataFrame]) -> str:
         rh_col = get_metric_column(cdf, ["relhum", "humidity", "rh"])
         w_col = get_metric_column(cdf, ["wind_speed", "windspeed", "windspd", "wspd", "ws"])
         s_col = get_metric_column(cdf, ["global_hor", "ghi", "radiation", "solar", "irradiance"])
+        cloud_col = get_metric_column(cdf, ["totskycvr", "sky_cover", "cloud"])
 
         low = _normalize_report_key(title)
         bits: List[str] = []
 
-        if t_col and ("temp" in low or "drybulb" in low or "heatmap" in low or "psych" in low or "comfort" in low or "utci" in low or "pmv" in low):
+        wants_temp = any(token in low for token in ["temp", "drybulb", "dry_bulb", "annual_climate", "resource", "psych", "comfort", "utci", "pmv", "di_index"])
+        wants_rh = any(token in low for token in ["humid", "relhum", "rh", "annual_climate", "resource", "psych", "comfort", "utci", "pmv", "di_index"])
+        wants_wind = "wind" in low or "resource" in low or "utci" in low
+        wants_solar = any(token in low for token in ["solar", "sun", "irradiance", "insolation", "resource"])
+        wants_cloud = "cloud" in low
+
+        if t_col and wants_temp:
             t = pd.to_numeric(cdf[t_col], errors="coerce").dropna()
             if not t.empty:
                 bits.append(f"Annual dry-bulb spans {t.min():.1f} to {t.max():.1f} deg C with mean {t.mean():.1f} deg C")
 
-        if rh_col and ("humid" in low or "psych" in low or "comfort" in low or "dew" in low):
+        if rh_col and wants_rh:
             rh = pd.to_numeric(cdf[rh_col], errors="coerce").dropna()
             if not rh.empty:
                 bits.append(f"mean relative humidity is {rh.mean():.0f}%")
 
-        if w_col and ("wind" in low):
+        if w_col and wants_wind:
             w = pd.to_numeric(cdf[w_col], errors="coerce").dropna()
             if not w.empty:
                 bits.append(f"wind speed averages {w.mean():.1f} m/s with 90th percentile {w.quantile(0.9):.1f} m/s")
 
-        if s_col and ("solar" in low or "sun" in low or "irradiance" in low or "cloud" in low):
+        if s_col and wants_solar:
             s = pd.to_numeric(cdf[s_col], errors="coerce").dropna()
             if not s.empty:
                 bits.append(f"global irradiance mean is {s.mean():.0f} W/m2")
+
+        if cloud_col and wants_cloud:
+            cld = pd.to_numeric(cdf[cloud_col], errors="coerce").dropna()
+            if not cld.empty:
+                bits.append(f"mean total sky cover is {cld.mean():.1f}/10")
 
         if bits:
             return "Interpretation: " + "; ".join(bits) + "."
@@ -4379,7 +4368,7 @@ def _climate_summary_lines(cdf: Optional[pd.DataFrame]) -> List[str]:
 
 
 def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, object]:
-    """Build additional analytical figures for PDF when source data is available."""
+    """Legacy derived-chart builder; intentionally unused by the dashboard-faithful PDF path."""
     extra: Dict[str, object] = {}
     if cdf is None or cdf.empty:
         return extra
@@ -4656,7 +4645,16 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
 
 
 def _pdf_safe_text(t: str) -> str:
-    s = str(t).replace("—", "-").replace("–", "-").replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'").replace("°", " deg ")
+    s = str(t)
+    replacements = {
+        "â€”": "-", "â€“": "-", "—": "-", "–": "-",
+        "â€œ": '"', "â€": '"', "“": '"', "”": '"',
+        "â€˜": "'", "â€™": "'", "‘": "'", "’": "'",
+        "Â°": " deg ", "°": " deg ",
+        "Â²": "2", "²": "2",
+    }
+    for old, new in replacements.items():
+        s = s.replace(old, new)
     return s.encode("latin-1", "replace").decode("latin-1")
 
 
@@ -4665,23 +4663,35 @@ def build_cover_page(pdf: ClimateReportPDF, location_label: str, source: str, lo
     pdf.add_page()
     pdf.set_fill_color(255, 255, 255)
     pdf.rect(0, 0, 210, 297, "F")
-    pdf.set_text_color(12, 12, 12)
-    pdf.set_font("Helvetica", "B", 34)
-    pdf.set_xy(15, 50)
-    pdf.cell(180, 14, "CLIMATE ANALYSIS REPORT", ln=1)
-    pdf.set_font("Helvetica", "", 14)
-    pdf.set_text_color(95, 95, 95)
-    pdf.set_xy(15, 66)
-    pdf.cell(180, 8, "Architectural and Environmental Databook", ln=1)
-    pdf.set_draw_color(190, 190, 190)
-    pdf.set_line_width(0.35)
-    pdf.line(15, 80, 195, 80)
-    pdf.set_font("Helvetica", "B", 13)
-    pdf.set_text_color(40, 40, 40)
-    pdf.set_xy(15, 88)
-    pdf.multi_cell(180, 7, _pdf_safe_text(location_label.upper()))
 
-    y_pos = 128
+    pdf.set_draw_color(*PDF_ACCENT)
+    pdf.set_line_width(1.2)
+    pdf.line(18, 44, 18, 232)
+    pdf.set_draw_color(*PDF_RULE)
+    pdf.set_line_width(0.25)
+    pdf.line(26, 232, 194, 232)
+
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_text_color(*PDF_ACCENT)
+    pdf.set_xy(28, 42)
+    pdf.cell(150, 5, "ARCHITECTURAL AND ENVIRONMENTAL DATABOOK", ln=1)
+
+    pdf.set_text_color(*PDF_INK)
+    pdf.set_font("Helvetica", "B", 30)
+    pdf.set_xy(28, 58)
+    pdf.multi_cell(158, 12, "Climate Analysis\nReport")
+
+    pdf.set_font("Helvetica", "", 12)
+    pdf.set_text_color(*PDF_MUTED)
+    pdf.set_xy(28, 88)
+    pdf.multi_cell(154, 6, _pdf_safe_text("A dashboard-faithful technical report generated from the Streamlit climate analysis workspace."))
+
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.set_text_color(*PDF_INK)
+    pdf.set_xy(28, 112)
+    pdf.multi_cell(154, 8, _pdf_safe_text(location_label))
+
+    y_pos = 148
     meta_items = [
         ("Station", f"{loc_meta.get('city', '--')}, {loc_meta.get('country', '--')}"),
         ("Weather Source", source[:88]),
@@ -4691,33 +4701,48 @@ def build_cover_page(pdf: ClimateReportPDF, location_label: str, source: str, lo
         ("Timezone", loc_meta.get("tz", "--")),
         ("Generated", generated_on),
     ]
+
+    pdf.set_fill_color(*PDF_SOFT_BG)
+    pdf.rect(28, y_pos - 7, 154, 67, "F")
+    pdf.set_draw_color(*PDF_FAINT)
+    pdf.rect(28, y_pos - 7, 154, 67)
     for label, val in meta_items:
-        pdf.set_xy(15, y_pos)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(120, 120, 120)
-        pdf.cell(40, 7, _pdf_safe_text(label.upper()), ln=0)
+        pdf.set_xy(36, y_pos)
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(*PDF_MUTED)
+        pdf.cell(39, 6, _pdf_safe_text(label.upper()), ln=0)
         pdf.set_font("Helvetica", "", 11)
-        pdf.set_text_color(45, 45, 45)
-        pdf.cell(140, 7, _pdf_safe_text(str(val)), ln=1)
-        y_pos += 9
+        pdf.set_text_color(*PDF_INK)
+        pdf.cell(98, 6, _pdf_safe_text(str(val)), ln=1)
+        y_pos += 8.5
+
+    pdf.set_font("Helvetica", "", 8.5)
+    pdf.set_text_color(*PDF_MUTED)
+    pdf.set_xy(28, 244)
+    pdf.multi_cell(154, 5, "Figures are exported from the same styled Plotly objects rendered in the dashboard, preserving the app's chart theme and visual ordering.")
 
 
 def build_toc(pdf: ClimateReportPDF, sections: List[Dict[str, object]], figure_rows: List[Tuple[int, str, str, int]], section_page_map: Dict[str, int]) -> None:
     pdf.current_section = "Contents"
     pdf.add_page()
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.set_text_color(40, 40, 40)
-    pdf.set_xy(15, 20)
-    pdf.cell(180, 8, "TABLE OF CONTENTS AND LIST OF FIGURES", ln=1)
-    pdf.set_draw_color(220, 220, 220)
-    pdf.line(15, 30, 195, 30)
+    pdf.set_font("Helvetica", "B", 22)
+    pdf.set_text_color(*PDF_INK)
+    pdf.set_xy(16, 28)
+    pdf.cell(178, 9, "Contents", ln=1)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(*PDF_MUTED)
+    pdf.set_xy(16, 40)
+    pdf.multi_cell(160, 5, "Sections and figures follow the same order as the Streamlit dashboard tabs.")
+    pdf.set_draw_color(*PDF_RULE)
+    pdf.set_line_width(0.22)
+    pdf.line(16, 55, 194, 55)
 
-    y = 36
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.set_text_color(80, 80, 80)
-    pdf.set_xy(15, y)
-    pdf.cell(180, 6, "Sections", ln=1)
-    y += 7
+    y = 64
+    pdf.set_font("Helvetica", "B", 10.5)
+    pdf.set_text_color(*PDF_ACCENT)
+    pdf.set_xy(16, y)
+    pdf.cell(178, 6, "Sections", ln=1)
+    y += 8
     pdf.set_font("Helvetica", "", 10)
 
     for section in sections:
@@ -4725,20 +4750,23 @@ def build_toc(pdf: ClimateReportPDF, sections: List[Dict[str, object]], figure_r
         if y > 255:
             pdf.add_page()
             y = 22
-        pdf.set_xy(15, y)
-        pdf.cell(150, 5, _pdf_safe_text(section_name), ln=0)
-        pdf.cell(30, 5, f"p. {section_page_map.get(section_name, '-')}", ln=1, align="R")
-        y += 5
+        pdf.set_text_color(*PDF_INK)
+        pdf.set_xy(18, y)
+        pdf.cell(140, 5.5, _pdf_safe_text(section_name), ln=0)
+        pdf.set_text_color(*PDF_MUTED)
+        pdf.cell(34, 5.5, f"p. {section_page_map.get(section_name, '-')}", ln=1, align="R")
+        y += 6
 
-    y += 4
+    y += 8
     if y > 248:
         pdf.add_page()
         y = 22
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.set_xy(15, y)
-    pdf.cell(180, 6, "Figures", ln=1)
-    y += 7
-    pdf.set_font("Helvetica", "", 9)
+    pdf.set_font("Helvetica", "B", 10.5)
+    pdf.set_text_color(*PDF_ACCENT)
+    pdf.set_xy(16, y)
+    pdf.cell(178, 6, "Figures", ln=1)
+    y += 8
+    pdf.set_font("Helvetica", "", 8.8)
     for fnum, _section, clean_title, page_no in figure_rows:
         if y > 260:
             pdf.add_page()
@@ -4746,31 +4774,57 @@ def build_toc(pdf: ClimateReportPDF, sections: List[Dict[str, object]], figure_r
         label = _pdf_safe_text(f"Figure {fnum}. {clean_title}")
         if len(label) > 115:
             label = label[:112] + "..."
-        pdf.set_xy(15, y)
-        pdf.cell(150, 4.5, label, ln=0)
-        pdf.cell(30, 4.5, f"p. {page_no}", ln=1, align="R")
-        y += 4.8
+        pdf.set_text_color(*PDF_INK)
+        pdf.set_xy(18, y)
+        pdf.cell(142, 4.8, label, ln=0)
+        pdf.set_text_color(*PDF_MUTED)
+        pdf.cell(32, 4.8, f"p. {page_no}", ln=1, align="R")
+        y += 5.1
 
 
 def build_section_page(pdf: ClimateReportPDF, tab_name: str, section_name: str, intro: str, figure_count: int) -> None:
     pdf.current_section = section_name
     pdf.add_page()
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.set_text_color(35, 35, 35)
-    pdf.set_xy(15, 22)
-    pdf.cell(180, 8, _pdf_safe_text(section_name.upper()), ln=1)
-    pdf.set_font("Helvetica", "I", 9)
-    pdf.set_text_color(125, 125, 125)
-    pdf.set_xy(15, 30)
-    pdf.cell(180, 5, _pdf_safe_text(f"Dashboard Tab: {tab_name}"), ln=1)
-    pdf.set_font("Helvetica", "", 10)
-    pdf.set_text_color(105, 105, 105)
-    pdf.set_xy(15, 36)
-    pdf.multi_cell(180, 5.3, _pdf_safe_text(intro))
-    pdf.set_font("Helvetica", "I", 9)
-    pdf.set_text_color(130, 130, 130)
-    pdf.set_x(15)
-    pdf.cell(180, 5, _pdf_safe_text(f"Included figures: {figure_count}"), ln=1)
+    pdf.set_draw_color(*PDF_ACCENT)
+    pdf.set_line_width(0.9)
+    pdf.line(18, 52, 18, 132)
+    pdf.set_font("Helvetica", "B", 8.5)
+    pdf.set_text_color(*PDF_ACCENT)
+    pdf.set_xy(30, 52)
+    pdf.cell(150, 5, _pdf_safe_text(f"DASHBOARD TAB / {tab_name.upper()}"), ln=1)
+    pdf.set_font("Helvetica", "B", 25)
+    pdf.set_text_color(*PDF_INK)
+    pdf.set_xy(30, 66)
+    pdf.multi_cell(148, 11, _pdf_safe_text(section_name))
+    pdf.set_font("Helvetica", "", 11)
+    pdf.set_text_color(*PDF_MUTED)
+    pdf.set_xy(30, 96)
+    pdf.multi_cell(148, 6, _pdf_safe_text(intro))
+    pdf.set_draw_color(*PDF_RULE)
+    pdf.set_line_width(0.2)
+    pdf.line(30, 138, 180, 138)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*PDF_MUTED)
+    pdf.set_xy(30, 144)
+    pdf.cell(148, 5, _pdf_safe_text(f"{figure_count} figure{'s' if figure_count != 1 else ''} captured from this dashboard section"), ln=1)
+
+
+def _png_dimensions(path: str) -> Tuple[int, int]:
+    try:
+        with open(path, "rb") as f:
+            header = f.read(24)
+        if header[:8] == b"\x89PNG\r\n\x1a\n":
+            return int.from_bytes(header[16:20], "big"), int.from_bytes(header[20:24], "big")
+    except Exception:
+        pass
+    return REPORT_EXPORT_WIDTH, REPORT_EXPORT_HEIGHT
+
+
+def _fit_dimensions(src_w: int, src_h: int, max_w: float, max_h: float) -> Tuple[float, float]:
+    if src_w <= 0 or src_h <= 0:
+        return max_w, max_h
+    ratio = min(max_w / float(src_w), max_h / float(src_h))
+    return src_w * ratio, src_h * ratio
 
 
 def render_figure_page(
@@ -4785,45 +4839,75 @@ def render_figure_page(
 ) -> None:
     pdf.current_section = section_name
     pdf.add_page()
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.set_text_color(60, 60, 60)
-    pdf.set_xy(15, 20)
-    pdf.cell(180, 6, _pdf_safe_text(f"Figure {fig_no}. {clean_title}"), ln=1)
+    pdf.set_font("Helvetica", "B", 8.5)
+    pdf.set_text_color(*PDF_ACCENT)
+    pdf.set_xy(16, 24)
+    pdf.cell(178, 5, _pdf_safe_text(section_name.upper()), ln=1)
+    pdf.set_font("Helvetica", "B", 15)
+    pdf.set_text_color(*PDF_INK)
+    pdf.set_xy(16, 32)
+    pdf.multi_cell(178, 6.8, _pdf_safe_text(f"Figure {fig_no}. {clean_title}"))
 
     export_err = ""
     img_path = None
     try:
-        img_path = _fig_to_tmp_png(fig, width=1200, height=675, scale=2)
+        img_path = _fig_to_tmp_png(fig)
         temp_images.append(img_path)
     except Exception as exc:
         export_err = str(exc)
 
+    image_box_x = 16
+    image_box_y = 52
+    image_box_w = 178
+    image_box_h = 132
+    pdf.set_fill_color(*PDF_SOFT_BG)
+    pdf.set_draw_color(*PDF_FAINT)
+    pdf.rect(image_box_x, image_box_y, image_box_w, image_box_h, "F")
+    pdf.rect(image_box_x, image_box_y, image_box_w, image_box_h)
+
     if img_path:
-        pdf.image(img_path, x=16, y=30, w=178)
+        src_w, src_h = _png_dimensions(img_path)
+        draw_w, draw_h = _fit_dimensions(src_w, src_h, image_box_w - 8, image_box_h - 8)
+        draw_x = image_box_x + (image_box_w - draw_w) / 2
+        draw_y = image_box_y + (image_box_h - draw_h) / 2
+        pdf.image(img_path, x=draw_x, y=draw_y, w=draw_w, h=draw_h)
     else:
-        pdf.set_fill_color(245, 245, 245)
-        pdf.rect(16, 30, 178, 106, "F")
-        pdf.set_xy(20, 76)
+        pdf.set_xy(20, 104)
         pdf.set_font("Helvetica", "I", 10)
-        pdf.set_text_color(145, 145, 145)
+        pdf.set_text_color(*PDF_MUTED)
         pdf.cell(170, 6, "Visualization rendering unavailable.", ln=1)
         if export_err:
-            pdf.set_xy(20, 84)
+            pdf.set_xy(20, 112)
             pdf.set_font("Helvetica", "", 7)
-            pdf.set_text_color(170, 170, 170)
+            pdf.set_text_color(*PDF_MUTED)
             pdf.multi_cell(170, 4, _pdf_safe_text(export_err[:240]))
 
-    pdf.set_xy(16, 142)
-    pdf.set_font("Helvetica", "I", 9)
-    pdf.set_text_color(95, 95, 95)
+    caption_y = image_box_y + image_box_h + 9
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(*PDF_ACCENT)
+    pdf.set_xy(16, caption_y)
+    pdf.cell(178, 4, "CAPTION", ln=1)
+    pdf.set_xy(16, caption_y + 5)
+    pdf.set_font("Helvetica", "", 9.2)
+    pdf.set_text_color(*PDF_INK)
     pdf.multi_cell(178, 4.8, _pdf_safe_text(_figure_caption_text(clean_title, raw_key, section_name)))
 
     interp = _figure_interpretation_text(raw_key, cdf)
     if interp:
-        pdf.set_xy(16, max(pdf.get_y() + 2, 165))
-        pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(70, 70, 70)
-        pdf.multi_cell(178, 4.8, _pdf_safe_text(interp))
+        note_y = max(pdf.get_y() + 4, 218)
+        if note_y < 260:
+            pdf.set_fill_color(*PDF_SOFT_BG)
+            pdf.set_draw_color(*PDF_FAINT)
+            pdf.rect(16, note_y, 178, 24, "F")
+            pdf.rect(16, note_y, 178, 24)
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_text_color(*PDF_ACCENT)
+            pdf.set_xy(20, note_y + 4)
+            pdf.cell(170, 4, "INTERPRETATION NOTE", ln=1)
+            pdf.set_xy(20, note_y + 9)
+            pdf.set_font("Helvetica", "", 8.7)
+            pdf.set_text_color(*PDF_INK)
+            pdf.multi_cell(170, 4.4, _pdf_safe_text(interp))
 
 
 def build_climate_pdf() -> bytes:
@@ -4834,11 +4918,6 @@ def build_climate_pdf() -> bytes:
     loc_meta = {k: _pdf_safe_text(v) for k, v in _location_meta(header).items()}
     source = _pdf_safe_text(st.session_state.get("source_label", "EPW File"))
     figs = _merged_pdf_figures()
-    advanced_enabled = bool(st.session_state.get("pdf_enable_advanced_figures", False))
-    extra_figs = _build_additional_pdf_figures(cdf) if advanced_enabled else {}
-    for k, v in extra_figs.items():
-        if k not in figs:
-            figs[k] = v
     generated_on = _pdf_safe_text(datetime.date.today().strftime("%B %d, %Y"))
 
     pdf = ClimateReportPDF(location_label=location_label, source_label=source, generated_on=generated_on)
@@ -4868,28 +4947,32 @@ def build_climate_pdf() -> bytes:
     # Climate summary page
     pdf.current_section = "Climate Summary"
     pdf.add_page()
-    pdf.set_font("Helvetica", "B", 17)
-    pdf.set_text_color(40, 40, 40)
-    pdf.set_xy(15, 20)
-    pdf.cell(180, 8, "CLIMATE SUMMARY", ln=1)
-    pdf.set_draw_color(220, 220, 220)
-    pdf.line(15, 30, 195, 30)
-
+    pdf.set_font("Helvetica", "B", 22)
+    pdf.set_text_color(*PDF_INK)
+    pdf.set_xy(16, 28)
+    pdf.cell(178, 9, "Climate Summary", ln=1)
     pdf.set_font("Helvetica", "", 10)
-    pdf.set_text_color(80, 80, 80)
-    pdf.set_xy(15, 36)
-    pdf.multi_cell(180, 5.5, _pdf_safe_text("This summary highlights annual, seasonal, monthly, and diurnal behavior inferred from the available hourly dataset."))
+    pdf.set_text_color(*PDF_MUTED)
+    pdf.set_xy(16, 41)
+    pdf.multi_cell(168, 5.5, _pdf_safe_text("Annual, monthly, and diurnal indicators derived from the loaded hourly dataset. Use these notes as orientation; the figure pages carry the detailed evidence."))
+    pdf.set_draw_color(*PDF_RULE)
+    pdf.set_line_width(0.22)
+    pdf.line(16, 58, 194, 58)
 
-    y = 52
+    y = 68
     for line in _climate_summary_lines(cdf):
         if y > 265:
             pdf.add_page()
             y = 20
-        pdf.set_xy(18, y)
+        pdf.set_fill_color(*PDF_SOFT_BG)
+        pdf.set_draw_color(*PDF_FAINT)
+        pdf.rect(16, y - 1, 178, 14, "F")
+        pdf.rect(16, y - 1, 178, 14)
+        pdf.set_xy(22, y + 2)
         pdf.set_font("Helvetica", "", 10)
-        pdf.set_text_color(55, 55, 55)
-        pdf.multi_cell(174, 5.2, _pdf_safe_text(f"- {line}"))
-        y = pdf.get_y() + 1.0
+        pdf.set_text_color(*PDF_INK)
+        pdf.multi_cell(166, 4.7, _pdf_safe_text(line))
+        y = max(pdf.get_y() + 3.0, y + 17)
 
     # Section + figure pages
     temp_images: List[str] = []
@@ -4916,28 +4999,34 @@ def build_climate_pdf() -> bytes:
         ("Beaufort Scale", "A categorical description of wind strength based on typical observed effects at the surface."),
         ("Wind Power Density", "Available wind energy flux per unit swept area, proportional to air density and the cube of wind speed."),
     ]
+    pdf.current_section = "Appendix"
     pdf.add_page()
-    pdf.set_font("Helvetica", "B", 17)
-    pdf.set_text_color(40, 40, 40)
-    pdf.set_xy(15, 20)
-    pdf.cell(180, 8, "APPENDIX - TERMS AND DEFINITIONS", ln=1)
-    pdf.set_draw_color(220, 220, 220)
-    pdf.line(15, 30, 195, 30)
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(*PDF_INK)
+    pdf.set_xy(16, 28)
+    pdf.cell(178, 8, "Appendix", ln=1)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(*PDF_MUTED)
+    pdf.set_xy(16, 40)
+    pdf.cell(178, 5, "Terms and definitions used throughout the report.", ln=1)
+    pdf.set_draw_color(*PDF_RULE)
+    pdf.set_line_width(0.22)
+    pdf.line(16, 55, 194, 55)
 
-    y = 38
+    y = 66
     for term, definition in glossary_items:
         if y > 262:
             pdf.add_page()
             y = 22
-        pdf.set_xy(15, y)
+        pdf.set_xy(16, y)
         pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(55, 55, 55)
+        pdf.set_text_color(*PDF_INK)
         pdf.cell(180, 5, _pdf_safe_text(term), ln=1)
-        pdf.set_xy(18, y + 5)
+        pdf.set_xy(20, y + 6)
         pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(80, 80, 80)
-        pdf.multi_cell(174, 4.8, _pdf_safe_text(definition))
-        y = pdf.get_y() + 2
+        pdf.set_text_color(*PDF_MUTED)
+        pdf.multi_cell(170, 4.8, _pdf_safe_text(definition))
+        y = pdf.get_y() + 4
 
     out = pdf.output(dest="S")
 
@@ -6372,7 +6461,7 @@ def _render_bar_chart(cdf, col, title_suffix, y_label, color, key_suffix):
     fig = px.bar(
         df_bar, x="month_name", y="VAL",
         labels={"month_name": "Month", "VAL": y_label},
-        title=f"Monthly {stat.lower()} {col}"
+        title=f"Monthly {stat.lower()} {format_figure_title(f'{col} Monthly Bar').replace('Monthly ', '')}"
     )
     fig.update_xaxes(type="category")
     fig.update_traces(marker_line_width=0.2, opacity=0.9, marker_color=color)
@@ -8773,9 +8862,8 @@ def render_solar_page():
                     _fig_irr.update_xaxes(tickvals=_month_days, ticktext=_month_names, side="bottom")
                     _fig_irr.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"])
                     _st_plotly_chart(_fig_irr, use_container_width=True)
-                    pdf_store = st.session_state.setdefault("pdf_figures", {})
-                    if "Irradiance Heatmap" not in pdf_store:
-                        pdf_store["Irradiance Heatmap"] = _fig_irr
+                    if "Irradiance Heatmap" not in st.session_state.setdefault("pdf_figures", {}):
+                        _add_manual_pdf_figure("Irradiance Heatmap", _fig_irr)
 
     # Cloud Coverage Frequencies 
     st.markdown("---")
@@ -11611,6 +11699,8 @@ def main():
         
     else:
         st.error(f"Page '{effective_page}' not found.")
+
+    _finalize_dashboard_pdf_if_pending(effective_page)
 
     # 6. Footer
     st.markdown(
