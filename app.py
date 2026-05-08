@@ -353,12 +353,8 @@ NAV_ITEMS = [
     ("Future Climate (2050 / 2080 SSP)", "Future Climate (2050 / 2080 SSP)"),
 ]
 
-FROZEN_NAV_LABELS = {
-    "Future Climate (2050 / 2080 SSP)",
-}
-FROZEN_PAGES = {
-    "Future Climate (2050 / 2080 SSP)",
-}
+FROZEN_NAV_LABELS: set[str] = set()
+FROZEN_PAGES: set[str] = set()
 
 LABEL_TO_PAGE = {label: page for label, page in NAV_ITEMS}
 PAGE_TO_LABEL = {page: label for label, page in NAV_ITEMS}
@@ -2400,8 +2396,6 @@ def render_sidebar():
 
         epw_loaded = bool(st.session_state.get("cdf") is not None and st.session_state.get("header"))
         current_page = st.session_state.get("nav_page", DEFAULT_PAGE)
-        if current_page in FROZEN_PAGES:
-            current_page = DEFAULT_PAGE
         if current_page not in ALLOWED_PAGES:
             current_page = DEFAULT_PAGE
         st.session_state["nav_page"] = current_page
@@ -2418,21 +2412,7 @@ def render_sidebar():
                 label_visibility="collapsed",
                 key="nav_page",
             )
-            st.markdown(
-                """
-                <style>
-                /* Freeze roadmap items visually and functionally */
-                [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:nth-child(9),
-                [data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:nth-child(10) {
-                    opacity: 0.45 !important;
-                    pointer-events: none !important;
-                    cursor: not-allowed !important;
-                }
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.caption("🚧 Short-term prediction & future climate are coming soon")
+
         else:
             nav_choice = nav_labels[0]
             st.radio(
@@ -2516,13 +2496,7 @@ def render_sidebar():
                 st.caption("Click Generate PDF first. Download will appear here.")
                 
         # Evaluate routing selection
-        frozen_hit = nav_choice in FROZEN_NAV_LABELS
-        nav_choice_effective = nav_choice if not frozen_hit else current_label
-        chosen_page = LABEL_TO_PAGE.get(nav_choice_effective, DEFAULT_PAGE)
-        
-        # Enforce frozen rollback natively 
-        # Note: nav_page is widget-owned; we cannot write to it after radio is instantiated.
-        # The chosen_page local variable is used for routing below.
+        chosen_page = LABEL_TO_PAGE.get(nav_choice, DEFAULT_PAGE)
 
         # Keep controller page mode aligned with navigation to avoid mixed-page state.
         st.session_state["active_page"] = "select_station" if chosen_page == "Select weather file" else "dashboard"
@@ -3016,8 +2990,6 @@ _PRELOADED_STATIONS = None
 controller_page = st.session_state.get("active_page", "select_station")
 
 nav_page = st.session_state.get("nav_page", DEFAULT_PAGE)
-if nav_page in FROZEN_PAGES:
-    nav_page = DEFAULT_PAGE
 if nav_page not in ALLOWED_PAGES:
     nav_page = DEFAULT_PAGE
 
@@ -3176,8 +3148,6 @@ def setup_cdf():
                 cdf[dest] = cdf[src]
     
     page = st.session_state.get("nav_page", DEFAULT_PAGE)
-    if page in FROZEN_PAGES:
-        page = DEFAULT_PAGE
     if page not in ALLOWED_PAGES:
         page = DEFAULT_PAGE
     return page
@@ -11374,11 +11344,10 @@ def render_short_term_prediction_page():
         _st_plotly_chart(fc.plot_overheating(forecast_df), use_container_width=True)
 
         st.markdown("#### Forecast Data & EPW Export")
-        
-        # Download Forecast EPW Integration
+
         forecast_epw_df = fc.build_forecast_epw_dataframe(forecast_df)
         epw_blob = compose_epw_text(base_header, forecast_epw_df)
-        
+
         st.download_button(
             label="⬇️ Download Forecast EPW",
             data=epw_blob,
@@ -11391,14 +11360,15 @@ def render_short_term_prediction_page():
             st.dataframe(forecast_df.set_index("timestamp"), use_container_width=True, height=260)
 
 
-
 def render_future_climate_page():
+    import models.future_epw as fepw
+
     page = st.session_state.get("nav_page")
     cdf = st.session_state.get("cdf")
-    
+
     st.markdown("### 🌍 Future Climate Scenarios")
     st.caption(
-        "Blend today’s EPW (optionally bias-corrected by your sensors) with CMIP6 deltas to sketch how typical "
+        "Blend today's EPW (optionally bias-corrected by your sensors) with CMIP6 deltas to sketch how typical "
         "years shift under SSP scenarios. Pick a pathway and horizon below to see the temperature/comfort "
         "impacts and download morphed EPWs."
     )
@@ -11409,6 +11379,7 @@ def render_future_climate_page():
     if base_df is None or base_df.empty or header_meta is None:
         st.info("Load an EPW file on the main tabs to unlock future morphing.")
     else:
+        loc_meta = (header_meta or {}).get("location", {})
         scenario_label = st.selectbox(
             "Scenario",
             list(fepw.SCENARIO_MAP.keys()),
@@ -11628,6 +11599,228 @@ def render_future_climate_page():
                     )
                     _st_plotly_chart(fig_compare, use_container_width=True)
 
+            # ── DIURNAL HEATMAPS ──────────────────────────────────
+            st.markdown("#### Diurnal Heatmap — Future Temperature")
+            _month_labels = [pd.Timestamp(2001, m, 1).strftime("%b") for m in range(1, 13)]
+            _hour_labels = [f"{h:02d}:00" for h in range(24)]
+
+            def _build_diurnal_grid(df_src, col="drybulb"):
+                if col not in df_src.columns:
+                    return None
+                tmp = df_src[[col]].copy()
+                tmp["month"] = tmp.index.month
+                tmp["hour"] = tmp.index.hour
+                return tmp.pivot_table(values=col, index="hour", columns="month", aggfunc="mean")
+
+            grid_future = _build_diurnal_grid(future_df)
+            grid_base = _build_diurnal_grid(base_df)
+
+            if grid_future is not None:
+                h1, h2 = st.columns(2)
+                with h1:
+                    st.caption(f"{target_year} · {scenario_label}")
+                    fig_heat_f = go.Figure(go.Heatmap(
+                        z=grid_future.values, x=_month_labels, y=_hour_labels,
+                        colorscale="RdYlBu_r", colorbar=dict(title="°C"),
+                        hovertemplate="Month: %{x}<br>Hour: %{y}<br>Temp: %{z:.1f} °C<extra></extra>",
+                    ))
+                    fig_heat_f.update_layout(height=380, margin=dict(l=60, r=10, t=30, b=40),
+                                             yaxis=dict(autorange="reversed"), template=PLOTLY_TEMPLATE,
+                                             paper_bgcolor="#0f172a", plot_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
+                    _st_plotly_chart(fig_heat_f, use_container_width=True)
+                with h2:
+                    st.caption("ΔT (Future – Baseline)")
+                    if grid_base is not None:
+                        delta_grid = grid_future - grid_base.reindex_like(grid_future).fillna(0)
+                        abs_max = max(abs(delta_grid.values.min()), abs(delta_grid.values.max()), 0.1)
+                        fig_heat_d = go.Figure(go.Heatmap(
+                            z=delta_grid.values, x=_month_labels, y=_hour_labels,
+                            colorscale="RdBu_r", zmid=0, zmin=-abs_max, zmax=abs_max,
+                            colorbar=dict(title="Δ°C"),
+                            hovertemplate="Month: %{x}<br>Hour: %{y}<br>ΔT: %{z:+.2f} °C<extra></extra>",
+                        ))
+                        fig_heat_d.update_layout(height=380, margin=dict(l=60, r=10, t=30, b=40),
+                                                 yaxis=dict(autorange="reversed"), template=PLOTLY_TEMPLATE,
+                                                 paper_bgcolor="#0f172a", plot_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
+                        _st_plotly_chart(fig_heat_d, use_container_width=True)
+
+            # UTCI diurnal heatmap
+            try:
+                utci_future = ce.compute_utci_approx(build_clima_dataframe(future_df))
+                utci_base = ce.compute_utci_approx(baseline_frame)
+                tmp_uf = pd.DataFrame({"UTCI": utci_future}, index=future_df.index)
+                tmp_uf["month"] = tmp_uf.index.month; tmp_uf["hour"] = tmp_uf.index.hour
+                grid_utci = tmp_uf.pivot_table(values="UTCI", index="hour", columns="month", aggfunc="mean")
+                st.markdown("#### Diurnal Heatmap — UTCI (Future)")
+                fig_utci_h = go.Figure(go.Heatmap(
+                    z=grid_utci.values, x=_month_labels, y=_hour_labels,
+                    colorscale=[[0, "#2166ac"], [0.35, "#67a9cf"], [0.5, "#fddbc7"],
+                                [0.7, "#ef8a62"], [1, "#b2182b"]],
+                    colorbar=dict(title="UTCI °C"),
+                    hovertemplate="Month: %{x}<br>Hour: %{y}<br>UTCI: %{z:.1f} °C<extra></extra>",
+                ))
+                fig_utci_h.update_layout(height=380, margin=dict(l=60, r=10, t=30, b=40),
+                                         yaxis=dict(autorange="reversed"), template=PLOTLY_TEMPLATE,
+                                         paper_bgcolor="#0f172a", plot_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
+                _st_plotly_chart(fig_utci_h, use_container_width=True)
+            except Exception:
+                utci_future = None
+                utci_base = None
+
+            # ── ANNUAL DISTRIBUTION ───────────────────────────────
+            st.markdown("#### Annual Temperature Distribution")
+            ad1, ad2 = st.columns(2)
+            with ad1:
+                fig_dist = go.Figure()
+                fig_dist.add_trace(go.Histogram(
+                    x=base_df["drybulb"], nbinsx=60, name="Baseline",
+                    marker_color="rgba(148,163,184,0.5)", opacity=0.7,
+                ))
+                fig_dist.add_trace(go.Histogram(
+                    x=future_df["drybulb"], nbinsx=60, name=f"{target_year}",
+                    marker_color="rgba(249,115,22,0.5)", opacity=0.7,
+                ))
+                base_mean = base_df["drybulb"].mean()
+                future_mean = future_df["drybulb"].mean()
+                base_p95 = base_df["drybulb"].quantile(0.95)
+                future_p95 = future_df["drybulb"].quantile(0.95)
+                for val, clr, nm in [(base_mean, "#94a3b8", "Base mean"),
+                                      (future_mean, "#f97316", f"{target_year} mean")]:
+                    fig_dist.add_vline(x=val, line_dash="dash", line_color=clr,
+                                       annotation_text=f"{nm}: {val:.1f}°C",
+                                       annotation_position="top right")
+                fig_dist.update_layout(barmode="overlay", height=340,
+                                       margin=dict(l=0, r=0, t=30, b=0),
+                                       xaxis_title="Dry-Bulb Temperature (°C)",
+                                       yaxis_title="Hours", template=PLOTLY_TEMPLATE,
+                                       paper_bgcolor="#0f172a", plot_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
+                _st_plotly_chart(fig_dist, use_container_width=True)
+            with ad2:
+                if utci_future is not None and utci_base is not None:
+                    fig_utci_dist = go.Figure()
+                    fig_utci_dist.add_trace(go.Histogram(
+                        x=utci_base.values, nbinsx=60, name="Baseline UTCI",
+                        marker_color="rgba(148,163,184,0.5)", opacity=0.7,
+                    ))
+                    fig_utci_dist.add_trace(go.Histogram(
+                        x=utci_future.values, nbinsx=60, name=f"{target_year} UTCI",
+                        marker_color="rgba(239,68,68,0.5)", opacity=0.7,
+                    ))
+                    fig_utci_dist.update_layout(barmode="overlay", height=340,
+                                                margin=dict(l=0, r=0, t=30, b=0),
+                                                xaxis_title="UTCI (°C)",
+                                                yaxis_title="Hours", template=PLOTLY_TEMPLATE,
+                                                paper_bgcolor="#0f172a", plot_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
+                    _st_plotly_chart(fig_utci_dist, use_container_width=True)
+                else:
+                    st.caption("UTCI distribution unavailable — missing wind speed data.")
+
+            # ── SHIFT PLOT (MONTHLY BOX) ──────────────────────────
+            st.markdown("#### Monthly Shift Plot — Temperature")
+            shift_data = []
+            for lbl, src_df in [("Baseline", base_df),
+                                ("2050", payloads[2050]["df"]),
+                                ("2080", payloads[2080]["df"])]:
+                tmp_s = src_df[["drybulb"]].copy()
+                tmp_s["month"] = tmp_s.index.month
+                tmp_s["scenario"] = lbl
+                shift_data.append(tmp_s)
+            shift_all = pd.concat(shift_data, ignore_index=True)
+            shift_all["month_name"] = shift_all["month"].map(
+                lambda m: pd.Timestamp(2001, m, 1).strftime("%b"))
+            colors_shift = {"Baseline": "#94a3b8", "2050": "#60a5fa", "2080": "#f97316"}
+            fig_shift = go.Figure()
+            for sc_name in ["Baseline", "2050", "2080"]:
+                subset = shift_all[shift_all["scenario"] == sc_name]
+                fig_shift.add_trace(go.Box(
+                    x=subset["month_name"], y=subset["drybulb"],
+                    name=sc_name, marker_color=colors_shift[sc_name],
+                    boxmean=True, line_width=1.2,
+                ))
+            fig_shift.update_layout(
+                boxmode="group", height=400,
+                margin=dict(l=0, r=0, t=30, b=0),
+                yaxis_title=f"Dry-Bulb Temperature ({'°F' if _temp_unit() == 'F' else '°C'})",
+                template=PLOTLY_TEMPLATE, legend=dict(orientation="h", y=1.05),
+                paper_bgcolor="#0f172a", plot_bgcolor="#0f172a", font=dict(color="#e2e8f0"),
+            )
+            _st_plotly_chart(fig_shift, use_container_width=True)
+
+            # ── UTCI / DI STRESS BREAKDOWN ────────────────────────
+            st.markdown("#### Thermal Stress Breakdown")
+            try:
+                cdf_future = build_clima_dataframe(future_df)
+                di_future = ce.compute_di(cdf_future)
+                di_cats_f = ce.classify_di(di_future)
+                utci_cats_f = ce.classify_utci(utci_future) if utci_future is not None else None
+
+                di_base = ce.compute_di(baseline_frame)
+                di_cats_b = ce.classify_di(di_base)
+                utci_cats_b = ce.classify_utci(utci_base) if utci_base is not None else None
+
+                sb1, sb2 = st.columns(2)
+
+                # DI breakdown
+                with sb1:
+                    st.caption("Discomfort Index (DI)")
+                    di_order = ["Comfortable", "Slight Discomfort", "Discomfort",
+                                "Strong Discomfort", "Medical Emergency"]
+                    di_colors = {"Comfortable": "#22c55e", "Slight Discomfort": "#facc15",
+                                 "Discomfort": "#f97316", "Strong Discomfort": "#ef4444",
+                                 "Medical Emergency": "#991b1b"}
+                    fig_di = go.Figure()
+                    for period_lbl, cats in [(f"{target_year}", di_cats_f), ("Baseline", di_cats_b)]:
+                        vc = cats.value_counts(normalize=True).reindex(di_order, fill_value=0) * 100
+                        fig_di.add_trace(go.Bar(
+                            y=[period_lbl] * len(vc), x=vc.values, orientation="h",
+                            name=period_lbl, marker_color=[di_colors.get(c, "#888") for c in vc.index],
+                            text=[f"{c}: {v:.1f}%" for c, v in zip(vc.index, vc.values)],
+                            textposition="inside", showlegend=False,
+                        ))
+                    fig_di.update_layout(barmode="stack", height=200,
+                                         margin=dict(l=0, r=0, t=10, b=0),
+                                         xaxis_title="% of hours", template=PLOTLY_TEMPLATE,
+                                         paper_bgcolor="#0f172a", plot_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
+                    _st_plotly_chart(fig_di, use_container_width=True)
+
+                # UTCI breakdown
+                with sb2:
+                    if utci_cats_f is not None and utci_cats_b is not None:
+                        st.caption("UTCI Stress Categories")
+                        utci_order = ["Extreme cold stress", "Very strong cold stress",
+                                      "Strong cold stress", "Moderate cold stress",
+                                      "No thermal stress", "Moderate heat stress",
+                                      "Strong heat stress", "Very strong heat stress",
+                                      "Extreme heat stress"]
+                        utci_colors_map = {
+                            "Extreme cold stress": "#08306b", "Very strong cold stress": "#2171b5",
+                            "Strong cold stress": "#4292c6", "Moderate cold stress": "#6baed6",
+                            "No thermal stress": "#22c55e", "Moderate heat stress": "#facc15",
+                            "Strong heat stress": "#f97316", "Very strong heat stress": "#ef4444",
+                            "Extreme heat stress": "#991b1b",
+                        }
+                        fig_utci_bar = go.Figure()
+                        for period_lbl, cats in [(f"{target_year}", utci_cats_f), ("Baseline", utci_cats_b)]:
+                            vc = cats.value_counts(normalize=True).reindex(utci_order, fill_value=0) * 100
+                            fig_utci_bar.add_trace(go.Bar(
+                                y=[period_lbl] * len(vc), x=vc.values, orientation="h",
+                                name=period_lbl,
+                                marker_color=[utci_colors_map.get(c, "#888") for c in vc.index],
+                                text=[f"{v:.1f}%" if v > 3 else "" for v in vc.values],
+                                textposition="inside", showlegend=False,
+                            ))
+                        fig_utci_bar.update_layout(barmode="stack", height=200,
+                                                   margin=dict(l=0, r=0, t=10, b=0),
+                                                   xaxis_title="% of hours", template=PLOTLY_TEMPLATE,
+                                                   paper_bgcolor="#0f172a", plot_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
+                        _st_plotly_chart(fig_utci_bar, use_container_width=True)
+                    else:
+                        st.caption("UTCI breakdown unavailable.")
+            except Exception as _stress_exc:
+                st.warning(f"Could not compute stress breakdown: {_stress_exc}")
+
+            # ── DOWNLOAD BUTTONS ──────────────────────────────────
+            st.markdown("---")
             d1, d2 = st.columns(2)
             for year in fepw.TARGET_YEARS:
                 bundle = payloads.get(year)
