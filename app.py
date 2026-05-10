@@ -3764,7 +3764,6 @@ def _fig_to_tmp_png(fig, width: int = REPORT_EXPORT_WIDTH, height: int = REPORT_
                 width=attempt_width,
                 height=attempt_height,
                 scale=attempt_scale,
-                engine="kaleido",
                 validate=False,
             )
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".kaleido.png")
