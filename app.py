@@ -387,9 +387,13 @@ CHART_COLORWAY = [
     "#22c55e",  # green
     "#e11d48",  # rose
 ]
-REPORT_EXPORT_WIDTH = 1280
-REPORT_EXPORT_HEIGHT = 720
-REPORT_EXPORT_SCALE = 2
+# Detect Streamlit Cloud (limited to ~1 GB RAM) to reduce Kaleido/Chromium memory use.
+_IS_STREAMLIT_CLOUD = os.environ.get("STREAMLIT_SHARING_MODE") == "true" or os.environ.get("IS_STREAMLIT_CLOUD") == "true" or os.path.isdir("/mount/src")
+
+# On cloud, export at 1× scale and smaller viewport to stay within memory budget.
+REPORT_EXPORT_WIDTH = 900 if _IS_STREAMLIT_CLOUD else 1280
+REPORT_EXPORT_HEIGHT = 500 if _IS_STREAMLIT_CLOUD else 720
+REPORT_EXPORT_SCALE = 1 if _IS_STREAMLIT_CLOUD else 2
 
 
 def _build_accessible_plotly_template(mode: str = "dark") -> go.layout.Template:
@@ -3744,15 +3748,23 @@ def _export_dimensions_for_figure(fig: go.Figure, width: int, height: int) -> Tu
 
 def _fig_to_tmp_png(fig, width: int = REPORT_EXPORT_WIDTH, height: int = REPORT_EXPORT_HEIGHT, scale: int = REPORT_EXPORT_SCALE) -> str:
     """Export the captured dashboard Plotly figure to a temporary PNG file."""
+    import gc
     fig_for_export = _clone_dashboard_figure(fig)
     if not isinstance(fig_for_export, go.Figure):
         raise RuntimeError("PDF export only supports captured Plotly figures.")
 
     export_width, export_height = _export_dimensions_for_figure(fig_for_export, width, height)
+
+    # On cloud, cap dimensions aggressively to avoid OOM in the Kaleido subprocess.
+    if _IS_STREAMLIT_CLOUD:
+        export_width = min(export_width, 900)
+        export_height = min(export_height, 520)
+        scale = 1
+
     export_attempts = [
         (export_width, export_height, scale),
         (export_width, export_height, 1),
-        (max(900, int(export_width * 0.82)), max(520, int(export_height * 0.82)), 1),
+        (max(800, int(export_width * 0.75)), max(450, int(export_height * 0.75)), 1),
     ]
 
     last_error = None
@@ -3769,9 +3781,13 @@ def _fig_to_tmp_png(fig, width: int = REPORT_EXPORT_WIDTH, height: int = REPORT_
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".kaleido.png")
             tmp.write(img_bytes)
             tmp.close()
+            # Free the raw bytes immediately to reduce peak memory.
+            del img_bytes
+            gc.collect()
             return tmp.name
         except Exception as exc:
             last_error = exc
+            gc.collect()  # reclaim memory before retry
 
     raise RuntimeError(
         "Plotly/Kaleido image export failed. The PDF pipeline intentionally avoids "
@@ -4944,8 +4960,12 @@ def build_climate_pdf() -> bytes:
         y = max(pdf.get_y() + 3.0, y + 17)
 
     # Section + figure pages
+    import gc
     temp_images: List[str] = []
     fig_no = 1
+    # On cloud, cap total figures to avoid cumulative OOM.
+    _MAX_CLOUD_FIGURES = 25
+    _total_figures_rendered = 0
     for section in sections:
         tab_name = str(section.get("tab", ""))
         section_name = str(section.get("section", ""))
@@ -4954,11 +4974,16 @@ def build_climate_pdf() -> bytes:
         build_section_page(pdf, tab_name, section_name, intro, len(items))
 
         for item in items:
+            if _IS_STREAMLIT_CLOUD and _total_figures_rendered >= _MAX_CLOUD_FIGURES:
+                break
             raw_key = str(item.get("raw_key", ""))
             clean_title = str(item.get("title", format_figure_title(raw_key)))
             fig = figs.get(raw_key)
             render_figure_page(pdf, fig_no, section_name, clean_title, raw_key, fig, cdf, temp_images)
             fig_no += 1
+            _total_figures_rendered += 1
+            # Reclaim memory between figure exports to stay under Streamlit Cloud limits.
+            gc.collect()
 
     # Appendix (definitions)
     glossary_items = [
