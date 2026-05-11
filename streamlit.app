@@ -1,1 +1,4 @@
-healthcheck.py
+from app import main
+
+
+main()
