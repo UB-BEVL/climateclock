@@ -9,7 +9,6 @@ requests==2.32.2
 openpyxl==3.1.4
 rapidfuzz==3.9.3
 pycountry==23.12.11
-pythermalcomfort>=3.0
 geopy==2.4.1
 scipy==1.14.1
 kaleido==0.2.1

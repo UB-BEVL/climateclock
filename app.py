@@ -1340,7 +1340,9 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
             _log_comfort_warning(f"UTCI failed: {e}")
 
     pmv = None
-    if {"drybulb", "relhum", "windspd"}.issubset(cdf.columns):
+    if _IS_STREAMLIT_CLOUD:
+        _log_comfort_warning("PMV skipped on Streamlit Cloud lightweight mode")
+    elif {"drybulb", "relhum", "windspd"}.issubset(cdf.columns):
         try:
             pmv = ce.compute_pmv(cdf)
             package["pmv"] = pmv

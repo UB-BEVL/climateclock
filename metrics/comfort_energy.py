@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+
+
+def _lightweight_comfort_mode() -> bool:
+    return (
+        os.environ.get("CLIMATECLOCK_LIGHTWEIGHT_COMFORT") == "1"
+        or os.environ.get("STREAMLIT_SHARING_MODE") == "true"
+        or os.environ.get("IS_STREAMLIT_CLOUD") == "true"
+        or os.path.isdir("/mount/src")
+    )
 
 
 # ---------------------------
@@ -32,15 +42,11 @@ def compute_utci_approx(
     rh_col: str = "relhum",
     wind_col: str = "windspd",
 ) -> pd.Series:
-    """Accurate UTCI calculation utilizing the PyThermalComfort library's polynomial.
-
-    Calculates the Universal Thermal Climate Index.
-    """
+    """Compute UTCI, using a lightweight approximation on constrained cloud runtimes."""
     missing = [c for c in (temp_col, rh_col, wind_col) if c not in df.columns]
     if missing:
         raise KeyError(f"Cannot compute UTCI, missing columns: {missing}")
 
-    from pythermalcomfort.models import utci
     Ta = df[temp_col].to_numpy()
     RH = df[rh_col].astype(float).clip(0, 100).to_numpy()
     ws = df[wind_col].astype(float).fillna(1.5).clip(lower=0.1).to_numpy()
@@ -63,8 +69,23 @@ def compute_utci_approx(
         mrt = Ta  # fallback — note in paper
 
 
-    _utci_used_fallback = False
+    def _fallback_utci_values() -> np.ndarray:
+        vp = (RH / 100.0) * 6.105 * np.exp((17.27 * Ta) / (237.7 + Ta))
+        return (
+            Ta + 0.607562 + 0.022771 * Ta + 0.000806 * (Ta**2)
+            + 0.002 * vp - 0.065 * ws + 0.001 * Ta * ws
+            - 0.015 * Ta * vp / 100.0 - 0.00025 * vp * ws
+        )
+
+    _utci_used_fallback = _lightweight_comfort_mode()
+    if _utci_used_fallback:
+        utci_vals = _fallback_utci_values()
+        series = pd.Series(utci_vals, index=df.index, name="UTCI")
+        series.attrs["used_fallback"] = True
+        return series
+
     try:
+        from pythermalcomfort.models import utci
         results = utci(tdb=Ta, tr=mrt, v=ws, rh=RH)
 # Handle both old API (returns object) and new API (returns ndarray directly)
         if hasattr(results, 'utci'):
@@ -81,12 +102,7 @@ def compute_utci_approx(
             RuntimeWarning, stacklevel=2
         )
         _utci_used_fallback = True
-        vp = (RH / 100.0) * 6.105 * np.exp((17.27 * Ta) / (237.7 + Ta))
-        utci_vals = (
-            Ta + 0.607562 + 0.022771 * Ta + 0.000806 * (Ta**2)
-            + 0.002 * vp - 0.065 * ws + 0.001 * Ta * ws
-            - 0.015 * Ta * vp / 100.0 - 0.00025 * vp * ws
-        )
+        utci_vals = _fallback_utci_values()
 
     series = pd.Series(utci_vals, index=df.index, name="UTCI")
     series.attrs["used_fallback"] = _utci_used_fallback
@@ -109,6 +125,12 @@ def compute_pmv(
     if missing:
         raise KeyError(f"Cannot compute PMV, missing columns: {missing}")
 
+    if _lightweight_comfort_mode():
+        pmv_vals = np.full(len(df), np.nan)
+        series = pd.Series(pmv_vals, index=df.index, name="PMV")
+        series.attrs["skipped"] = "lightweight_comfort_mode"
+        return series
+
     try:
         from pythermalcomfort.models import pmv_ppd as _pmv_func
     except ImportError:
@@ -116,8 +138,6 @@ def compute_pmv(
             from pythermalcomfort.models.pmv_ppd_ashrae import pmv_ppd_ashrae as _pmv_func
         except ImportError:
             raise ImportError("Could not import PMV function from pythermalcomfort. Please install or update: pip install pythermalcomfort>=2.5")
-    import numpy as np
-
     # ASHRAE 55 Table C1 seasonal clo values
     _SEASONAL_CLO = {
         1: 1.0, 2: 1.0, 3: 0.9, 4: 0.7,   # Jan–Apr
