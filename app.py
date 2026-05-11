@@ -9351,6 +9351,13 @@ def create_wind_rose(df):
     if not wind_spd_col or not wind_dir_col:
         return None
 
+    df[wind_spd_col] = pd.to_numeric(df[wind_spd_col], errors="coerce")
+    df[wind_dir_col] = pd.to_numeric(df[wind_dir_col], errors="coerce") % 360
+    df = df.dropna(subset=[wind_spd_col, wind_dir_col])
+    df = df[df[wind_spd_col] >= 0]
+    if df.empty:
+        return None
+
     # Convert wind speed from m/s to mph
     df.loc[:, "Speed_mph"] = df[wind_spd_col] * 2.23694
 
@@ -9359,12 +9366,13 @@ def create_wind_rose(df):
     dir_labels = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
 
     # Dynamically create speed bins based on data
-    max_speed = df["Speed_mph"].max()
-    if pd.isna(max_speed) or max_speed == 0:
+    max_speed = float(df["Speed_mph"].max())
+    if pd.isna(max_speed) or max_speed <= 0:
         max_speed = 10 # fallback
 
     num_bins = 6
     speed_bins = np.linspace(0, max_speed, num_bins + 1)
+    speed_bins[-1] = max(speed_bins[-1], max_speed + 1e-9)
     speed_labels = [f"{speed_bins[i]:.1f}-{speed_bins[i + 1]:.1f}" for i in range(len(speed_bins) - 1)]
 
     # Categorize data
@@ -9376,7 +9384,12 @@ def create_wind_rose(df):
     )
 
     # Count occurrences and calculate percentages
-    wind_data = df.groupby(["dir_cat", "speed_cat"], observed=True).size().unstack(fill_value=0)
+    wind_data = (
+        df.groupby(["dir_cat", "speed_cat"], observed=True)
+        .size()
+        .unstack(fill_value=0)
+        .reindex(index=dir_labels, columns=speed_labels, fill_value=0)
+    )
     total_count = wind_data.sum().sum()
     if total_count == 0: return None
     wind_percentages = wind_data / total_count * 100
@@ -9388,7 +9401,7 @@ def create_wind_rose(df):
     for i, speed_cat in enumerate(speed_labels):
         fig.add_trace(
             go.Barpolar(
-                r=wind_percentages[speed_cat],
+                r=wind_percentages[speed_cat].reindex(dir_labels, fill_value=0),
                 theta=dir_labels,
                 name=f"{speed_cat} mph",
                 marker_color=colors[i],
