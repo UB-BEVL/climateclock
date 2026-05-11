@@ -535,6 +535,63 @@ def _st_plotly_chart(fig_obj: object, *args, **kwargs):
 
 # Default station source fallback (can be overridden)
 STATION_SOURCE = "https://raw.githubusercontent.com/CenterForTheBuiltEnvironment/clima/main/assets/data/epw_location.json"
+STATION_INDEX_TIMEOUT = (4, 10)
+EPW_FETCH_TIMEOUT = (5, 20)
+MAX_EPW_BYTES = 100_000_000
+
+
+def _fallback_station_index() -> pd.DataFrame:
+    """Small built-in station catalog used when the remote index is unavailable."""
+    return pd.DataFrame([
+        {
+            "name": "USA_Buffalo.725280_TMY3",
+            "country": "USA",
+            "lat": 42.94,
+            "lon": -78.73,
+            "elevation_m": 215,
+            "timezone": "UTC-5",
+            "zip_url": "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/NY/Buffalo/Buffalo_Greater_International_AP_725280_TMY3.epw",
+            "period": "TMY3",
+            "heating_db": -17.5,
+            "cooling_db": 29.5,
+        },
+        {
+            "name": "USA_Phoenix.722780_TMY3",
+            "country": "USA",
+            "lat": 33.43,
+            "lon": -112.02,
+            "elevation_m": 337,
+            "timezone": "UTC-7",
+            "zip_url": "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/AZ/Phoenix/Phoenix_Sky_Harbor_Intl_Airport_722780_TMY3.epw",
+            "period": "TMY3",
+            "heating_db": 1.7,
+            "cooling_db": 42.2,
+        },
+        {
+            "name": "USA_Chicago.725300_TMY3",
+            "country": "USA",
+            "lat": 41.98,
+            "lon": -87.90,
+            "elevation_m": 201,
+            "timezone": "UTC-6",
+            "zip_url": "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/IL/Chicago/Chicago_OHare_Intl_Airport_725300_TMY3.epw",
+            "period": "TMY3",
+            "heating_db": -16.6,
+            "cooling_db": 31.3,
+        },
+        {
+            "name": "USA_Miami.722020_TMY3",
+            "country": "USA",
+            "lat": 25.82,
+            "lon": -80.28,
+            "elevation_m": 8,
+            "timezone": "UTC-5",
+            "zip_url": "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/FL/Miami/Miami_Intl_Airport_722020_TMY3.epw",
+            "period": "TMY3",
+            "heating_db": 8.0,
+            "cooling_db": 33.0,
+        },
+    ])
 
 # Streamlit cache decorator (data) compatible alias
 try:
@@ -777,14 +834,24 @@ def fetch_epw_bytes_no_ui(url: str) -> Tuple[Optional[bytes], Optional[str]]:
             "Accept-Encoding": "gzip, deflate",
         }
 
-        r = requests.get(url, headers=headers, timeout=30, stream=True)
-        r.raise_for_status()
+        with requests.get(url, headers=headers, timeout=EPW_FETCH_TIMEOUT, stream=True) as r:
+            r.raise_for_status()
 
-        content_length = r.headers.get("content-length")
-        if content_length and int(content_length) > 100_000_000:
-            return None, f"File too large: {content_length} bytes"
+            content_length = r.headers.get("content-length")
+            if content_length and int(content_length) > MAX_EPW_BYTES:
+                return None, f"File too large: {content_length} bytes"
 
-        content = r.content
+            chunks = []
+            total = 0
+            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > MAX_EPW_BYTES:
+                    return None, f"File too large: exceeded {MAX_EPW_BYTES} bytes"
+                chunks.append(chunk)
+
+        content = b"".join(chunks)
         if url.lower().endswith(".zip") or zipfile.is_zipfile(io.BytesIO(content)):
             with zipfile.ZipFile(io.BytesIO(content), "r") as z:
                 epws = [m for m in z.namelist() if m.lower().endswith(".epw")]
@@ -850,9 +917,12 @@ def load_station_index(source: Optional[Union[str, Path]] = None):
 
     # ---- remote JSON (handles FeatureCollection from CBE Clima)
     if isinstance(src, str) and src.startswith(("http://", "https://")) and src.endswith(".json"):
-        r = requests.get(src, timeout=60)
-        r.raise_for_status()
-        obj = r.json()
+        try:
+            r = requests.get(src, timeout=STATION_INDEX_TIMEOUT)
+            r.raise_for_status()
+            obj = r.json()
+        except Exception:
+            return _finish(_fallback_station_index())
 
         if isinstance(obj, dict) and "features" in obj:
             raw = pd.json_normalize(obj["features"])
@@ -918,12 +988,7 @@ def load_station_index(source: Optional[Union[str, Path]] = None):
             df = _finish(df)
 
             if df.empty:
-                df = _finish(pd.DataFrame([{
-                    "name": "BUFFALO_NIAGARA_INTL_AP_725280", "country": "USA",
-                    "lat": 42.94, "lon": -78.73, "elevation_m": 215, "timezone": "UTC-5",
-                    "zip_url": "https://climate.onebuilding.org/WMO_Region_4_North_and_Central_Americas/USA_United_States_of_America/NY_New_York/BUFFALO_NIAGARA_INTL_AP_725280_TMYx.2007-2021.zip",
-                    "period": "2007-2021", "heating_db": -17.5, "cooling_db": 29.5
-                }]))
+                df = _finish(_fallback_station_index())
             return df
 
         df = pd.json_normalize(obj)
@@ -938,12 +1003,7 @@ def load_station_index(source: Optional[Union[str, Path]] = None):
         df = _finish(df)
 
         if df.empty:
-            df = _finish(pd.DataFrame([{
-                "name": "BUFFALO_NIAGARA_INTL_AP_725280", "country": "USA",
-                "lat": 42.94, "lon": -78.73, "elevation_m": 215, "timezone": "UTC-5",
-                "zip_url": "https://climate.onebuilding.org/WMO_Region_4_North_and_Central_Americas/USA_United_States_of_America/NY_New_York/BUFFALO_NIAGARA_INTL_AP_725280_TMYx.2007-2021.zip",
-                "period": "2007-2021", "heating_db": -17.5, "cooling_db": 29.5
-            }]))
+            df = _finish(_fallback_station_index())
         return df
 
     if isinstance(src, (str, Path)) and str(src).endswith(".json") and Path(src).exists():
@@ -970,12 +1030,7 @@ def load_station_index(source: Optional[Union[str, Path]] = None):
         df = df.rename(columns={"latitude": "lat", "longitude": "lon", "elevation": "elevation_m"})
         return _finish(df)
 
-    return _finish(pd.DataFrame([{
-        "name": "BUFFALO_NIAGARA_INTL_AP_725280", "country": "USA",
-        "lat": 42.94, "lon": -78.73, "elevation_m": 215, "timezone": "UTC-5",
-        "zip_url": "https://climate.onebuilding.org/WMO_Region_4_North_and_Central_Americas/USA_United_States_of_America/NY_New_York/BUFFALO_NIAGARA_INTL_AP_725280_TMYx.2007-2021.zip",
-        "period": "2007-2021", "heating_db": -17.5, "cooling_db": 29.5
-    }]))
+    return _finish(_fallback_station_index())
 
 
 @CACHE(show_spinner=False, ttl=86400)
@@ -1614,6 +1669,15 @@ def run_controller(
         out["pop"] = pop_keys
         return out
 
+    # Downloads are synchronous in Streamlit. If a previous cloud run was
+    # interrupted while the flag was true, clear it so the app does not sit in
+    # a permanent loading state on the next render.
+    if is_loading:
+        set_updates["is_loading"] = False
+        is_loading = False
+        if not load_requested:
+            pop_keys.append("loading_station_name")
+
     # One-shot station download+parse state machine.
     should_start_station_load = (
         out["active_page"] == "select_station"
@@ -1655,13 +1719,14 @@ def run_controller(
             attempt_notes.append(f"Attempt {i+1}/{len(urls_to_try)} failed")
 
         if fetched_bytes is None:
-            for j, alt_url in enumerate(ALTERNATIVE_EPW_SOURCES, start=1):
+            fallback_sources = ALTERNATIVE_EPW_SOURCES[:1] if _IS_STREAMLIT_CLOUD else ALTERNATIVE_EPW_SOURCES
+            for j, alt_url in enumerate(fallback_sources, start=1):
                 attempted_urls.append(str(alt_url))
                 fetched_bytes, _err = fetch_epw_bytes_no_ui(str(alt_url))
                 if fetched_bytes is not None:
                     successful_url = str(alt_url)
                     break
-                attempt_notes.append(f"Alternate {j}/{len(ALTERNATIVE_EPW_SOURCES)} failed")
+                attempt_notes.append(f"Alternate {j}/{len(fallback_sources)} failed")
 
         if fetched_bytes is None:
             set_updates["is_loading"] = False
