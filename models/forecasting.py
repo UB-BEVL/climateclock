@@ -198,7 +198,8 @@ def plot_forecast(
         line=dict(color="#60a5fa", width=2)
     ))
     fig.update_layout(
-        height=360,
+        height=420,
+        autosize=False,
         margin=dict(l=0, r=0, t=40, b=0),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
         yaxis_title="°C",
@@ -264,6 +265,8 @@ def plot_bias(df: pd.DataFrame) -> go.Figure:
     fig.update_layout(
         title="Daily Mean Temperature Bias (Next 10 Days)",
         xaxis_title="Day",
+        height=420,
+        autosize=False,
         yaxis_title="Delta (°C)",
         margin=dict(l=0, r=0, t=40, b=0),
         plot_bgcolor="rgba(0,0,0,0)",
@@ -295,7 +298,8 @@ def plot_overheating(df_forecast: pd.DataFrame, threshold: float = 30.0) -> go.F
         name=">= Threshold"
     ))
     fig.update_layout(
-        height=220,
+        height=360,
+        autosize=False,
         margin=dict(l=0, r=0, t=30, b=0),
         yaxis_title="°C",
         template="plotly_dark"
@@ -362,6 +366,8 @@ def plot_solar_potential(df: pd.DataFrame) -> go.Figure:
         title="Solar Radiation Forecast (W/m²)",
         yaxis_title="Irradiance (W/m²)",
         xaxis_title="Time",
+        height=420,
+        autosize=False,
         margin=dict(l=0, r=0, t=40, b=0),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
