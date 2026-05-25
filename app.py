@@ -7180,11 +7180,9 @@ def _wind_speed_frequency_dashboard_fig(cdf: Optional[pd.DataFrame]) -> go.Figur
 
 def render_precipitation_thermal_load_page() -> None:
     cdf = st.session_state.get("cdf")
-    precip_tab, load_tab, wind_tab, solar_tab = st.tabs([
+    precip_tab, load_tab = st.tabs([
         "💧 Precipitation & Snow",
         "🌡️ Degree Days & Loads",
-        "🌬️ Wind Context",
-        "☀️ Solar Context",
     ])
 
     with precip_tab:
@@ -7205,28 +7203,6 @@ def render_precipitation_thermal_load_page() -> None:
         fig_dd = _degree_day_dashboard_fig(cdf)
         _st_plotly_chart(fig_dd, use_container_width=True, key="precip_context_degree_days")
         _add_manual_pdf_figure("Heating and Cooling Degree Days", fig_dd)
-        _render_captured_context_figure(
-            "Comfort Load Profile",
-            ["Comfort Loads", "comfort_loads"],
-            "Cross-reference from Thermal Comfort tab - shown here for thermal load context.",
-        )
-
-    with wind_tab:
-        note = "Cross-reference from Wind Data tab - shown here for thermal load context."
-        for label, aliases in [
-            ("Monthly Mean Wind Speed", ["Monthly Wind Speed", "monthly_wind_speed"]),
-            ("Wind Speed Frequency Distribution", ["wind_speed_frequency_distribution"]),
-            ("Annual Wind Rose", ["annual_wind_rose"]),
-        ]:
-            _render_captured_context_figure(label, aliases, note)
-
-    with solar_tab:
-        note = "Cross-reference from Solar Sky Analysis tab - shown here for load sizing context."
-        for label, aliases in [
-            ("Hourly Incoming Radiation Boxwhisker", ["Hourly Incoming Radiation", "hourly_incoming_radiation_boxwhisker"]),
-            ("Monthly Solar Insolation on Inclined Surfaces", ["inclined_surface_insolation"]),
-        ]:
-            _render_captured_context_figure(label, aliases, note)
 
 def _koppen_classification(cdf: Optional[pd.DataFrame], header: Optional[dict] = None) -> Dict[str, str]:
     header = header or {}
@@ -15924,20 +15900,47 @@ def render_future_climate_page():
                     base_row = comfort_compare.loc[baseline_name]
                     target_row = comfort_compare.loc[target_label]
 
-                    def _metric_value(series, key, pct=False):
+                    def _numeric_metric(series, key) -> float:
                         val = series.get(key, np.nan)
+                        return np.nan if pd.isna(val) else float(val)
+
+                    def _metric_value(series, key, pct=False, suffix=" h"):
+                        val = _numeric_metric(series, key)
                         if pd.isna(val):
                             return "—"
-                        return f"{val * 100:.1f} %" if pct else f"{val:.0f} h"
+                        return f"{val * 100:.1f} %" if pct else f"{val:.0f}{suffix}"
 
-                    def _delta(target, base, key, pct=False):
-                        tv, bv = target.get(key, np.nan), base.get(key, np.nan)
+                    def _delta(target, base, key, pct=False, suffix=" h"):
+                        tv, bv = _numeric_metric(target, key), _numeric_metric(base, key)
                         if pd.isna(tv) or pd.isna(bv):
                             return None
                         delta = tv - bv
                         if pct:
                             return f"{delta * 100:+.1f} ppt"
-                        return f"{delta:+.0f} h"
+                        return f"{delta:+.0f}{suffix}"
+
+                    def _metric_has_signal(key: str) -> bool:
+                        vals = [_numeric_metric(target_row, key), _numeric_metric(base_row, key)]
+                        return any(pd.notna(v) and abs(v) > 1e-9 for v in vals)
+
+                    focus_display_key = focus_col if focus_col in comfort_compare.columns else "overheating_hours_28C"
+                    focus_label = display_map.get(focus_display_key, f"{format_threshold_label(focus_threshold)} h")
+
+                    stress_key = "hours_utci_heat_stress"
+                    stress_label = "UTCI heat stress"
+                    if not _metric_has_signal(stress_key) and "hours_utci_cold_stress" in comfort_compare.columns:
+                        stress_key = "hours_utci_cold_stress"
+                        stress_label = "UTCI cold stress"
+
+                    load_key = "cooling_degree_days"
+                    load_label = "Cooling degree days"
+                    if not _metric_has_signal(load_key) and "heating_degree_days" in comfort_compare.columns:
+                        load_key = "heating_degree_days"
+                        load_label = "Heating degree days"
+
+                    third_key = stress_key if _metric_has_signal(stress_key) else load_key
+                    third_label = stress_label if third_key == stress_key else load_label
+                    third_suffix = " h" if third_key == stress_key else " DD"
 
                     k1, k2, k3 = st.columns(3)
                     k1.metric(
@@ -15946,40 +15949,61 @@ def render_future_climate_page():
                         delta=_delta(target_row, base_row, "fraction_in_comfort_band", pct=True),
                     )
                     k2.metric(
-                        ">28 °C hours",
-                        _metric_value(target_row, "overheating_hours_28C"),
-                        delta=_delta(target_row, base_row, "overheating_hours_28C"),
+                        focus_label.replace(" h", " hours"),
+                        _metric_value(target_row, focus_display_key),
+                        delta=_delta(target_row, base_row, focus_display_key),
                     )
                     k3.metric(
-                        "UTCI heat stress",
-                        _metric_value(target_row, "hours_utci_heat_stress"),
-                        delta=_delta(target_row, base_row, "hours_utci_heat_stress"),
+                        third_label,
+                        _metric_value(target_row, third_key, suffix=third_suffix),
+                        delta=_delta(target_row, base_row, third_key, suffix=third_suffix),
                     )
 
-                    bars = [
-                        ("Comfort band %", target_row.get("fraction_in_comfort_band", np.nan) * 100.0,
-                         base_row.get("fraction_in_comfort_band", np.nan) * 100.0),
-                        (">28 °C h", target_row.get("overheating_hours_28C", np.nan), base_row.get("overheating_hours_28C", np.nan)),
-                        ("UTCI heat h", target_row.get("hours_utci_heat_stress", np.nan), base_row.get("hours_utci_heat_stress", np.nan)),
-                        ("CDD", target_row.get("cooling_degree_days", np.nan), base_row.get("cooling_degree_days", np.nan)),
-                    ]
                     def _safe_val(v):
                         return None if pd.isna(v) else float(v)
 
-                    bar_categories = [x[0] for x in bars]
-                    target_vals = [_safe_val(x[1]) for x in bars]
-                    base_vals = [_safe_val(x[2]) for x in bars]
-                    fig_compare = go.Figure()
-                    fig_compare.add_bar(name=target_label, x=bar_categories, y=target_vals, marker_color="#f97316")
-                    fig_compare.add_bar(name=baseline_name, x=bar_categories, y=base_vals, marker_color="#94a3b8")
-                    fig_compare.update_layout(
-                        barmode="group",
-                        height=360,
-                        margin=dict(l=0, r=0, t=30, b=0),
-                        yaxis_title="Hours / %",
-                        hovermode="x unified",
-                    )
-                    _st_plotly_chart(fig_compare, use_container_width=True)
+                    candidate_bars = [
+                        ("Comfort band %", "fraction_in_comfort_band", True),
+                        (focus_label, focus_display_key, False),
+                        ("UTCI heat h", "hours_utci_heat_stress", False),
+                        ("UTCI cold h", "hours_utci_cold_stress", False),
+                        ("CDD", "cooling_degree_days", False),
+                        ("HDD", "heating_degree_days", False),
+                    ]
+                    bars = []
+                    seen_bar_keys = set()
+                    for label, key, pct in candidate_bars:
+                        if key in seen_bar_keys or key not in comfort_compare.columns:
+                            continue
+                        seen_bar_keys.add(key)
+                        tv = _numeric_metric(target_row, key)
+                        bv = _numeric_metric(base_row, key)
+                        if pd.isna(tv) and pd.isna(bv):
+                            continue
+                        tv_plot = tv * 100.0 if pct and pd.notna(tv) else tv
+                        bv_plot = bv * 100.0 if pct and pd.notna(bv) else bv
+                        has_signal = any(pd.notna(v) and abs(v) > 1e-9 for v in (tv_plot, bv_plot))
+                        if not has_signal:
+                            continue
+                        bars.append((label, tv_plot, bv_plot))
+
+                    if bars:
+                        bar_categories = [x[0] for x in bars]
+                        target_vals = [_safe_val(x[1]) for x in bars]
+                        base_vals = [_safe_val(x[2]) for x in bars]
+                        fig_compare = go.Figure()
+                        fig_compare.add_bar(name=target_label, x=bar_categories, y=target_vals, marker_color="#f97316")
+                        fig_compare.add_bar(name=baseline_name, x=bar_categories, y=base_vals, marker_color="#94a3b8")
+                        fig_compare.update_layout(
+                            barmode="group",
+                            height=360,
+                            margin=dict(l=0, r=0, t=30, b=0),
+                            yaxis_title="Metric value",
+                            hovermode="x unified",
+                        )
+                        _st_plotly_chart(fig_compare, use_container_width=True)
+                    else:
+                        st.info("The selected future scenario does not change the available comfort/load metrics enough to plot a comparison.")
 
             # ── DIURNAL HEATMAPS ──────────────────────────────────
             st.markdown("#### Diurnal Heatmap — Future Temperature")
