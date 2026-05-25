@@ -202,7 +202,7 @@ def _prepare_advanced_figure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
             out[target] = pd.to_numeric(out[target], errors="coerce")
 
     if "wind_dir_deg" not in out.columns:
-        src = _first_column(["winddir", "wind_direction", "wind_dir", "wdir", "wd"])
+        src = _first_column(["winddir", "wind_direction", "wind_dir", "wdir", "wd", "HourlyWindDirection"])
         if src:
             out["wind_dir_deg"] = _normalize_wind_dir(out[src])
 
@@ -405,22 +405,22 @@ st.markdown(
             display: none !important;
         }
         
-        /* Lock the sidebar open at a presentation-friendly width. */
+        /* Lock the sidebar open at a compact, presentation-friendly width. */
         section[data-testid="stSidebar"][aria-expanded="true"] > div {
-            width: 370px !important;
-            min-width: 370px !important;
-            max-width: 370px !important;
+            width: 310px !important;
+            min-width: 310px !important;
+            max-width: 310px !important;
         }
         section[data-testid="stSidebar"][aria-expanded="true"] {
-            width: 370px !important;
-            min-width: 370px !important;
-            max-width: 370px !important;
+            width: 310px !important;
+            min-width: 310px !important;
+            max-width: 310px !important;
         }
         section[data-testid="stSidebar"][aria-expanded="false"],
         section[data-testid="stSidebar"][aria-expanded="false"] > div {
-            width: 370px !important;
-            min-width: 370px !important;
-            max-width: 370px !important;
+            width: 310px !important;
+            min-width: 310px !important;
+            max-width: 310px !important;
             transform: translateX(0) !important;
             visibility: visible !important;
             margin-left: 0 !important;
@@ -765,7 +765,7 @@ def _apply_global_plot_style(fig_obj: object) -> object:
         # in colorbars, chart titles, axes, trace names, or facet annotations.
         try:
             title_text = getattr(getattr(fig_obj.layout, "title", None), "text", None)
-            if title_text is not None and _text_is_missing(title_text):
+            if title_text is None or _text_is_missing(title_text):
                 fig_obj.update_layout(title_text="")
         except Exception:
             pass
@@ -776,8 +776,11 @@ def _apply_global_plot_style(fig_obj: object) -> object:
                 axis_obj = getattr(fig_obj.layout, axis_name, None)
                 title_obj = getattr(axis_obj, "title", None) if axis_obj is not None else None
                 title_text = getattr(title_obj, "text", None) if title_obj is not None else None
-                if title_text is not None and _text_is_missing(title_text):
-                    setattr(axis_obj.title, "text", "")
+                if title_text is None or _text_is_missing(title_text):
+                    try:
+                        axis_obj.title.text = ""
+                    except Exception:
+                        axis_obj.title = dict(text="")
         except Exception:
             pass
 
@@ -798,7 +801,7 @@ def _apply_global_plot_style(fig_obj: object) -> object:
             for ann in fig_obj.layout.annotations or []:
                 ann_dict = ann.to_plotly_json()
                 ann_text = ann_dict.get("text")
-                if ann_text is not None and _text_is_missing(ann_text):
+                if ann_text is None or _text_is_missing(ann_text):
                     ann_dict["text"] = ""
                 ann_font = dict(ann_dict.get("font") or {})
                 ann_font.update({"color": fontcol, "family": CHART_FONT_FAMILY})
@@ -855,8 +858,13 @@ def _apply_global_plot_style(fig_obj: object) -> object:
                 trace_type = str(trace_json.get("type", "")).lower()
                 try:
                     trace_name = getattr(trace, "name", None)
-                    if trace_name is not None and _text_is_missing(trace_name):
+                    if _text_is_missing(trace_name):
                         trace.name = ""
+                        trace.showlegend = False
+                    legendgroup_title = getattr(trace, "legendgrouptitle", None)
+                    legendgroup_title_text = getattr(legendgroup_title, "text", None) if legendgroup_title is not None else None
+                    if legendgroup_title is not None and _text_is_missing(legendgroup_title_text):
+                        trace.legendgrouptitle = dict(text="")
                 except Exception:
                     pass
 
@@ -2729,9 +2737,9 @@ section[data-testid="stSidebar"][aria-expanded="true"] > div,
 [data-testid="stSidebar"],
 [data-testid="stSidebar"] > div,
 section[data-testid="stSidebar"] > div:first-child {
-    width: 370px !important;
-    min-width: 370px !important;
-    max-width: 370px !important;
+    width: 310px !important;
+    min-width: 310px !important;
+    max-width: 310px !important;
     background: linear-gradient(180deg, #081017 0%, #0b141b 58%, #071017 100%) !important;
     border-right: 1px solid rgba(154, 174, 186, 0.12) !important;
     box-shadow: 12px 0 34px rgba(0, 0, 0, 0.32) !important;
@@ -2770,9 +2778,9 @@ section[data-testid="stSidebar"][aria-expanded="false"],
 section[data-testid="stSidebar"][aria-expanded="false"] > div,
 section[data-testid="stSidebar"][aria-expanded="false"] > div:first-child,
 section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {
-    width: 370px !important;
-    min-width: 370px !important;
-    max-width: 370px !important;
+    width: 310px !important;
+    min-width: 310px !important;
+    max-width: 310px !important;
     transform: translateX(0) !important;
     margin-left: 0 !important;
     left: 0 !important;
@@ -3782,6 +3790,8 @@ def _build_station_map_figure(stations: pd.DataFrame, map_height: int) -> go.Fig
                 marker=dict(size=10, color="#5fd4ff", opacity=0.82),
                 hovertext=hover_text,
                 hovertemplate="%{hovertext}<extra></extra>",
+                name="",
+                showlegend=False,
             )
         ]
     )
@@ -4325,6 +4335,16 @@ def setup_cdf():
             "ghi": "glohorrad",
             "dni": "dirnorrad",
             "dhi": "difhorrad",
+            "windspeed": "windspd",
+            "wind_speed": "windspd",
+            "windspeedms": "windspd",
+            "windspeed_ms": "windspd",
+            "HourlyWindSpeed": "windspd",
+            "liqprecipdepth": "liq_precip_depth",
+            "liqpreciprate": "liq_precip_rate",
+            "precipwtr": "precip_wtr",
+            "precipdepth": "liq_precip_depth",
+            "liqprecip": "liq_precip_depth",
             "pressure": "atmos_pressure",
             "atmospheric_pressure": "atmos_pressure",
         }
@@ -4339,6 +4359,17 @@ def setup_cdf():
 
 # ========== HEATMAP HELPERS (ANNUAL DIURNAL RESOURCE) ==========
 
+WIND_SPEED_ALIASES = [
+    "windspeed", "windspd", "wind_speed", "wspd", "ws",
+    "windspeedms", "wind speed", "windspeed_ms", "HourlyWindSpeed",
+]
+PRECIP_ALIASES = [
+    "liqprecipdepth", "liqpreciprate", "precipwtr", "precipitation",
+    "rain", "precip", "precipdepth", "liqprecip", "Precipitable Water",
+    "liq_precip_depth", "liq_precip_rate", "precip_wtr",
+]
+
+
 def find_column_by_fuzzy_match(df: pd.DataFrame, keywords: List[str], exclude_cols: List[str] = None) -> Optional[str]:
     """Find a column in df by fuzzy matching against keywords (case-insensitive, substring)."""
     if exclude_cols is None:
@@ -4350,12 +4381,31 @@ def find_column_by_fuzzy_match(df: pd.DataFrame, keywords: List[str], exclude_co
         for col_low, col_orig in col_map.items():
             if kw_lower in col_low or col_low in kw_lower:
                 return col_orig
+            kw_norm = re.sub(r"[^a-z0-9]+", "", kw_lower)
+            col_norm = re.sub(r"[^a-z0-9]+", "", col_low)
+            if kw_norm and (kw_norm in col_norm or col_norm in kw_norm):
+                return col_orig
     return None
 
 
 def get_metric_column(df: pd.DataFrame, keywords: List[str], exclude_cols: List[str] = None) -> Optional[str]:
-    """Alias for find_column_by_fuzzy_match."""
-    return find_column_by_fuzzy_match(df, keywords, exclude_cols)
+    """Find a metric column and store debug context for missing wind/precip aliases."""
+    keywords = list(keywords or [])
+    key_norms = {re.sub(r"[^a-z0-9]+", "", str(k).lower()) for k in keywords}
+    alias_group = None
+    if key_norms.intersection({"wind", "windspeed", "windspeedms", "windspd", "windspdm", "wspd", "ws", "hourlywindspeed"}):
+        alias_group = "wind_speed"
+        keywords = list(dict.fromkeys(keywords + WIND_SPEED_ALIASES))
+    elif key_norms.intersection({"precip", "precipitation", "rain", "liqprecipdepth", "liqpreciprate", "precipwtr", "precipdepth"}):
+        alias_group = "precipitation"
+        keywords = list(dict.fromkeys(keywords + PRECIP_ALIASES))
+
+    match = find_column_by_fuzzy_match(df, keywords, exclude_cols)
+    if match is None and alias_group and df is not None:
+        debug = st.session_state.get("debug_missing_cols", {})
+        debug[alias_group] = list(df.columns)
+        st.session_state["debug_missing_cols"] = debug
+    return match
 
 
 def coerce_to_numeric(series: pd.Series) -> pd.Series:
@@ -4692,8 +4742,8 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
         #        show_scale = True
 
         # Gentle DOY smoothing 
-        if info["metric"] == "Wind Direction":
-             pivot_plot = pd.DataFrame(pivot_plot_slice).copy() # Already smoothed sectors 0-7
+        if info["metric"] in {"Wind Direction", "Precipitation"}:
+             pivot_plot = pd.DataFrame(pivot_plot_slice).copy()
         else:
             pivot_plot = pd.DataFrame(pivot_plot_slice).copy().T.rolling(window=5, center=True, min_periods=1).mean().T
 
@@ -5126,6 +5176,27 @@ def _add_manual_pdf_caption(key: str, caption: str) -> None:
     st.session_state["pdf_captions"] = store
 
 
+def _remove_manual_pdf_captions(keys: Iterable[str]) -> None:
+    store = st.session_state.get("pdf_captions", {})
+    if not isinstance(store, dict) or not store:
+        return
+    remove_norms = set()
+    for key in keys:
+        clean_key = str(key).strip()
+        if not clean_key:
+            continue
+        remove_norms.add(_normalize_report_key(clean_key))
+        formatted = format_figure_title(clean_key)
+        if formatted:
+            remove_norms.add(_normalize_report_key(formatted))
+    if not remove_norms:
+        return
+    st.session_state["pdf_captions"] = {
+        k: v for k, v in store.items()
+        if _normalize_report_key(k) not in remove_norms
+    }
+
+
 def _merged_pdf_figures() -> Dict[str, object]:
     """Return collected Plotly figures, perfectly deduplicated."""
     manual_figs = _normalized_pdf_figures(st.session_state.get("pdf_figures", {}))
@@ -5152,6 +5223,7 @@ def _merged_pdf_figures() -> Dict[str, object]:
 
     filtered: Dict[str, object] = {}
     seen_fingerprints = set()
+    seen_report_norms = set()
 
     # Manual figs takes precedence (they provide better titles)
     for source in (manual_figs, auto_figs):
@@ -5171,6 +5243,11 @@ def _merged_pdf_figures() -> Dict[str, object]:
             clean_title = str(title).strip()
             if clean_title.lower() in {"", "undefined", "none", "nan"} or clean_title.lower().startswith("visualization"):
                 clean_title = _fallback_title(fig)
+
+            report_norms = _report_equivalent_norms(clean_title)
+            if report_norms and not report_norms.isdisjoint(seen_report_norms):
+                continue
+            seen_report_norms.update(report_norms)
 
             unique_title = clean_title
             suffix = 2
@@ -5259,6 +5336,7 @@ REPORT_TAB_ORDER = [
     "Solar Analysis",
     "Psychrometrics",
     "Wind",
+    "Precipitation",
     "Raw Data",
 ]
 
@@ -5347,7 +5425,7 @@ REPORT_STRUCTURE = [
         ],
     },
     {
-        "tab": "Raw Data",
+        "tab": "Precipitation",
         "section": "Precipitation & Thermal Load",
         "intro": "Precipitation, snow-depth, and degree-day indicators translate hourly weather data into envelope, drainage, and seasonal load context.",
         "figures": [
@@ -5448,6 +5526,25 @@ def format_figure_title(raw_name: str) -> str:
     return titled
 
 
+def _report_equivalent_norms(name: str) -> set[str]:
+    """Return all normalized report aliases that identify the same planned figure."""
+    base_norms = {_normalize_report_key(name)}
+    formatted = format_figure_title(name)
+    if formatted:
+        base_norms.add(_normalize_report_key(formatted))
+
+    for block in REPORT_STRUCTURE:
+        for spec in block.get("figures", []):
+            spec_norms = {
+                _normalize_report_key(spec.get("title", "")),
+                *(_normalize_report_key(alias) for alias in spec.get("aliases", [])),
+            }
+            spec_norms.discard("")
+            if base_norms.intersection(spec_norms):
+                return base_norms | spec_norms
+    return {norm for norm in base_norms if norm}
+
+
 def _resolve_report_sections(figs: Dict[str, object]) -> List[Dict[str, object]]:
     lookup = {_normalize_report_key(k): k for k in figs.keys()}
     used = set()
@@ -5478,8 +5575,9 @@ def _resolve_report_sections(figs: Dict[str, object]) -> List[Dict[str, object]]
                 "items": items,
             })
 
-    # Unmapped captured figures are appended in Raw Data section preserving insertion order.
-    raw_section = next((s for s in sections if s.get("tab") == "Raw Data"), None)
+    # Unmapped captured figures are appended to the explicit additional bucket,
+    # not to the planned precipitation section.
+    raw_section = next((s for s in sections if s.get("section") == "Additional Captured Figures"), None)
     if raw_section is None:
         raw_section = {"tab": "Raw Data", "section": "Additional Captured Figures", "intro": "Additional dashboard figures captured during this Streamlit session.", "items": []}
         sections.append(raw_section)
@@ -5526,11 +5624,11 @@ def _figure_caption_text(clean_title: str, raw_key: str, section_name: str) -> s
         "snowfall_profile": "The snow profile summarizes snow-depth behavior by month. Persistent winter depth points to roof-load, access, meltwater, and envelope durability concerns.",
         "heating_and_cooling_degree_days": "Degree days aggregate hourly departures from an 18 deg C base into monthly heating and cooling demand indicators. Compare HDD and CDD totals to understand whether envelope heat retention or heat rejection dominates.",
         "longwave_horizontal_irradiance_by_hour_and_day": "Heatmap of longwave (thermal) horizontal radiation by day-of-year and hour-of-day. This seasonal longwave pattern is highly relevant to nighttime radiative cooling and envelope heat loss at this location.",
-        "hourly_incoming_radiation": "Monthly box-whisker chart showing DNI, DHI, GHI, and longwave radiation. Repeated here for cross-reference - see primary caption in the Solar & Sky Analysis section for interpretation guidance.",
+        "hourly_incoming_radiation": "Monthly box-whisker chart showing DNI, DHI, GHI, and longwave radiation distributions. Use the interquartile spread and whiskers to compare direct, diffuse, global, and thermal sky conditions across seasons.",
         "monthly_solar_insolation_on_inclined_surfaces": "Overlay of total monthly insolation received on horizontal, vertical, and tilt-optimized surfaces. The optimal fixed tilt angle maximizes the annual total insolation received.",
         "mean_radiant_temperature_by_hour_and_day": "Heatmap of Mean Radiant Temperature (MRT) by day-of-year and hour-of-day, assuming full exposure to sun and wind. Peak MRT periods significantly increase heat stress and impact outdoor UTCI.",
-        "full_hourly_time_series_dry_bulb_and_dew_point_temperature": "Full 8,760-point line chart comparing dry-bulb (blue) and dew-point (green) temperatures. Repeated here for cross-reference - see primary caption in the Thermal Comfort section for interpretation guidance.",
-        "full_hourly_time_series_relative_humidity": "Full 8,760-point line chart of relative humidity across the year. Repeated here for cross-reference - see primary caption in the Thermal Comfort section for interpretation guidance.",
+        "full_hourly_time_series_dry_bulb_and_dew_point_temperature": "Full 8,760-point line chart comparing dry-bulb and dew-point temperatures. Persistent separation between the two traces highlights dry-air periods and evaporative cooling opportunity.",
+        "full_hourly_time_series_relative_humidity": "Full 8,760-point line chart of relative humidity across the year. Reference bands help distinguish dry, moderate, and humid periods that affect comfort, condensation risk, and latent load.",
         "seasonal_psychrometric_points": "Four seasonal psychrometric scatter plots showing all hourly points in dry-bulb vs. humidity ratio space. Point clusters identify which seasons naturally fall inside the overlaid UTCI comfort zone.",
         "hourly_psychrometric_paths": "Twelve monthly mean 24-hour paths traced in psychrometric space with UTCI comfort contours overlaid. Paths reveal exactly which times of day naturally pass through the comfort zone.",
         "diurnal_thermal_comfort_frequency_shading_scenario": "Stacked bar matrix of UTCI comfort categories comparing shaded vs. unshaded conditions by season and time-of-day. Shading provides the greatest comfort benefit during peak sun exposure periods.",
@@ -5592,7 +5690,7 @@ def _hourly_ghi(cdf: Optional[pd.DataFrame]) -> pd.Series:
 
 
 def _wind_data_unavailable(wind: pd.Series) -> bool:
-    return wind.empty or bool((wind.abs() <= 0.05).all())
+    return wind.empty
 
 
 def _first_sentence(text: str) -> str:
@@ -5662,7 +5760,7 @@ def _figure_interpretation_text(title: str, cdf: Optional[pd.DataFrame]) -> str:
             w = _metric_series_from_hourly(cdf, w_col, "wind")
             if not w.empty:
                 if _wind_data_unavailable(w):
-                    bits.append("Wind data not available in source file")
+                    bits.append("Wind speed values are zero or below threshold in this EPW file")
                 else:
                     bits.append(f"wind speed averages {w.mean():.1f} m/s with 90th percentile {w.quantile(0.9):.1f} m/s")
             else:
@@ -5747,7 +5845,7 @@ def _climate_summary_lines(cdf: Optional[pd.DataFrame]) -> List[str]:
             w = _metric_series_from_hourly(cdf, w_col, "wind")
             if not w.empty:
                 if _wind_data_unavailable(w):
-                    lines.append("Wind data not available in source file.")
+                    lines.append("Wind speed values are zero or below threshold in this EPW file.")
                 else:
                     lines.append(f"Wind regime: annual mean speed is {w.mean():.1f} m/s, with 90th percentile {w.quantile(0.9):.1f} m/s.")
             else:
@@ -5895,6 +5993,13 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
         station_name = _safe_location_label(st.session_state.get("header", {}))
         epw_metadata = _location_meta(st.session_state.get("header", {}))
         adv_df = _prepare_advanced_figure_df(df)
+        _remove_manual_pdf_captions([
+            "Hourly Timeseries Temperature",
+            "Hourly Timeseries Relative Humidity",
+            "Longwave Irradiance Heatmap",
+            "Hourly Incoming Radiation Boxwhisker",
+            "Inclined Surface Insolation",
+        ])
 
         def _store_advanced_fig(title: str, builder, *args) -> None:
             try:
@@ -5946,7 +6051,7 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
             wind_ok = False
             if wind_col_adv:
                 wind_adv = pd.to_numeric(adv_df[wind_col_adv], errors="coerce")
-                wind_ok = not wind_adv.dropna().empty and float(wind_adv.max()) >= 0.5
+                wind_ok = not wind_adv.dropna().empty
             if wind_ok:
                 _store_advanced_fig("wind_speed_heatmap", build_fig_l, adv_df, station_name)
                 _store_advanced_fig("seasonal_wind_roses", build_fig_m, adv_df, station_name)
@@ -5958,31 +6063,6 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                 extra["seasonal_wind_roses"] = _placeholder_fig("Seasonal Wind Roses", msg)
                 extra["diurnal_wind_roses"] = _placeholder_fig("Diurnal Wind Roses", msg)
                 extra["directional_wind_power"] = _placeholder_fig("Annual Directional Wind Power", msg)
-
-            _add_manual_pdf_caption(
-                "Hourly Timeseries Temperature",
-                "Repeated here for cross-reference - primary caption in Thermal Comfort. "
-                "The full dry-bulb and dew-point time series is the primary evidence for seasonal "
-                "temperature range when reading precipitation and degree-day context.",
-            )
-            _add_manual_pdf_caption(
-                "Longwave Irradiance Heatmap",
-                "Repeated here for cross-reference - primary caption in Solar Sky Analysis. "
-                "Longwave flux drives nighttime envelope heat balance and radiative cooling potential "
-                "when reading thermal load context.",
-            )
-            _add_manual_pdf_caption(
-                "Hourly Incoming Radiation Boxwhisker",
-                "Repeated here for cross-reference - primary caption in Solar Sky Analysis. "
-                "The radiation box-whisker shows GHI, DNI, DHI and longwave distributions "
-                "when reading seasonal load context.",
-            )
-            _add_manual_pdf_caption(
-                "Inclined Surface Insolation",
-                "Repeated here for cross-reference - primary caption in Solar Sky Analysis. "
-                "Inclined surface insolation informs PV tilt, solar thermal collector sizing, and "
-                "south-facade passive gains when reading thermal load context.",
-            )
 
         def _annual_day_hour_heatmap(col: Optional[str], kind: str, title: str, colorscale: str, unit: str, store_key: Optional[str] = None) -> None:
             if not col:
@@ -6167,7 +6247,7 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
             extra["Monthly Wind Speed"] = _placeholder_fig("Monthly Mean Wind Speed", msg)
             extra["Wind Speed Frequency Distribution"] = _placeholder_fig("Wind Speed Frequency Distribution", msg)
         elif _wind_data_unavailable(wind):
-            msg = "Wind data not available in source file."
+            msg = "Wind speed values are zero or below threshold in this EPW file."
             extra["Annual Wind Rose"] = _placeholder_fig("Annual Wind Rose", msg)
             extra["Monthly Wind Speed"] = _placeholder_fig("Monthly Mean Wind Speed", msg)
             extra["Wind Speed Frequency Distribution"] = _placeholder_fig("Wind Speed Frequency Distribution", msg)
@@ -6233,7 +6313,7 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
 
         # Required precipitation, snow, and degree-day figures.
         precip = _clean_col(precip_col, "precip")
-        precip_has_data = precip_col and not precip.empty and int((precip > 0.1).sum()) >= 24
+        precip_has_data = precip_col and not precip.empty and float(precip.max()) > 0
         if precip_has_data:
             m_precip = _month_group(precip_col, "precip", "sum")
             fig = px.bar(m_precip, x="label", y="value", title="Monthly Precipitation", labels={"label": "Month", "value": "Precipitation depth (mm)"})
@@ -6255,7 +6335,12 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                     dict(station=station_name, total_mm=total_annual_mm, wettest=wettest_month, driest=driest_month))
                 _add_manual_pdf_caption("Monthly Precipitation", cap_precip)
         else:
-            extra["Monthly Precipitation"] = _placeholder_fig("Monthly Precipitation", "Precipitation data not available in source file.")
+            msg = (
+                "No measurable precipitation recorded in this EPW file (all values zero or trace)."
+                if precip_col
+                else "Precipitation data not available in source file."
+            )
+            extra["Monthly Precipitation"] = _placeholder_fig("Monthly Precipitation", msg)
 
         snow = _clean_col(snow_col, "snow")
         if snow_col and not snow.empty:
@@ -6441,6 +6526,7 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                         times = times.tz_localize(tzinfo)
                     
                     solpos = pvlib.solarposition.get_solarposition(times, lat, lon)
+                    solpos = _drop_datetime_timezone(solpos)
                     surfaces = {
                         "Horizontal": (0, 180),
                         f"Vertical {'North' if lat < 0 else 'South'}": (90, optimal_tilt_az),
@@ -6455,13 +6541,13 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                         irrad = pvlib.irradiance.get_total_irradiance(
                             surface_tilt=tilt,
                             surface_azimuth=az,
-                            solar_zenith=solpos['apparent_zenith'],
-                            solar_azimuth=solpos['azimuth'],
-                            dni=df[dni_col],
-                            ghi=df[ghi_col],
-                            dhi=df[dhi_col]
+                            solar_zenith=pd.to_numeric(solpos['apparent_zenith'], errors="coerce").to_numpy(float),
+                            solar_azimuth=pd.to_numeric(solpos['azimuth'], errors="coerce").to_numpy(float),
+                            dni=pd.to_numeric(df[dni_col], errors="coerce").fillna(0).to_numpy(float),
+                            ghi=pd.to_numeric(df[ghi_col], errors="coerce").fillna(0).to_numpy(float),
+                            dhi=pd.to_numeric(df[dhi_col], errors="coerce").fillna(0).to_numpy(float)
                         )
-                        poa = irrad['poa_global'].fillna(0)
+                        poa = pd.Series(np.asarray(irrad['poa_global'], dtype=float), index=df.index).fillna(0)
                         monthly_insolation = poa.groupby(df["__month"]).sum() / 1000.0
                         monthly_insolation = monthly_insolation.reindex(range(1, 13)).fillna(0)
                         insolation_fig.add_trace(go.Bar(x=month_names, y=monthly_insolation, name=name))
@@ -6931,6 +7017,216 @@ def _get_extra_figures():
             st.session_state["_extra_figs"] = _build_additional_pdf_figures(cdf)
             st.session_state["_extra_figs_id"] = file_id
     return st.session_state.get("_extra_figs", {})
+
+
+def _captured_figure_by_alias(*aliases: str) -> Optional[go.Figure]:
+    alias_norms = {_normalize_report_key(alias) for alias in aliases if str(alias).strip()}
+    for store_name in ("pdf_figures", "pdf_figures_auto"):
+        store = st.session_state.get(store_name, {}) or {}
+        for key, fig in store.items():
+            key_norms = {
+                _normalize_report_key(key),
+                _normalize_report_key(format_figure_title(str(key))),
+            }
+            if alias_norms.intersection(key_norms):
+                try:
+                    return _clone_dashboard_figure(fig)
+                except Exception:
+                    return fig
+    return None
+
+
+def _render_captured_context_figure(label: str, aliases: List[str], source_note: str) -> None:
+    fig = _captured_figure_by_alias(label, *aliases)
+    if fig is None:
+        st.info(f"{label} is not captured yet. Visit its primary dashboard tab or generate the PDF report once to populate this cross-reference.")
+        return
+    st.caption(source_note)
+    _st_plotly_chart(fig, use_container_width=True, key=f"context_{_normalize_report_key(label)}")
+
+
+def _month_series_for_cdf(cdf: pd.DataFrame, index: pd.Index) -> pd.Series:
+    if isinstance(index, pd.DatetimeIndex):
+        return pd.Series(index.month, index=index)
+    if "month" in cdf.columns:
+        return pd.to_numeric(cdf["month"], errors="coerce").reindex(index)
+    return pd.Series(np.nan, index=index)
+
+
+def _drop_datetime_timezone(obj):
+    try:
+        if getattr(obj.index, "tz", None) is not None:
+            obj = obj.copy()
+            obj.index = obj.index.tz_localize(None)
+    except Exception:
+        try:
+            obj.index = obj.index.tz_convert(None)
+        except Exception:
+            pass
+    return obj
+
+
+def _monthly_precipitation_dashboard_fig(cdf: Optional[pd.DataFrame]) -> go.Figure:
+    if cdf is None or cdf.empty:
+        return placeholder_figure("Precipitation data not available in source file.")
+    precip_col = get_metric_column(cdf, PRECIP_ALIASES)
+    if not precip_col:
+        return placeholder_figure("Precipitation data not available in source file.")
+    precip = _metric_series_from_hourly(cdf, precip_col, "precip")
+    if precip.empty or float(precip.max()) <= 0:
+        return placeholder_figure("No measurable precipitation recorded in this EPW file (all values zero or trace).")
+    month = _month_series_for_cdf(cdf, precip.index)
+    local = pd.DataFrame({"month": month, "value": precip}).dropna()
+    grouped = local.groupby("month")["value"].sum().reindex(range(1, 13), fill_value=0)
+    labels = [calendar.month_abbr[m] for m in range(1, 13)]
+    fig = px.bar(x=labels, y=grouped.values, labels={"x": "Month", "y": "Precipitation depth (mm)"}, title="Monthly Precipitation")
+    fig.update_traces(marker_color="#38bdf8")
+    fig.update_layout(height=420)
+    return fig
+
+
+def _snowfall_profile_dashboard_fig(cdf: Optional[pd.DataFrame]) -> go.Figure:
+    if cdf is None or cdf.empty:
+        return placeholder_figure("Snow-depth data not available in source file.")
+    snow_col = get_metric_column(cdf, ["snowdepth", "snow_depth", "snowfall", "snow"])
+    snow = _metric_series_from_hourly(cdf, snow_col, "snow")
+    if not snow_col or snow.empty:
+        return placeholder_figure("Snow-depth data not available in source file.")
+    month = _month_series_for_cdf(cdf, snow.index)
+    local = pd.DataFrame({"month": month, "value": snow}).dropna()
+    grouped = local.groupby("month")["value"].max().reindex(range(1, 13), fill_value=0)
+    labels = [calendar.month_abbr[m] for m in range(1, 13)]
+    fig = px.bar(x=labels, y=grouped.values, labels={"x": "Month", "y": "Peak snow depth"}, title="Snowfall Profile")
+    fig.update_traces(marker_color="#e0f2fe")
+    fig.update_layout(height=420)
+    return fig
+
+
+def _degree_day_dashboard_fig(cdf: Optional[pd.DataFrame]) -> go.Figure:
+    if cdf is None or cdf.empty:
+        return placeholder_figure("Dry-bulb temperature is required for degree-day calculations.")
+    t_col = get_metric_column(cdf, ["drybulb", "dry_bulb", "temp", "temperature"])
+    temp = _metric_series_from_hourly(cdf, t_col, "temp")
+    if not t_col or temp.empty:
+        return placeholder_figure("Dry-bulb temperature is required for degree-day calculations.")
+    if isinstance(temp.index, pd.DatetimeIndex):
+        daily = temp.resample("D").mean().dropna()
+        month = pd.Series(daily.index.month, index=daily.index)
+        hdd = (18.0 - daily).clip(lower=0).groupby(month).sum()
+        cdd = (daily - 18.0).clip(lower=0).groupby(month).sum()
+        gdd = (daily - 5.0).clip(lower=0).groupby(month).sum()
+    else:
+        month = _month_series_for_cdf(cdf, temp.index)
+        hourly = pd.DataFrame({"month": month, "temp": temp}).dropna()
+        hdd = (18.0 - hourly["temp"]).clip(lower=0).groupby(hourly["month"]).sum() / 24.0
+        cdd = (hourly["temp"] - 18.0).clip(lower=0).groupby(hourly["month"]).sum() / 24.0
+        gdd = (hourly["temp"] - 5.0).clip(lower=0).groupby(hourly["month"]).sum() / 24.0
+    labels = [calendar.month_abbr[m] for m in range(1, 13)]
+    fig = go.Figure()
+    for name, values, color in [
+        ("HDD18", hdd, "#60a5fa"),
+        ("CDD18", cdd, "#fb923c"),
+        ("GDD5", gdd, "#22c55e"),
+    ]:
+        fig.add_bar(name=name, x=labels, y=values.reindex(range(1, 13), fill_value=0).values, marker_color=color)
+    fig.update_layout(title="Heating and Cooling Degree Days", barmode="group", height=460, yaxis_title="Degree days")
+    return fig
+
+
+def _monthly_wind_speed_dashboard_fig(cdf: Optional[pd.DataFrame]) -> go.Figure:
+    if cdf is None or cdf.empty:
+        return placeholder_figure("Wind data not available in source file.")
+    wind_col = get_metric_column(cdf, WIND_SPEED_ALIASES)
+    if not wind_col:
+        return placeholder_figure("Wind data not available in source file.")
+    wind = _metric_series_from_hourly(cdf, wind_col, "wind")
+    if _wind_data_unavailable(wind):
+        return placeholder_figure("Wind speed values are zero or below threshold in this EPW file.")
+    month = _month_series_for_cdf(cdf, wind.index)
+    local = pd.DataFrame({"month": month, "value": wind}).dropna()
+    grouped = local.groupby("month")["value"].mean().reindex(range(1, 13), fill_value=0)
+    labels = [calendar.month_abbr[m] for m in range(1, 13)]
+    fig = px.bar(x=labels, y=grouped.values, labels={"x": "Month", "y": "Wind speed (m/s)"}, title="Monthly Mean Wind Speed")
+    fig.update_traces(marker_color="#22c55e")
+    fig.update_layout(height=420)
+    return fig
+
+
+def _wind_speed_frequency_dashboard_fig(cdf: Optional[pd.DataFrame]) -> go.Figure:
+    if cdf is None or cdf.empty:
+        return placeholder_figure("Wind data not available in source file.")
+    wind_col = get_metric_column(cdf, WIND_SPEED_ALIASES)
+    if not wind_col:
+        return placeholder_figure("Wind data not available in source file.")
+    wind = _metric_series_from_hourly(cdf, wind_col, "wind")
+    if _wind_data_unavailable(wind):
+        return placeholder_figure("Wind speed values are zero or below threshold in this EPW file.")
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(x=wind, nbinsx=28, histnorm="probability density", name="Observed hours", marker_color="#38bdf8", opacity=0.68))
+    positive = wind[wind > 0]
+    if len(positive) > 20 and float(positive.std()) > 0:
+        try:
+            params = stats.weibull_min.fit(positive, floc=0)
+            k = params[0]
+            lam = params[2]
+            x_vals = np.linspace(0, max(float(wind.quantile(0.995)), float(wind.max()), 1.0), 160)
+            y_vals = stats.weibull_min.pdf(x_vals, *params)
+            fig.add_trace(go.Scatter(x=x_vals, y=y_vals, mode="lines", name=f"Weibull fit (k={k:.2f}, lambda={lam:.2f})", line=dict(color="#f59e0b", width=3)))
+        except Exception:
+            pass
+    fig.update_layout(title="Wind Speed Frequency Distribution", xaxis_title="Wind speed (m/s)", yaxis_title="Probability density", height=460, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    return fig
+
+
+def render_precipitation_thermal_load_page() -> None:
+    cdf = st.session_state.get("cdf")
+    precip_tab, load_tab, wind_tab, solar_tab = st.tabs([
+        "💧 Precipitation & Snow",
+        "🌡️ Degree Days & Loads",
+        "🌬️ Wind Context",
+        "☀️ Solar Context",
+    ])
+
+    with precip_tab:
+        fig_precip = _monthly_precipitation_dashboard_fig(cdf)
+        _st_plotly_chart(fig_precip, use_container_width=True, key="precip_context_monthly_precip")
+        _add_manual_pdf_figure("Monthly Precipitation", fig_precip)
+        fig_snow = _snowfall_profile_dashboard_fig(cdf)
+        _st_plotly_chart(fig_snow, use_container_width=True, key="precip_context_snowfall")
+        _add_manual_pdf_figure("Snowfall Profile", fig_snow)
+        st.caption("Annual Diurnal Resource Heatmap cross-reference; precipitation row appears only when measurable precipitation is present.")
+        _render_captured_context_figure(
+            "Annual Diurnal Resource Heatmap",
+            ["annual_diurnal_resource_heatmap"],
+            "Cross-reference from Overview & Stats tab - shown here for precipitation timing context.",
+        )
+
+    with load_tab:
+        fig_dd = _degree_day_dashboard_fig(cdf)
+        _st_plotly_chart(fig_dd, use_container_width=True, key="precip_context_degree_days")
+        _add_manual_pdf_figure("Heating and Cooling Degree Days", fig_dd)
+        _render_captured_context_figure(
+            "Comfort Load Profile",
+            ["Comfort Loads", "comfort_loads"],
+            "Cross-reference from Thermal Comfort tab - shown here for thermal load context.",
+        )
+
+    with wind_tab:
+        note = "Cross-reference from Wind Data tab - shown here for thermal load context."
+        for label, aliases in [
+            ("Monthly Mean Wind Speed", ["Monthly Wind Speed", "monthly_wind_speed"]),
+            ("Wind Speed Frequency Distribution", ["wind_speed_frequency_distribution"]),
+            ("Annual Wind Rose", ["annual_wind_rose"]),
+        ]:
+            _render_captured_context_figure(label, aliases, note)
+
+    with solar_tab:
+        note = "Cross-reference from Solar Sky Analysis tab - shown here for load sizing context."
+        for label, aliases in [
+            ("Hourly Incoming Radiation Boxwhisker", ["Hourly Incoming Radiation", "hourly_incoming_radiation_boxwhisker"]),
+            ("Monthly Solar Insolation on Inclined Surfaces", ["inclined_surface_insolation"]),
+        ]:
+            _render_captured_context_figure(label, aliases, note)
 
 def _koppen_classification(cdf: Optional[pd.DataFrame], header: Optional[dict] = None) -> Dict[str, str]:
     header = header or {}
@@ -7506,11 +7802,25 @@ def build_climate_pdf() -> bytes:
     source = _pdf_safe_text(st.session_state.get("source_label", "EPW File"))
     figs = _merged_pdf_figures()
     derived_figs = _build_additional_pdf_figures(cdf)
-    existing_norms = {_normalize_report_key(k) for k in figs.keys()}
+    existing_norms = set()
+    existing_fingerprints = set()
+    for existing_key, existing_fig in figs.items():
+        existing_norms.update(_report_equivalent_norms(existing_key))
+        try:
+            existing_fingerprints.add(existing_fig.to_json())
+        except Exception:
+            pass
     for key, fig in derived_figs.items():
-        if _normalize_report_key(key) not in existing_norms:
+        key_norms = _report_equivalent_norms(key)
+        try:
+            fig_fingerprint = fig.to_json()
+        except Exception:
+            fig_fingerprint = ""
+        if key_norms.isdisjoint(existing_norms) and (not fig_fingerprint or fig_fingerprint not in existing_fingerprints):
             figs[key] = _clone_dashboard_figure(fig)
-            existing_norms.add(_normalize_report_key(key))
+            existing_norms.update(key_norms)
+            if fig_fingerprint:
+                existing_fingerprints.add(fig_fingerprint)
     generated_on = _pdf_safe_text(datetime.date.today().strftime("%B %d, %Y"))
 
     pdf = ClimateReportPDF(location_label=location_label, source_label=source, generated_on=generated_on)
@@ -7636,33 +7946,53 @@ def build_climate_pdf() -> bytes:
         ("TMY / CWEC Data Disclaimer", "Typical Meteorological Year (TMY) and Canadian Weather for Energy Calculations (CWEC) datasets represent typical long-term conditions rather than extreme historical events. They are intended for energy simulation and general climate analysis, not for designing against extreme localized weather events.")
     ]
     pdf.current_section = "Glossary"
-    pdf.add_page()
-    pdf.set_font("Helvetica", "B", 20)
-    pdf.set_text_color(*PDF_INK)
-    pdf.set_xy(16, 28)
-    pdf.cell(178, 8, "Glossary", ln=1)
-    pdf.set_font("Helvetica", "", 10)
-    pdf.set_text_color(*PDF_MUTED)
-    pdf.set_xy(16, 40)
-    pdf.cell(178, 5, "Terms and definitions used throughout the report.", ln=1)
-    pdf.set_draw_color(*PDF_RULE)
-    pdf.set_line_width(0.22)
-    pdf.line(16, 55, 194, 55)
+    glossary_margin = 16
+    glossary_top = 28
+    glossary_w = pdf.w - (2 * glossary_margin)
 
-    y = 66
-    for term, definition in glossary_items:
-        if y > 262:
-            pdf.add_page()
-            y = 22
-        pdf.set_xy(16, y)
+    def _add_glossary_page(with_heading: bool = False) -> float:
+        pdf.add_page()
+        pdf.set_xy(glossary_margin, glossary_top)
+        if not with_heading:
+            return float(glossary_top)
+        pdf.set_font("Helvetica", "B", 20)
+        pdf.set_text_color(*PDF_INK)
+        pdf.cell(glossary_w, 8, "Glossary", ln=1)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(*PDF_MUTED)
+        pdf.set_xy(glossary_margin, 40)
+        pdf.cell(glossary_w, 5, "Terms and definitions used throughout the report.", ln=1)
+        pdf.set_draw_color(*PDF_RULE)
+        pdf.set_line_width(0.22)
+        pdf.line(glossary_margin, 55, pdf.w - glossary_margin, 55)
+        return 66.0
+
+    def _estimated_glossary_height(term: str, definition: str) -> float:
+        usable_chars = 96
+        lines = max(1, math.ceil(len(_pdf_safe_text(definition)) / usable_chars))
+        return 6 + (lines * 5) + 5
+
+    def _render_glossary_entry(term: str, definition: str, y_pos: float) -> float:
+        pdf.set_xy(glossary_margin, y_pos)
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(*PDF_INK)
-        pdf.cell(180, 5, _pdf_safe_text(term), ln=1)
-        pdf.set_xy(20, y + 6)
+        pdf.cell(glossary_w, 5, _pdf_safe_text(term), ln=1)
+        pdf.set_xy(glossary_margin + 4, y_pos + 6)
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(*PDF_MUTED)
-        pdf.multi_cell(170, 4.8, _pdf_safe_text(definition))
-        y = pdf.get_y() + 4
+        pdf.multi_cell(glossary_w - 8, 4.8, _pdf_safe_text(definition))
+        return pdf.get_y() + 4
+
+    y = _add_glossary_page(with_heading=True)
+    disclaimer_item = glossary_items[-1]
+    for term, definition in glossary_items[:-1]:
+        if y + _estimated_glossary_height(term, definition) > pdf.h - 22:
+            y = _add_glossary_page(with_heading=False)
+        y = _render_glossary_entry(term, definition, y)
+
+    if y + 40 > pdf.h - 22:
+        y = _add_glossary_page(with_heading=False)
+    y = _render_glossary_entry(disclaimer_item[0], disclaimer_item[1], y)
 
     out = pdf.output(dest="S")
 
@@ -8060,6 +8390,10 @@ def render_raw_data_workspace_page():
         )
         st.dataframe(cov_df, use_container_width=True)
         st.divider()
+        st.markdown("### Precipitation & Thermal Load")
+        st.caption("Drainage, snow, degree-day, wind, and solar context collected for load sizing.")
+        render_precipitation_thermal_load_page()
+        st.divider()
     render_raw_data_page()
 
 
@@ -8171,6 +8505,12 @@ def render_export_page():
                 st.caption(f"- {len(captured_figures) - 10} more captured figure(s)")
         else:
             st.caption("Visit analysis sections or generate a full report to capture figures.")
+        debug_missing_cols = st.session_state.get("debug_missing_cols", {})
+        if debug_missing_cols:
+            with st.expander("Column alias debug", expanded=False):
+                for alias_group, columns in debug_missing_cols.items():
+                    st.caption(f"{alias_group}: get_metric_column could not match the current aliases.")
+                    st.code("\n".join(map(str, columns)), language="text")
 
         st.markdown(
             """
@@ -8438,7 +8778,12 @@ def render_dashboard_page():
                 work["hod"] = work.index.hour
                 work["doy"] = work.index.dayofyear
 
-                aggfunc = "median" if agg == "median" else "mean"
+                if agg == "median":
+                    aggfunc = "median"
+                elif agg == "max":
+                    aggfunc = "max"
+                else:
+                    aggfunc = "mean"
                 pivot_raw = work.pivot_table(index="hod", columns="doy", values="val", aggfunc=aggfunc)
                 pivot_raw = pivot_raw.reindex(index=range(24), columns=range(1, 367))
                 
@@ -8525,31 +8870,30 @@ def render_dashboard_page():
 
             precip_col = get_metric_column(cdf, ["liqprecipdepth", "liq_precip_depth", "precipwtr", "precip_wtr", "precipitation", "rain"])
             if precip_col:
-                precip_series = pd.to_numeric(cdf[precip_col], errors="coerce").mask(lambda s: (s <= 0) | (s > 900)).fillna(0)
+                precip_series = pd.to_numeric(cdf[precip_col], errors="coerce").mask(lambda s: (s < 0) | (s > 900)).fillna(0)
                 cdf["precipdepthclean"] = precip_series
-                # Skip near-empty precipitation files so the resource heatmap does not show a flat zero band.
-                if int((precip_series > 0.1).sum()) >= 24:
-                    max_precip = float(precip_series.max()) if not precip_series.empty else 0.0
-                    precip_bins = [0.0, 0.1, 2.5, 10.0, max(max_precip + 0.1, 999.0)]
-                    cdf["precipcat"] = pd.cut(
-                        precip_series,
-                        bins=precip_bins,
-                        labels=[0, 1, 2, 3],
-                        include_lowest=True,
-                        right=False,
-                    ).astype(float)
-                    pivot_binned, info = _build_pivot_with_thresholds(
-                        cdf,
-                        "precipcat",
-                        "Precipitation",
-                        [0.1, 2.5, 10.0],
-                        " mm",
-                        "precipitation",
-                        agg="mean",
-                        raw_col="precipdepthclean",
-                    )
-                    if not pivot_binned.empty:
-                        heatmap_dict["Precipitation"] = (pivot_binned, info)
+                max_precip = float(precip_series.max()) if not precip_series.empty else 0.0
+                trace_threshold = 0.01 if max_precip < 0.1 else 0.1
+                precip_bins = [0.0, trace_threshold, 2.5, 10.0, max(max_precip + trace_threshold, 999.0)]
+                cdf["precipcat"] = pd.cut(
+                    precip_series,
+                    bins=precip_bins,
+                    labels=[0, 1, 2, 3],
+                    include_lowest=True,
+                    right=False,
+                ).astype(float)
+                pivot_binned, info = _build_pivot_with_thresholds(
+                    cdf,
+                    "precipcat",
+                    "Precipitation",
+                    [trace_threshold, 2.5, 10.0],
+                    " mm",
+                    "precipitation",
+                    agg="max",
+                    raw_col="precipdepthclean",
+                )
+                if not pivot_binned.empty:
+                    heatmap_dict["Precipitation"] = (pivot_binned, info)
 
             wind_col = get_metric_column(cdf, ["windspd", "wind_speed", "wspd"])
             if wind_col:
@@ -9082,8 +9426,15 @@ def render_dashboard_page():
         
     if _render_dashboard_section("Wind"):
         render_wind_page()
-        
+
+    if _render_dashboard_section("Precipitation"):
+        st.markdown("### Precipitation & Thermal Load")
+        st.caption("Drainage, snow, degree-day, wind, and solar context collected for load sizing.")
+        render_precipitation_thermal_load_page()
+        st.divider()
+
     if _render_dashboard_section("Raw Data"):
+
         # ---- Data Quality (moved from former Data Quality tab) ----
         st.markdown("### 📋 Data completeness (non-null coverage)")
         st.caption("Quickly confirm which weather variables are fully populated and which ones have gaps before trusting downstream analytics.")
@@ -10211,6 +10562,8 @@ def build_fig_c_inclined_surface_insolation(df, station_name, epw_metadata):
         if not isinstance(times, pd.DatetimeIndex):
             return placeholder_figure("Datetime index is required for inclined surface analysis."), ""
         solar_position = loc.get_solarposition(times)
+        solar_position = _drop_datetime_timezone(solar_position)
+        times_for_grouping = times.tz_localize(None) if getattr(times, "tz", None) is not None else times
         
         # Tilt sweep
         tilts = list(range(0, 71, 10))
@@ -10222,15 +10575,16 @@ def build_fig_c_inclined_surface_insolation(df, station_name, epw_metadata):
             poa = irradiance.get_total_irradiance(
                 surface_tilt=tilt,
                 surface_azimuth=azimuth,
-                dni=df['dni_Wm2'],
-                ghi=df['ghi_Wm2'],
-                dhi=df['dhi_Wm2'],
-                solar_zenith=solar_position['apparent_zenith'],
-                solar_azimuth=solar_position['azimuth']
+                dni=pd.to_numeric(df['dni_Wm2'], errors="coerce").fillna(0).to_numpy(float),
+                ghi=pd.to_numeric(df['ghi_Wm2'], errors="coerce").fillna(0).to_numpy(float),
+                dhi=pd.to_numeric(df['dhi_Wm2'], errors="coerce").fillna(0).to_numpy(float),
+                solar_zenith=pd.to_numeric(solar_position['apparent_zenith'], errors="coerce").to_numpy(float),
+                solar_azimuth=pd.to_numeric(solar_position['azimuth'], errors="coerce").to_numpy(float)
             )
-            monthly = poa['poa_global'].groupby(times.month).sum() / 1000.0  # kWh/m2
+            poa_global = pd.Series(np.asarray(poa['poa_global'], dtype=float), index=times_for_grouping).fillna(0)
+            monthly = poa_global.groupby(times_for_grouping.month).sum() / 1000.0  # kWh/m2
             monthly_totals[name] = monthly
-            annual_totals[name] = poa['poa_global'].sum() / 1000.0
+            annual_totals[name] = float(poa_global.sum()) / 1000.0
             
         optimal_tilt_tuple = max([(t, 180, f'{t}° S') for t in tilts], key=lambda x: annual_totals[x[2]])
         optimal_tilt = optimal_tilt_tuple[0]
@@ -12260,6 +12614,13 @@ def render_solar_page():
         fig_solar.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
         _st_plotly_chart(fig_solar, use_container_width=True)
         _add_manual_pdf_figure("Monthly Solar Insolation", fig_solar)
+        _irr_shared_max = 0.0
+        for _shared_col in [_dhi_col, _dni_col]:
+            if _shared_col:
+                _shared_vals = pd.to_numeric(cdf[_shared_col], errors="coerce")
+                if not _shared_vals.dropna().empty:
+                    _irr_shared_max = max(_irr_shared_max, float(_shared_vals.max()))
+
         # Individual heatmaps for DHI and DNI
         for _irr_label, _irr_col, _irr_scale, _irr_cname, _pdf_key in [
             ("DHI — Diffuse Horizontal Irradiance", _dhi_col, "Blues", "DHI (W/m²)", "DHI Irradiance Heatmap"),
@@ -12272,7 +12633,9 @@ def render_solar_page():
                     _fig_irr = px.imshow(_mat_irr.values, origin="lower", aspect="auto",
                                     labels=dict(x="Day of Year", y="Hour", color=_irr_cname),
                                     title=f"Annual heatmap — {_irr_label}",
-                                    height=360, color_continuous_scale=_irr_scale)
+                                    height=360, color_continuous_scale=SOLAR_COLORSCALE)
+                    if _irr_shared_max > 0:
+                        _fig_irr.update_traces(zmin=0, zmax=_irr_shared_max)
                     _fig_irr.update_xaxes(tickvals=_month_days, ticktext=_month_names, side="bottom")
                     _fig_irr.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"])
                     _st_plotly_chart(_fig_irr, use_container_width=True)
@@ -12923,55 +13286,60 @@ def render_psychrometrics_page():
 
 
 
+WIND_DIRECTION_LABELS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+
+
+def _clean_wind_frame(df: pd.DataFrame, wind_col: str, wdir_col: str) -> pd.DataFrame:
+    out = df.copy()
+    speed = pd.to_numeric(out[wind_col], errors="coerce")
+    speed = speed.mask((speed < 0) | (speed >= 999))
+    direction = _normalize_wind_dir(out[wdir_col])
+    out[wind_col] = speed
+    out[wdir_col] = direction
+    return out.dropna(subset=[wind_col, wdir_col])
+
+
+def _wind_direction_categories(direction: pd.Series) -> pd.Categorical:
+    direction = pd.to_numeric(direction, errors="coerce") % 360
+    sector_idx = np.floor(((direction + 11.25) % 360) / 22.5).astype(int).clip(0, 15)
+    return pd.Categorical.from_codes(
+        sector_idx.to_numpy(dtype=int),
+        categories=WIND_DIRECTION_LABELS,
+        ordered=True,
+    )
+
+
 def create_wind_rose(df):
     df = df.copy()
 
-    # Get proper columns for wind speed and direction:
-    #wind_spd_col = get_metric_column(df, ["wind_speed", "windspeed", "windspd", "ws", "wspd"])
-    #wind_dir_col = get_metric_column(df, ["wind_direction", "winddir", "wd", "wdir", "wind_dir"])
-    wind_spd_col = next((c for c in df.columns if "wind" in c.lower() and "sp" in c.lower()), None)
-    wind_dir_col = next((c for c in df.columns if "wind" in c.lower() and "dir" in c.lower()), None)
+    wind_spd_col = get_metric_column(df, WIND_SPEED_ALIASES)
+    wind_dir_col = get_metric_column(df, ["wind_direction", "winddir", "wd", "wdir", "wind_dir", "HourlyWindDirection"])
     if not wind_spd_col or not wind_dir_col:
         return None
 
-    df[wind_spd_col] = pd.to_numeric(df[wind_spd_col], errors="coerce")
-    df[wind_dir_col] = pd.to_numeric(df[wind_dir_col], errors="coerce") % 360
-    df = df.dropna(subset=[wind_spd_col, wind_dir_col])
-    df = df[df[wind_spd_col] >= 0]
+    df = _clean_wind_frame(df, wind_spd_col, wind_dir_col)
     if df.empty:
         return None
 
     # Convert wind speed from m/s to mph
     df.loc[:, "Speed_mph"] = df[wind_spd_col] * 2.23694
 
-    # Define direction bins
-    dir_bins = np.arange(0, 361, 22.5)
-    dir_labels = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
-
-    # Dynamically create speed bins based on data
-    max_speed = float(df["Speed_mph"].max())
-    if pd.isna(max_speed) or max_speed <= 0:
-        max_speed = 10 # fallback
-
-    num_bins = 6
-    speed_bins = np.linspace(0, max_speed, num_bins + 1)
-    speed_bins[-1] = max(speed_bins[-1], max_speed + 1e-9)
-    speed_labels = [f"{speed_bins[i]:.1f}-{speed_bins[i + 1]:.1f}" for i in range(len(speed_bins) - 1)]
+    speed_bins = [0, 2, 5, 10, 15, 20, np.inf]
+    speed_labels = ["0-2", "2-5", "5-10", "10-15", "15-20", "20+"]
 
     # Categorize data
-    df.loc[:, "dir_cat"] = pd.cut(
-        df[wind_dir_col], bins=dir_bins, labels=dir_labels, include_lowest=True, ordered=False,
-    )
+    df.loc[:, "dir_cat"] = _wind_direction_categories(df[wind_dir_col])
     df.loc[:, "speed_cat"] = pd.cut(
-        df["Speed_mph"], bins=speed_bins, labels=speed_labels, include_lowest=True, ordered=False,
+        df["Speed_mph"], bins=speed_bins, labels=speed_labels, include_lowest=True, right=False, ordered=True,
     )
 
     # Count occurrences and calculate percentages
     wind_data = (
-        df.groupby(["dir_cat", "speed_cat"], observed=True)
+        df.dropna(subset=["dir_cat", "speed_cat"])
+        .groupby(["dir_cat", "speed_cat"], observed=False)
         .size()
         .unstack(fill_value=0)
-        .reindex(index=dir_labels, columns=speed_labels, fill_value=0)
+        .reindex(index=WIND_DIRECTION_LABELS, columns=speed_labels, fill_value=0)
     )
     total_count = wind_data.sum().sum()
     if total_count == 0: return None
@@ -12984,8 +13352,8 @@ def create_wind_rose(df):
     for i, speed_cat in enumerate(speed_labels):
         fig.add_trace(
             go.Barpolar(
-                r=wind_percentages[speed_cat].reindex(dir_labels, fill_value=0),
-                theta=dir_labels,
+                r=wind_percentages[speed_cat].reindex(WIND_DIRECTION_LABELS, fill_value=0),
+                theta=WIND_DIRECTION_LABELS,
                 name=f"{speed_cat} mph",
                 marker_color=colors[i],
                 marker_line_width=1,
@@ -13026,8 +13394,8 @@ def build_fig_l(df, station_name):
     if not wind_col:
         return placeholder_figure("Wind data not available in source EPW file."), ""
     wind = pd.to_numeric(df[wind_col], errors="coerce")
-    if wind.dropna().empty or wind.max() < 0.5:
-        return placeholder_figure("Wind data not available in source EPW file."), ""
+    if wind.dropna().empty:
+        return placeholder_figure("Wind speed data not available in source EPW file."), ""
     mat = advance_day_hour_matrix(df, wind)
     if mat.empty:
         return placeholder_figure("Not enough wind data to build heatmap."), ""
@@ -13085,8 +13453,10 @@ def build_fig_m(df, station_name):
     wdir_col = next((c for c in ["wind_dir_deg", "winddir", "winddir_deg"] if c in df.columns), None)
     if not wind_col or not wdir_col:
         return placeholder_figure("Wind data not available for seasonal wind roses."), ""
-    spd_all = pd.to_numeric(df[wind_col], errors="coerce")
-    if spd_all.dropna().empty or spd_all.max() < 0.5 or not isinstance(df.index, pd.DatetimeIndex):
+    df = _clean_wind_frame(df, wind_col, wdir_col)
+    if df.empty:
+        return placeholder_figure("Wind speed data not available for seasonal wind roses."), ""
+    if not isinstance(df.index, pd.DatetimeIndex):
         return placeholder_figure("Wind data not available for seasonal wind roses."), ""
 
     seasons = [
@@ -13098,7 +13468,7 @@ def build_fig_m(df, station_name):
     beaufort_bins = [0, 1.6, 3.4, 5.5, 8.0, 10.8, np.inf]
     beaufort_labels = ["Calm <1.6", "Light 1.6-3.4", "Breeze 3.4-5.5", "Fresh 5.5-8.0", "Strong 8.0-10.8", "Storm >10.8"]
     beaufort_colors = ["#aec7e8", "#1f77b4", "#ffbb78", "#ff7f0e", "#d62728", "#7f0000"]
-    dir_labels = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    dir_labels = WIND_DIRECTION_LABELS
 
     fig = make_subplots(
         rows=2,
@@ -13162,8 +13532,10 @@ def build_fig_n(df, station_name):
     wdir_col = next((c for c in ["wind_dir_deg", "winddir", "winddir_deg"] if c in df.columns), None)
     if not wind_col or not wdir_col:
         return placeholder_figure("Wind data not available for diurnal wind roses."), ""
-    spd_all = pd.to_numeric(df[wind_col], errors="coerce")
-    if spd_all.dropna().empty or spd_all.max() < 0.5 or not isinstance(df.index, pd.DatetimeIndex):
+    df = _clean_wind_frame(df, wind_col, wdir_col)
+    if df.empty:
+        return placeholder_figure("Wind speed data not available for diurnal wind roses."), ""
+    if not isinstance(df.index, pd.DatetimeIndex):
         return placeholder_figure("Wind data not available for diurnal wind roses."), ""
 
     seasons = [("Winter", [12, 1, 2]), ("Spring", [3, 4, 5]), ("Summer", [6, 7, 8]), ("Autumn", [9, 10, 11])]
@@ -13173,7 +13545,7 @@ def build_fig_n(df, station_name):
         ("Afternoon", list(range(12, 18))),
         ("Evening", [18, 19]),
     ]
-    dir_labels = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    dir_labels = WIND_DIRECTION_LABELS
     fig = make_subplots(
         rows=4,
         cols=4,
@@ -13225,13 +13597,16 @@ def build_fig_o(df, station_name):
     wdir_col = next((c for c in ["wind_dir_deg", "winddir", "winddir_deg"] if c in df.columns), None)
     if not wind_col or not wdir_col:
         return placeholder_figure("Wind data not available for directional wind power."), ""
+    df = _clean_wind_frame(df, wind_col, wdir_col)
+    if df.empty:
+        return placeholder_figure("Wind data not available for directional wind power."), ""
     speed = pd.to_numeric(df[wind_col], errors="coerce")
     direction = pd.to_numeric(df[wdir_col], errors="coerce") % 360
     valid = speed.notna() & direction.notna()
-    if not valid.any() or speed[valid].max() < 0.5:
+    if not valid.any():
         return placeholder_figure("Wind data not available for directional wind power."), ""
 
-    dir_labels = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    dir_labels = WIND_DIRECTION_LABELS
     v50 = speed * (50 / 10) ** 0.143
     power = 0.5 * 1.225 * np.power(v50, 3)
     dir_cats = pd.Series(np.floor(((direction[valid] + 11.25) % 360) / 22.5).astype(int), index=direction[valid].index)
@@ -13302,6 +13677,14 @@ def _render_advanced_wind_diagnostics(cdf: Optional[pd.DataFrame]) -> None:
         return
     df_cwec = _prepare_advanced_figure_df(cdf)
     station_name = _safe_location_label(st.session_state.get("header", {}))
+    for key, fig_builder in [
+        ("Monthly Wind Speed", _monthly_wind_speed_dashboard_fig),
+        ("Wind Speed Frequency Distribution", _wind_speed_frequency_dashboard_fig),
+    ]:
+        fig = fig_builder(cdf)
+        _st_plotly_chart(fig, use_container_width=True)
+        _add_manual_pdf_figure(key, fig)
+
     for key, builder in [
         ("wind_speed_heatmap", build_fig_l),
         ("seasonal_wind_roses", build_fig_m),
@@ -13326,26 +13709,14 @@ def render_wind_page():
     st.markdown(f"<h3>{location_label} – Wind Analysis</h3>", unsafe_allow_html=True)
     st.caption("Understand prevalent wind patterns, magnitude, and directional distribution across the selected period.")
     
-    #wind_spd_col = get_metric_column(cdf, ["wind_speed", "windspeed", "windspd", "ws", "wspd"])
-    #wind_dir_col = get_metric_column(cdf, ["wind_direction", "winddir", "wd", "wdir", "wind_dir"])
-    wind_spd_col = next((c for c in cdf.columns if "wind" in c.lower() and "sp" in c.lower()), None)
-    wind_dir_col = next((c for c in cdf.columns if "wind" in c.lower() and "dir" in c.lower()), None)
+    wind_spd_col = get_metric_column(cdf, WIND_SPEED_ALIASES)
+    wind_dir_col = get_metric_column(cdf, ["wind_direction", "winddir", "wd", "wdir", "wind_dir", "HourlyWindDirection"])
     if not wind_spd_col or not wind_dir_col:
         st.warning(f"This EPW file is missing required wind columns (Speed or Direction). Cannot generate Wind Rose.")
         _render_advanced_wind_diagnostics(cdf)
         return
 
-    df_clean = cdf.copy()
-    df_clean[wind_spd_col] = pd.to_numeric(df_clean[wind_spd_col], errors='coerce')
-
-    # normalize wind direction: accept either numeric degrees or compass text
-    _raw_dir = df_clean[wind_dir_col].astype(str).str.strip().str.upper()
-    _dir_num = pd.to_numeric(_raw_dir, errors='coerce')
-    _dir_txt = _raw_dir.map(_COMPASS_TO_DEG)
-    df_clean[wind_dir_col] = _dir_num.fillna(_dir_txt)
-
-    # drop invalid rows after conversion
-    df_clean = df_clean.dropna(subset=[wind_spd_col, wind_dir_col])
+    df_clean = _clean_wind_frame(cdf, wind_spd_col, wind_dir_col)
 
     # Debug: show column info to help diagnose wind data issues
     if not df_clean.empty:
@@ -13364,7 +13735,7 @@ def render_wind_page():
     except Exception as _wr_err:
         st.warning(f"Wind Rose failed to render: {_wr_err}")
 
-    if fig:
+    if fig is not None:
         _st_plotly_chart(fig, use_container_width=True,
                         config={"displayModeBar": True})
         _add_manual_pdf_figure("Annual Wind Rose", fig)
