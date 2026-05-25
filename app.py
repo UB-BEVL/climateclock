@@ -5931,7 +5931,8 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
         dhi_col = get_metric_column(df, ["difhorrad", "dhi", "diffuse_horizontal"])
         dni_col = get_metric_column(df, ["dirnorrad", "dni", "direct_normal"])
         lw_col = get_metric_column(df, ["horirsky", "longwave", "ir_hoz", "downwelling_longwave"])
-        precip_col = get_metric_column(df, ["liqprecipdepth", "liq_precip_depth", "precipwtr", "precip_wtr", "precipitation", "rain"])
+        precip_col = _precip_depth_column(df)
+        precip_wtr_col = _precipitable_water_column(df)
         snow_col = get_metric_column(df, ["snowdepth", "snow_depth", "snowfall", "snow"])
 
         if isinstance(df.index, pd.DatetimeIndex):
@@ -6335,12 +6336,35 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                     dict(station=station_name, total_mm=total_annual_mm, wettest=wettest_month, driest=driest_month))
                 _add_manual_pdf_caption("Monthly Precipitation", cap_precip)
         else:
-            msg = (
-                "No measurable precipitation recorded in this EPW file (all values zero or trace)."
-                if precip_col
-                else "Precipitation data not available in source file."
-            )
-            extra["Monthly Precipitation"] = _placeholder_fig("Monthly Precipitation", msg)
+            precip_wtr = _clean_col(precip_wtr_col, "precip")
+            if precip_wtr_col and not precip_wtr.empty and float(precip_wtr.max()) > 0:
+                m_wtr = _month_group(precip_wtr_col, "precip", "mean")
+                fig = px.bar(
+                    m_wtr,
+                    x="label",
+                    y="value",
+                    title="Monthly Precipitable Water (precipitation depth unavailable)",
+                    labels={"label": "Month", "value": "Mean precipitable water (mm)"},
+                )
+                fig.update_traces(marker_color="#38bdf8")
+                fig.update_layout(height=460)
+                fig.add_annotation(
+                    text="EPW liquid precipitation depth is unavailable; this is atmospheric precipitable water, not rainfall depth.",
+                    x=0.5,
+                    y=1.14,
+                    xref="paper",
+                    yref="paper",
+                    showarrow=False,
+                    font=dict(size=11),
+                )
+                extra["Monthly Precipitation"] = fig
+            else:
+                msg = (
+                    "Liquid precipitation depth is not populated in this EPW file. Many TMY EPWs leave precipitation depth as all zero/missing values."
+                    if precip_col
+                    else "Precipitation data not available in source file."
+                )
+                extra["Monthly Precipitation"] = _placeholder_fig("Monthly Precipitation", msg)
 
         snow = _clean_col(snow_col, "snow")
         if snow_col and not snow.empty:
@@ -7066,22 +7090,87 @@ def _drop_datetime_timezone(obj):
     return obj
 
 
+def _column_by_normalized_name(df: pd.DataFrame, aliases: Iterable[str]) -> Optional[str]:
+    if df is None or df.empty:
+        return None
+    norm_to_col = {
+        re.sub(r"[^a-z0-9]+", "", str(col).lower()): col
+        for col in df.columns
+    }
+    for alias in aliases:
+        col = norm_to_col.get(re.sub(r"[^a-z0-9]+", "", str(alias).lower()))
+        if col:
+            return col
+    return None
+
+
+def _precip_depth_column(df: pd.DataFrame) -> Optional[str]:
+    return _column_by_normalized_name(
+        df,
+        [
+            "liq_precip_depth",
+            "liqprecipdepth",
+            "liquid_precipitation_depth",
+            "liquidprecipitationdepth",
+            "precip_depth",
+            "precipdepth",
+            "precipitation",
+            "rainfall",
+            "rain",
+            "precip",
+        ],
+    )
+
+
+def _precipitable_water_column(df: pd.DataFrame) -> Optional[str]:
+    return _column_by_normalized_name(df, ["precip_wtr", "precipwtr", "precipitable_water"])
+
+
 def _monthly_precipitation_dashboard_fig(cdf: Optional[pd.DataFrame]) -> go.Figure:
     if cdf is None or cdf.empty:
         return placeholder_figure("Precipitation data not available in source file.")
-    precip_col = get_metric_column(cdf, PRECIP_ALIASES)
-    if not precip_col:
-        return placeholder_figure("Precipitation data not available in source file.")
+
+    precip_col = _precip_depth_column(cdf)
     precip = _metric_series_from_hourly(cdf, precip_col, "precip")
+    plot_title = "Monthly Precipitation"
+    y_title = "Precipitation depth (mm)"
+    grouped_agg = "sum"
+
     if precip.empty or float(precip.max()) <= 0:
-        return placeholder_figure("No measurable precipitation recorded in this EPW file (all values zero or trace).")
+        fallback_col = _precipitable_water_column(cdf)
+        fallback = _metric_series_from_hourly(cdf, fallback_col, "precip")
+        if fallback.empty or float(fallback.max()) <= 0:
+            return placeholder_figure(
+                "Liquid precipitation depth is not populated in this EPW file. "
+                "Many TMY EPWs leave precipitation depth as all zero/missing values."
+            )
+        precip = fallback
+        plot_title = "Monthly Precipitable Water (precipitation depth unavailable)"
+        y_title = "Mean precipitable water (mm)"
+        grouped_agg = "mean"
+
     month = _month_series_for_cdf(cdf, precip.index)
     local = pd.DataFrame({"month": month, "value": precip}).dropna()
-    grouped = local.groupby("month")["value"].sum().reindex(range(1, 13), fill_value=0)
+    grouped_src = local.groupby("month")["value"]
+    grouped = (
+        grouped_src.sum()
+        if grouped_agg == "sum"
+        else grouped_src.mean()
+    ).reindex(range(1, 13), fill_value=0)
     labels = [calendar.month_abbr[m] for m in range(1, 13)]
-    fig = px.bar(x=labels, y=grouped.values, labels={"x": "Month", "y": "Precipitation depth (mm)"}, title="Monthly Precipitation")
+    fig = px.bar(x=labels, y=grouped.values, labels={"x": "Month", "y": y_title}, title=plot_title)
     fig.update_traces(marker_color="#38bdf8")
     fig.update_layout(height=420)
+    if grouped_agg == "mean":
+        fig.add_annotation(
+            text="EPW liquid precipitation depth is unavailable; this is atmospheric precipitable water, not rainfall depth.",
+            x=0.5,
+            y=1.14,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font=dict(size=11),
+        )
     return fig
 
 
@@ -7211,7 +7300,7 @@ def _koppen_classification(cdf: Optional[pd.DataFrame], header: Optional[dict] =
         if cdf is None or cdf.empty:
             raise ValueError("no dataframe")
         t_col = get_metric_column(cdf, ["drybulb", "dry_bulb", "temp", "temperature"])
-        p_col = get_metric_column(cdf, ["liqprecipdepth", "liq_precip_depth", "precipwtr", "precip_wtr", "precipitation", "rain"])
+        p_col = _precip_depth_column(cdf)
         if not t_col:
             raise ValueError("no temperature")
         if "month" in cdf.columns:
@@ -8844,7 +8933,7 @@ def render_dashboard_page():
                 if not pivot_binned.empty:
                     heatmap_dict["Humidity"] = (pivot_binned, info)
 
-            precip_col = get_metric_column(cdf, ["liqprecipdepth", "liq_precip_depth", "precipwtr", "precip_wtr", "precipitation", "rain"])
+            precip_col = _precip_depth_column(cdf)
             if precip_col:
                 precip_series = pd.to_numeric(cdf[precip_col], errors="coerce").mask(lambda s: (s < 0) | (s > 900)).fillna(0)
                 cdf["precipdepthclean"] = precip_series
@@ -13285,6 +13374,28 @@ def _wind_direction_categories(direction: pd.Series) -> pd.Categorical:
     )
 
 
+def _wind_speed_bin_spec(speed_mps: pd.Series, max_bins: int = 6) -> tuple[list[float], list[str]]:
+    clean = pd.to_numeric(speed_mps, errors="coerce").dropna()
+    clean = clean[(clean >= 0) & (clean < 999)]
+    if clean.empty:
+        return [0.0, 0.5], ["0.0-0.5"]
+
+    max_speed = float(clean.max())
+    if not np.isfinite(max_speed) or max_speed <= 0:
+        return [0.0, 0.5], ["0.0-0.5"]
+
+    upper = max(max_speed, 0.5)
+    raw_bins = np.linspace(0.0, upper, max_bins + 1)
+    decimals = 2 if upper < 2 else 1
+    bins = np.unique(np.round(raw_bins, decimals))
+    if len(bins) < 2:
+        bins = np.array([0.0, upper])
+    bins = bins.astype(float)
+    bins[-1] = max(bins[-1], max_speed) + max(upper * 1e-6, 1e-9)
+    labels = [f"{bins[i]:g}-{bins[i + 1]:g}" for i in range(len(bins) - 1)]
+    return bins.tolist(), labels
+
+
 def create_wind_rose(df):
     df = df.copy()
 
@@ -13297,16 +13408,13 @@ def create_wind_rose(df):
     if df.empty:
         return None
 
-    # Convert wind speed from m/s to mph
-    df.loc[:, "Speed_mph"] = df[wind_spd_col] * 2.23694
-
-    speed_bins = [0, 2, 5, 10, 15, 20, np.inf]
-    speed_labels = ["0-2", "2-5", "5-10", "10-15", "15-20", "20+"]
+    df.loc[:, "Speed_mps"] = pd.to_numeric(df[wind_spd_col], errors="coerce")
+    speed_bins, speed_labels = _wind_speed_bin_spec(df["Speed_mps"])
 
     # Categorize data
     df.loc[:, "dir_cat"] = _wind_direction_categories(df[wind_dir_col])
     df.loc[:, "speed_cat"] = pd.cut(
-        df["Speed_mph"], bins=speed_bins, labels=speed_labels, include_lowest=True, right=False, ordered=True,
+        df["Speed_mps"], bins=speed_bins, labels=speed_labels, include_lowest=True, right=False, ordered=True,
     )
 
     # Count occurrences and calculate percentages
@@ -13317,6 +13425,8 @@ def create_wind_rose(df):
         .unstack(fill_value=0)
         .reindex(index=WIND_DIRECTION_LABELS, columns=speed_labels, fill_value=0)
     )
+    speed_labels = [label for label in speed_labels if float(wind_data[label].sum()) > 0]
+    wind_data = wind_data.reindex(columns=speed_labels, fill_value=0)
     total_count = wind_data.sum().sum()
     if total_count == 0: return None
     wind_percentages = wind_data / total_count * 100
@@ -13330,11 +13440,11 @@ def create_wind_rose(df):
             go.Barpolar(
                 r=wind_percentages[speed_cat].reindex(WIND_DIRECTION_LABELS, fill_value=0),
                 theta=WIND_DIRECTION_LABELS,
-                name=f"{speed_cat} mph",
+                name=f"{speed_cat} m/s",
                 marker_color=colors[i],
                 marker_line_width=1,
                 opacity=0.8,
-                hovertemplate="Direction: %{theta}<br>Speed: " + speed_cat + " mph<br>Percentage: %{r:.1f}%<extra></extra>",
+                hovertemplate="Direction: %{theta}<br>Speed: " + speed_cat + " m/s<br>Percentage: %{r:.1f}%<extra></extra>",
             )
         )
 
