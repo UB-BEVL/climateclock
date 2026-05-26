@@ -1,7 +1,0 @@
-3937:                                 svg_bytes = fig.to_image(format="svg", scale=2, width=1200, height=800)
-4545:             svg_bytes = fig.to_image(format="svg", width=1400, height=800, scale=2)
-4596:             st.download_button(f"📥 Download {title_suffix} (SVG)", fig.to_image(format="svg", width=1200, height=600, scale=2), f"{clean_loc}_{col}_chart.svg", "image/svg+xml", key=f"dl_{col}_png_{key_suffix}")
-4654:             st.download_button(f"📥 Download {title_suffix} (SVG)", fig_sc.to_image(format="svg", width=1400, height=800, scale=2), f"{cname}_{col}_scatter.svg", "image/svg+xml", key=f"dl_{col}_scat_png_{key_suffix}")
-4686:             st.download_button(f"📥 Download {title_suffix} (SVG)", fig_hm.to_image(format="svg", width=1200, height=600, scale=2), f"{clean_loc}_{col}_heatmap.svg", "image/svg+xml", key=f"dl_{col}_hm_png")
-7136:             svg_bytes = fig_psy.to_image(format="svg", width=1200, height=900, scale=2)
-7262:                 svg_bytes = fig.to_image(format="svg", width=800, height=800, scale=2)

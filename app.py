@@ -405,22 +405,22 @@ st.markdown(
             display: none !important;
         }
         
-        /* Lock the sidebar open at a compact, presentation-friendly width. */
+        /* Lock the sidebar open at a compact, narrow width. */
         section[data-testid="stSidebar"][aria-expanded="true"] > div {
-            width: 310px !important;
-            min-width: 310px !important;
-            max-width: 310px !important;
+            width: 240px !important;
+            min-width: 240px !important;
+            max-width: 240px !important;
         }
         section[data-testid="stSidebar"][aria-expanded="true"] {
-            width: 310px !important;
-            min-width: 310px !important;
-            max-width: 310px !important;
+            width: 240px !important;
+            min-width: 240px !important;
+            max-width: 240px !important;
         }
         section[data-testid="stSidebar"][aria-expanded="false"],
         section[data-testid="stSidebar"][aria-expanded="false"] > div {
-            width: 310px !important;
-            min-width: 310px !important;
-            max-width: 310px !important;
+            width: 240px !important;
+            min-width: 240px !important;
+            max-width: 240px !important;
             transform: translateX(0) !important;
             visibility: visible !important;
             margin-left: 0 !important;
@@ -2737,29 +2737,29 @@ section[data-testid="stSidebar"][aria-expanded="true"] > div,
 [data-testid="stSidebar"],
 [data-testid="stSidebar"] > div,
 section[data-testid="stSidebar"] > div:first-child {
-    width: 310px !important;
-    min-width: 310px !important;
-    max-width: 310px !important;
+    width: 240px !important;
+    min-width: 240px !important;
+    max-width: 240px !important;
     background: linear-gradient(180deg, #081017 0%, #0b141b 58%, #071017 100%) !important;
     border-right: 1px solid rgba(154, 174, 186, 0.12) !important;
     box-shadow: 12px 0 34px rgba(0, 0, 0, 0.32) !important;
 }
 
 section[data-testid="stSidebar"] {
-    position: sticky !important;
+    position: fixed !important;
     top: 0 !important;
+    left: 0 !important;
     height: 100vh !important;
     align-self: flex-start !important;
     overflow: hidden !important;
+    z-index: 999 !important;
 }
 
 section[data-testid="stSidebar"] > div:first-child,
 [data-testid="stSidebar"] > div {
     height: 100vh !important;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(154, 174, 186, 0.28) transparent;
+    overflow: hidden !important;
+    scrollbar-width: none;
 }
 
 [data-testid="collapsedControl"],
@@ -2778,9 +2778,9 @@ section[data-testid="stSidebar"][aria-expanded="false"],
 section[data-testid="stSidebar"][aria-expanded="false"] > div,
 section[data-testid="stSidebar"][aria-expanded="false"] > div:first-child,
 section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {
-    width: 310px !important;
-    min-width: 310px !important;
-    max-width: 310px !important;
+    width: 240px !important;
+    min-width: 240px !important;
+    max-width: 240px !important;
     transform: translateX(0) !important;
     margin-left: 0 !important;
     left: 0 !important;
@@ -2798,42 +2798,48 @@ section[data-testid="stSidebar"][aria-expanded="false"] *::after {
 }
 
 [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-    gap: 0.38rem !important;
+    gap: 0.25rem !important;
+}
+
+/* Hide sidebar scrollbar */
+[data-testid="stSidebar"] ::-webkit-scrollbar {
+    display: none !important;
 }
 
 .cc-sidebar-brand {
     display: flex;
     align-items: center;
-    gap: 0.85rem;
-    margin: 0.15rem 0 0.75rem;
-    padding: 0.45rem 0.15rem;
+    gap: 0.6rem;
+    margin: 0.1rem 0 0.45rem;
+    padding: 0.3rem 0.1rem;
 }
 
 .cc-sidebar-mark {
-    width: 42px;
-    height: 42px;
-    border-radius: 8px;
+    width: 34px;
+    height: 34px;
+    border-radius: 6px;
     display: grid;
     place-items: center;
     background: rgba(72, 187, 177, 0.16);
     border: 1px solid rgba(72, 187, 177, 0.36);
     color: var(--ci-text);
     font-weight: 800;
-    font-size: 0.85rem;
+    font-size: 0.72rem;
+    flex-shrink: 0;
 }
 
 .cc-sidebar-title {
     color: var(--ci-text);
-    font-size: 1.1rem;
+    font-size: 0.92rem;
     font-weight: 750;
     line-height: 1.1;
 }
 
 .cc-sidebar-subtitle {
     color: var(--ci-muted);
-    font-size: 0.88rem;
-    margin-top: 0.18rem;
-    max-width: 210px;
+    font-size: 0.75rem;
+    margin-top: 0.12rem;
+    max-width: 160px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2841,12 +2847,12 @@ section[data-testid="stSidebar"][aria-expanded="false"] *::after {
 
 .cc-sidebar-status {
     display: grid;
-    grid-template-columns: 10px 1fr;
-    gap: 0.65rem;
+    grid-template-columns: 8px 1fr;
+    gap: 0.45rem;
     align-items: start;
-    padding: 0.78rem;
-    margin-bottom: 0.86rem;
-    border-radius: 8px;
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+    border-radius: 6px;
     background: rgba(255, 255, 255, 0.035);
     border: 1px solid rgba(154, 174, 186, 0.12);
 }
@@ -2854,48 +2860,51 @@ section[data-testid="stSidebar"][aria-expanded="false"] *::after {
 .cc-sidebar-status strong {
     display: block;
     color: var(--ci-text);
-    font-size: 0.84rem;
+    font-size: 0.74rem;
     line-height: 1.2;
 }
 
 .cc-sidebar-status span:not(.cc-status-dot) {
     display: block;
     color: var(--ci-subtle);
-    font-size: 0.76rem;
-    line-height: 1.35;
-    margin-top: 0.15rem;
+    font-size: 0.66rem;
+    line-height: 1.3;
+    margin-top: 0.1rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .cc-status-dot {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 999px;
-    margin-top: 0.28rem;
+    margin-top: 0.22rem;
     background: #758390;
 }
 
 .cc-status-dot.is-ready {
     background: var(--ci-primary);
-    box-shadow: 0 0 0 4px rgba(72, 187, 177, 0.12);
+    box-shadow: 0 0 0 3px rgba(72, 187, 177, 0.12);
 }
 
 .cc-nav-group {
-    margin: 0.86rem 0 0.32rem;
+    margin: 0.55rem 0 0.18rem;
     color: var(--ci-subtle);
-    font-size: 0.76rem;
+    font-size: 0.65rem;
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
 
 [data-testid="stSidebar"] .stButton > button {
-    min-height: 44px !important;
+    min-height: 34px !important;
     justify-content: flex-start !important;
-    border-radius: 8px !important;
-    font-size: 1rem !important;
-    font-weight: 650 !important;
-    padding: 0.62rem 0.84rem !important;
-    margin-bottom: 0.16rem !important;
+    border-radius: 6px !important;
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    padding: 0.38rem 0.6rem !important;
+    margin-bottom: 0.08rem !important;
     box-shadow: none !important;
     transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease !important;
 }
@@ -3466,157 +3475,11 @@ def render_sidebar_filters(epw_loaded: bool) -> None:
             st.session_state.comfort_pkg = build_comfort_package(cdf_adjusted)
             st.session_state['_comfort_pkg_key'] = _pkg_key
 
-def render_sidebar():
-    with st.sidebar:
-        # Dynamic header based on loaded location
-        header = st.session_state.get("header", {})
-        loc_city = header.get("city") or header.get("city_name") or ""
-        loc_country = header.get("country") or header.get("country_name") or ""
-        
-        if loc_city or loc_country:
-            parts = [p for p in [loc_city, loc_country] if p]
-            loc_label = ", ".join(parts)
-        else:
-            loc_label = "Weather Workspace"
 
-        st.markdown(
-            f"""
-            <div style='display: flex; align-items: center; margin-bottom: 0.5rem; padding: 0.2rem;'>
-                <div style='font-size: 1.8rem; margin-right: 0.5rem;'>&#127780;</div>
-                <div>
-                    <h3 style='margin:0; font-size:1.05rem; padding:0; color:#e2e8f0; font-weight: 600;'>Climate Analysis Pro</h3>
-                    <p style='margin:0; font-size:0.8rem; color:#94a3b8; font-weight:500;'>{loc_label}</p>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
-        epw_loaded = bool(st.session_state.get("cdf") is not None and st.session_state.get("header"))
-        current_page = st.session_state.get("nav_page", DEFAULT_PAGE)
-        if current_page not in ALLOWED_PAGES:
-            current_page = DEFAULT_PAGE
-        st.session_state["nav_page"] = current_page
 
-        nav_labels = [label for label, _ in NAV_ITEMS]
-        
-        # Determine the effective selection based on state
-        current_label = PAGE_TO_LABEL.get(current_page, nav_labels[0])
 
-        if epw_loaded:
-            nav_choice = st.radio(
-                "Navigation",
-                options=nav_labels,
-                label_visibility="collapsed",
-                key="nav_page",
-            )
 
-        else:
-            nav_choice = nav_labels[0]
-            st.radio(
-                "Navigation",
-                options=nav_labels,
-                index=0,
-                label_visibility="collapsed",
-                key="nav_locked",
-                disabled=True
-            )
-            st.info("Load a station from the map or upload an EPW/ZIP to unlock the dashboard views.")
-        st.markdown("<br>", unsafe_allow_html=True)
-        with st.expander("📄 Export PDF Report", expanded=False):
-            # Check if weather data is loaded
-            cdf = st.session_state.get("cdf")
-            header = st.session_state.get("header")
-            has_data = cdf is not None and header is not None
-            
-            if not has_data:
-                st.info("👈 Load a weather file first, then click Generate PDF.")
-            else:
-                st.caption("Generate directly from captured Dashboard figures so the report matches the charts you see in the app.")
-            
-            if st.button("Generate PDF", use_container_width=True, disabled=not has_data):
-                if not has_data:
-                    st.error("📭 No weather data loaded. Please select a location or upload an EPW file first.")
-                else:
-                    if st.session_state.get("nav_page") != "Dashboard":
-                        st.error("Open the Dashboard page, then click Generate PDF.")
-                    else:
-                        figs_now = _merged_pdf_figures()
-                        if figs_now:
-                            try:
-                                with st.spinner("Preparing PDF..."):
-                                    pdf_bytes = build_climate_pdf()
-                                loc_name = _safe_location_label(st.session_state.get("header") or {})
-                                safe_name = str(loc_name).replace(" ", "_").replace(",", "")
-                                st.session_state["pdf_download_bytes"] = pdf_bytes
-                                st.session_state["pdf_download_name"] = f"{safe_name}_Report.pdf"
-                                st.session_state["pdf_download_error"] = None
-                            except Exception as exc:
-                                st.session_state["pdf_download_bytes"] = None
-                                st.session_state["pdf_download_name"] = None
-                                st.session_state["pdf_download_error"] = f"PDF generation failed: {exc}"
-                        else:
-                            _request_dashboard_pdf_build()
-                            st.info("Capturing Dashboard figures for the report. The download will appear after this render completes.")
-
-            pdf_error = st.session_state.get("pdf_download_error")
-            pdf_bytes_ready = st.session_state.get("pdf_download_bytes")
-            pdf_name_ready = st.session_state.get("pdf_download_name")
-            if pdf_bytes_ready and pdf_name_ready:
-                st.download_button(
-                    label="⬇️ Download PDF Report",
-                    data=pdf_bytes_ready,
-                    file_name=pdf_name_ready,
-                    mime="application/octet-stream",
-                    use_container_width=True,
-                )
-
-                fig_count = len(_merged_pdf_figures())
-                st.success(f"✓ PDF ready with {fig_count} visualization(s)")
-                st.caption("Expand to see captured visualizations.")
-                for _title in _merged_pdf_figures().keys():
-                    st.caption(f"• {format_figure_title(_title)}")
-            elif pdf_error:
-                st.button(
-                    "⬇️ Download PDF Report",
-                    use_container_width=True,
-                    disabled=True,
-                    key="pdf_download_disabled",
-                )
-                st.error(pdf_error)
-            elif has_data:
-                st.button(
-                    "⬇️ Download PDF Report",
-                    use_container_width=True,
-                    disabled=True,
-                    key="pdf_download_disabled",
-                )
-                st.caption("Click Generate PDF first. Download will appear here.")
-                
-        # Evaluate routing selection
-        chosen_page = LABEL_TO_PAGE.get(nav_choice, DEFAULT_PAGE)
-
-        # Keep controller page mode aligned with navigation to avoid mixed-page state.
-        st.session_state["active_page"] = "select_station" if chosen_page == "Select weather file" else "dashboard"
-
-        render_sidebar_filters(epw_loaded)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        if st.button("🔄 Reset Session", use_container_width=True):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            _rerun()
-
-        st.markdown(
-            """
-            <div class="sidebar-brand">
-                <strong>BEVL Lab</strong><br/>
-                v1.0 · Weather intelligence for research & practice
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
 
 def render_sidebar():
@@ -6343,19 +6206,19 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                     m_wtr,
                     x="label",
                     y="value",
-                    title="Monthly Precipitable Water (precipitation depth unavailable)",
+                    title="Monthly Precipitable Water",
                     labels={"label": "Month", "value": "Mean precipitable water (mm)"},
                 )
                 fig.update_traces(marker_color="#38bdf8")
-                fig.update_layout(height=460)
+                fig.update_layout(height=460, margin=dict(t=90))
                 fig.add_annotation(
-                    text="EPW liquid precipitation depth is unavailable; this is atmospheric precipitable water, not rainfall depth.",
+                    text="<i>Precipitation depth unavailable — showing atmospheric precipitable water, not rainfall.</i>",
                     x=0.5,
-                    y=1.14,
+                    y=1.08,
                     xref="paper",
                     yref="paper",
                     showarrow=False,
-                    font=dict(size=11),
+                    font=dict(size=10, color="#94a3b8"),
                 )
                 extra["Monthly Precipitation"] = fig
             else:
@@ -7145,7 +7008,7 @@ def _monthly_precipitation_dashboard_fig(cdf: Optional[pd.DataFrame]) -> go.Figu
                 "Many TMY EPWs leave precipitation depth as all zero/missing values."
             )
         precip = fallback
-        plot_title = "Monthly Precipitable Water (precipitation depth unavailable)"
+        plot_title = "Monthly Precipitable Water"
         y_title = "Mean precipitable water (mm)"
         grouped_agg = "mean"
 
@@ -7160,16 +7023,16 @@ def _monthly_precipitation_dashboard_fig(cdf: Optional[pd.DataFrame]) -> go.Figu
     labels = [calendar.month_abbr[m] for m in range(1, 13)]
     fig = px.bar(x=labels, y=grouped.values, labels={"x": "Month", "y": y_title}, title=plot_title)
     fig.update_traces(marker_color="#38bdf8")
-    fig.update_layout(height=420)
+    fig.update_layout(height=420, margin=dict(t=90))
     if grouped_agg == "mean":
         fig.add_annotation(
-            text="EPW liquid precipitation depth is unavailable; this is atmospheric precipitable water, not rainfall depth.",
+            text="<i>Precipitation depth unavailable — showing atmospheric precipitable water, not rainfall.</i>",
             x=0.5,
-            y=1.14,
+            y=1.08,
             xref="paper",
             yref="paper",
             showarrow=False,
-            font=dict(size=11),
+            font=dict(size=10, color="#94a3b8"),
         )
     return fig
 
