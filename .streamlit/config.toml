@@ -8,3 +8,11 @@ level = "info"
 headless = true
 runOnSave = false
 maxUploadSize = 200
+
+[theme]
+base = "dark"
+primaryColor = "#48BBB1"
+backgroundColor = "#070D12"
+secondaryBackgroundColor = "#101A22"
+textColor = "#EDF3F5"
+font = "sans serif"
