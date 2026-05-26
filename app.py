@@ -9340,47 +9340,68 @@ def render_psychrometrics_page():
 
 
 
+WIND_ROSE_DIR_LABELS = [
+    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+    "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+]
+
+
+def _wind_rose_direction_categories(direction: pd.Series) -> pd.Categorical:
+    direction = _normalize_wind_dir(direction).dropna()
+    sector_idx = np.floor(((direction + 11.25) % 360) / 22.5).astype(int).clip(0, 15)
+    return pd.Categorical.from_codes(
+        sector_idx.to_numpy(dtype=int),
+        categories=WIND_ROSE_DIR_LABELS,
+        ordered=True,
+    )
+
+
+def _wind_rose_speed_bins_mph(speed_mps: pd.Series, num_bins: int = 6) -> tuple[list[float], list[str]]:
+    speed_mph = pd.to_numeric(speed_mps, errors="coerce") * 2.23694
+    speed_mph = speed_mph.mask((speed_mph < 0) | (speed_mph >= 999 * 2.23694)).dropna()
+    if speed_mph.empty:
+        return [0.0, 1.0], ["0.0-1.0"]
+
+    max_speed = float(speed_mph.max())
+    if pd.isna(max_speed) or max_speed <= 0:
+        max_speed = 1.0
+
+    speed_bins = np.linspace(0, max_speed, num_bins + 1)
+    speed_bins[-1] = max(speed_bins[-1], max_speed + 1e-9)
+    step = max_speed / max(num_bins, 1)
+    decimals = 1 if step >= 0.1 else min(4, int(np.ceil(-np.log10(max(step, 1e-6)))) + 1)
+    speed_labels = [
+        f"{speed_bins[i]:.{decimals}f}-{speed_bins[i + 1]:.{decimals}f}"
+        for i in range(len(speed_bins) - 1)
+    ]
+    return speed_bins.tolist(), speed_labels
+
+
 def create_wind_rose(df):
     df = df.copy()
 
-    # Get proper columns for wind speed and direction:
-    #wind_spd_col = get_metric_column(df, ["wind_speed", "windspeed", "windspd", "ws", "wspd"])
-    #wind_dir_col = get_metric_column(df, ["wind_direction", "winddir", "wd", "wdir", "wind_dir"])
-    wind_spd_col = next((c for c in df.columns if "wind" in c.lower() and "sp" in c.lower()), None)
-    wind_dir_col = next((c for c in df.columns if "wind" in c.lower() and "dir" in c.lower()), None)
+    wind_spd_col = get_metric_column(df, ["wind_speed", "windspeed", "windspd", "ws", "wspd"])
+    wind_dir_col = get_metric_column(df, ["wind_direction", "winddir", "wd", "wdir", "wind_dir", "HourlyWindDirection"])
     if not wind_spd_col or not wind_dir_col:
         return None
 
     df[wind_spd_col] = pd.to_numeric(df[wind_spd_col], errors="coerce")
-    df[wind_dir_col] = pd.to_numeric(df[wind_dir_col], errors="coerce") % 360
+    df[wind_dir_col] = _normalize_wind_dir(df[wind_dir_col])
     df = df.dropna(subset=[wind_spd_col, wind_dir_col])
-    df = df[df[wind_spd_col] >= 0]
+    df = df[(df[wind_spd_col] >= 0) & (df[wind_spd_col] < 999)]
     if df.empty:
         return None
 
     # Convert wind speed from m/s to mph
     df.loc[:, "Speed_mph"] = df[wind_spd_col] * 2.23694
 
-    # Define direction bins
-    dir_bins = np.arange(0, 361, 22.5)
-    dir_labels = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
-
-    # Dynamically create speed bins based on data
-    max_speed = float(df["Speed_mph"].max())
-    if pd.isna(max_speed) or max_speed <= 0:
-        max_speed = 10 # fallback
-
-    num_bins = 6
-    speed_bins = np.linspace(0, max_speed, num_bins + 1)
-    speed_bins[-1] = max(speed_bins[-1], max_speed + 1e-9)
-    speed_labels = [f"{speed_bins[i]:.1f}-{speed_bins[i + 1]:.1f}" for i in range(len(speed_bins) - 1)]
+    # Dynamically create speed bins based on data, like the reference windrose.
+    speed_bins, speed_labels = _wind_rose_speed_bins_mph(df[wind_spd_col], num_bins=6)
 
     # Categorize data
-    df.loc[:, "dir_cat"] = pd.cut(
-        df[wind_dir_col], bins=dir_bins, labels=dir_labels, include_lowest=True, ordered=False,
-    )
+    df.loc[:, "dir_cat"] = _wind_rose_direction_categories(df[wind_dir_col])
     df.loc[:, "speed_cat"] = pd.cut(
-        df["Speed_mph"], bins=speed_bins, labels=speed_labels, include_lowest=True, ordered=False,
+        df["Speed_mph"], bins=speed_bins, labels=speed_labels, include_lowest=True, right=False, ordered=False,
     )
 
     # Count occurrences and calculate percentages
@@ -9388,8 +9409,10 @@ def create_wind_rose(df):
         df.groupby(["dir_cat", "speed_cat"], observed=True)
         .size()
         .unstack(fill_value=0)
-        .reindex(index=dir_labels, columns=speed_labels, fill_value=0)
+        .reindex(index=WIND_ROSE_DIR_LABELS, columns=speed_labels, fill_value=0)
     )
+    speed_labels = [label for label in speed_labels if float(wind_data[label].sum()) > 0]
+    wind_data = wind_data.reindex(columns=speed_labels, fill_value=0)
     total_count = wind_data.sum().sum()
     if total_count == 0: return None
     wind_percentages = wind_data / total_count * 100
@@ -9401,8 +9424,8 @@ def create_wind_rose(df):
     for i, speed_cat in enumerate(speed_labels):
         fig.add_trace(
             go.Barpolar(
-                r=wind_percentages[speed_cat].reindex(dir_labels, fill_value=0),
-                theta=dir_labels,
+                r=wind_percentages[speed_cat].reindex(WIND_ROSE_DIR_LABELS, fill_value=0),
+                theta=WIND_ROSE_DIR_LABELS,
                 name=f"{speed_cat} mph",
                 marker_color=colors[i],
                 marker_line_width=1,
