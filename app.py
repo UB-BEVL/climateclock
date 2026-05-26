@@ -407,20 +407,20 @@ st.markdown(
         
         /* Lock the sidebar open at a compact, narrow width. */
         section[data-testid="stSidebar"][aria-expanded="true"] > div {
-            width: 240px !important;
-            min-width: 240px !important;
-            max-width: 240px !important;
+            width: 248px !important;
+            min-width: 248px !important;
+            max-width: 248px !important;
         }
         section[data-testid="stSidebar"][aria-expanded="true"] {
-            width: 240px !important;
-            min-width: 240px !important;
-            max-width: 240px !important;
+            width: 248px !important;
+            min-width: 248px !important;
+            max-width: 248px !important;
         }
         section[data-testid="stSidebar"][aria-expanded="false"],
         section[data-testid="stSidebar"][aria-expanded="false"] > div {
-            width: 240px !important;
-            min-width: 240px !important;
-            max-width: 240px !important;
+            width: 248px !important;
+            min-width: 248px !important;
+            max-width: 248px !important;
             transform: translateX(0) !important;
             visibility: visible !important;
             margin-left: 0 !important;
@@ -2678,6 +2678,7 @@ st.markdown(SECONDARY_CSS, unsafe_allow_html=True)
 CLIMATE_INTELLIGENCE_CSS = r'''
 <style>
 :root {
+    --ci-sidebar-width: 248px;
     --ci-bg: #070d12;
     --ci-bg-elevated: #0b141b;
     --ci-panel: #101a22;
@@ -2709,9 +2710,17 @@ body,
     color: var(--ci-muted) !important;
 }
 
+[data-testid="stElementContainer"]:has(> [data-testid="stMarkdown"] style) {
+    display: none !important;
+}
+
+[data-testid="stElementContainer"]:has(#station-picker) {
+    display: none !important;
+}
+
 .block-container {
     max-width: 1520px;
-    padding: 1rem 2rem 2.5rem !important;
+    padding: 0.85rem 1.5rem 2.5rem !important;
 }
 
 h1, h2, h3, h4 {
@@ -2737,12 +2746,12 @@ section[data-testid="stSidebar"][aria-expanded="true"] > div,
 [data-testid="stSidebar"],
 [data-testid="stSidebar"] > div,
 section[data-testid="stSidebar"] > div:first-child {
-    width: 240px !important;
-    min-width: 240px !important;
-    max-width: 240px !important;
-    background: linear-gradient(180deg, #081017 0%, #0b141b 58%, #071017 100%) !important;
+    width: var(--ci-sidebar-width) !important;
+    min-width: var(--ci-sidebar-width) !important;
+    max-width: var(--ci-sidebar-width) !important;
+    background: #0b141b !important;
     border-right: 1px solid rgba(154, 174, 186, 0.12) !important;
-    box-shadow: 12px 0 34px rgba(0, 0, 0, 0.32) !important;
+    box-shadow: 8px 0 28px rgba(0, 0, 0, 0.24) !important;
 }
 
 section[data-testid="stSidebar"] {
@@ -2762,6 +2771,29 @@ section[data-testid="stSidebar"] > div:first-child,
     scrollbar-width: none;
 }
 
+[data-testid="stSidebarContent"],
+[data-testid="stSidebarUserContent"] {
+    padding: 1rem 0.9rem 1rem !important;
+}
+
+[data-testid="stSidebarHeader"] {
+    display: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+}
+
+@media (min-width: 769px) {
+    [data-testid="stMain"],
+    [data-testid="stAppViewContainer"] > .main,
+    [data-testid="stAppViewContainer"] > section.main,
+    div[data-testid="stAppViewContainer"] section.main {
+        margin-left: var(--ci-sidebar-width) !important;
+        width: calc(100% - var(--ci-sidebar-width)) !important;
+        max-width: calc(100% - var(--ci-sidebar-width)) !important;
+    }
+}
+
 [data-testid="collapsedControl"],
 [data-testid="stSidebarCollapsedControl"],
 [data-testid="stSidebarCollapseButton"],
@@ -2778,9 +2810,9 @@ section[data-testid="stSidebar"][aria-expanded="false"],
 section[data-testid="stSidebar"][aria-expanded="false"] > div,
 section[data-testid="stSidebar"][aria-expanded="false"] > div:first-child,
 section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {
-    width: 240px !important;
-    min-width: 240px !important;
-    max-width: 240px !important;
+    width: var(--ci-sidebar-width) !important;
+    min-width: var(--ci-sidebar-width) !important;
+    max-width: var(--ci-sidebar-width) !important;
     transform: translateX(0) !important;
     margin-left: 0 !important;
     left: 0 !important;
@@ -2798,7 +2830,7 @@ section[data-testid="stSidebar"][aria-expanded="false"] *::after {
 }
 
 [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-    gap: 0.25rem !important;
+    gap: 0.15rem !important;
 }
 
 /* Hide sidebar scrollbar */
@@ -2809,37 +2841,37 @@ section[data-testid="stSidebar"][aria-expanded="false"] *::after {
 .cc-sidebar-brand {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
-    margin: 0.1rem 0 0.45rem;
-    padding: 0.3rem 0.1rem;
+    gap: 0.55rem;
+    margin: 0 0 0.35rem;
+    padding: 0.2rem 0.1rem;
 }
 
 .cc-sidebar-mark {
-    width: 34px;
-    height: 34px;
+    width: 30px;
+    height: 30px;
     border-radius: 6px;
     display: grid;
     place-items: center;
-    background: rgba(72, 187, 177, 0.16);
-    border: 1px solid rgba(72, 187, 177, 0.36);
+    background: rgba(72, 187, 177, 0.14);
+    border: 1px solid rgba(72, 187, 177, 0.32);
     color: var(--ci-text);
     font-weight: 800;
-    font-size: 0.72rem;
+    font-size: 0.62rem;
     flex-shrink: 0;
 }
 
 .cc-sidebar-title {
     color: var(--ci-text);
-    font-size: 0.92rem;
-    font-weight: 750;
-    line-height: 1.1;
+    font-size: 0.85rem;
+    font-weight: 700;
+    line-height: 1.15;
 }
 
 .cc-sidebar-subtitle {
     color: var(--ci-muted);
-    font-size: 0.75rem;
-    margin-top: 0.12rem;
-    max-width: 160px;
+    font-size: 0.68rem;
+    margin-top: 0.08rem;
+    max-width: 155px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2847,115 +2879,109 @@ section[data-testid="stSidebar"][aria-expanded="false"] *::after {
 
 .cc-sidebar-status {
     display: grid;
-    grid-template-columns: 8px 1fr;
-    gap: 0.45rem;
-    align-items: start;
-    padding: 0.5rem;
-    margin-bottom: 0.5rem;
-    border-radius: 6px;
-    background: rgba(255, 255, 255, 0.035);
-    border: 1px solid rgba(154, 174, 186, 0.12);
+    grid-template-columns: 7px 1fr;
+    gap: 0.4rem;
+    align-items: center;
+    padding: 0 0.1rem 0.35rem;
+    margin-bottom: 0.4rem;
+    border-bottom: 1px solid rgba(154, 174, 186, 0.10);
 }
 
 .cc-sidebar-status strong {
     display: block;
     color: var(--ci-text);
-    font-size: 0.74rem;
-    line-height: 1.2;
+    font-size: 0.68rem;
+    line-height: 1.15;
 }
 
 .cc-sidebar-status span:not(.cc-status-dot) {
     display: block;
     color: var(--ci-subtle);
-    font-size: 0.66rem;
-    line-height: 1.3;
-    margin-top: 0.1rem;
+    font-size: 0.6rem;
+    line-height: 1.25;
+    margin-top: 0.05rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .cc-status-dot {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 999px;
-    margin-top: 0.22rem;
-    background: #758390;
+    background: #5a6875;
 }
 
 .cc-status-dot.is-ready {
     background: var(--ci-primary);
-    box-shadow: 0 0 0 3px rgba(72, 187, 177, 0.12);
+    box-shadow: 0 0 0 2px rgba(72, 187, 177, 0.12);
 }
 
-.cc-nav-group {
-    margin: 0.55rem 0 0.18rem;
-    color: var(--ci-subtle);
-    font-size: 0.65rem;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
-
+/* ── Sidebar nav buttons: flat Clima-CBE style ── */
 [data-testid="stSidebar"] .stButton > button {
-    min-height: 34px !important;
+    min-height: 33px !important;
+    height: auto !important;
     justify-content: flex-start !important;
     border-radius: 6px !important;
     font-size: 0.82rem !important;
-    font-weight: 600 !important;
+    font-weight: 500 !important;
     padding: 0.38rem 0.6rem !important;
-    margin-bottom: 0.08rem !important;
+    margin-bottom: 1px !important;
     box-shadow: none !important;
-    transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease !important;
+    transition: background 0.15s ease, color 0.15s ease !important;
 }
 
-section[data-testid="stSidebar"] .stButton button {
-    background: rgba(255, 255, 255, 0.035) !important;
-    color: #d9e6ee !important;
-    border: 1px solid rgba(154, 174, 186, 0.16) !important;
-}
-
-[data-testid="stSidebar"] .stButton > button[data-testid="baseButton-secondary"] {
-    color: #c7d3dc !important;
+/* Inactive (secondary) nav items: fully flat, no border, no bg */
+section[data-testid="stSidebar"] .stButton button,
+[data-testid="stSidebar"] .stButton > button[data-testid="baseButton-secondary"],
+section[data-testid="stSidebar"] .stButton button[data-testid*="secondary"] {
+    color: var(--ci-muted, #9aabba) !important;
     background: transparent !important;
-    border: 1px solid transparent !important;
+    border: none !important;
+    border-color: transparent !important;
+    box-shadow: none !important;
 }
 
-[data-testid="stSidebar"] .stButton > button[data-testid="baseButton-secondary"]:hover {
-    color: var(--ci-text) !important;
-    background: rgba(255, 255, 255, 0.055) !important;
-    border-color: rgba(154, 174, 186, 0.14) !important;
-    transform: translateX(2px);
+/* Inactive hover: very subtle tint, no shift */
+[data-testid="stSidebar"] .stButton > button[data-testid="baseButton-secondary"]:hover,
+section[data-testid="stSidebar"] .stButton button[data-testid*="secondary"]:hover {
+    color: var(--ci-text, #edf3f5) !important;
+    background: rgba(255, 255, 255, 0.045) !important;
+    border: none !important;
+    transform: none !important;
 }
 
-[data-testid="stSidebar"] .stButton > button[data-testid="baseButton-primary"] {
-    color: var(--ci-text) !important;
-    background: linear-gradient(90deg, rgba(72, 187, 177, 0.22), rgba(91, 164, 243, 0.10)) !important;
-    border: 1px solid rgba(72, 187, 177, 0.48) !important;
-    box-shadow: inset 4px 0 0 var(--ci-primary) !important;
-}
-
+/* Active (primary) nav item: subtle filled bg + thin left accent */
+[data-testid="stSidebar"] .stButton > button[data-testid="baseButton-primary"],
 section[data-testid="stSidebar"] .stButton button[kind="primary"],
 section[data-testid="stSidebar"] .stButton button[data-testid="baseButton-primary"],
-section[data-testid="stSidebar"] .stButton button[data-testid="stBaseButton-primary"] {
-    color: var(--ci-text) !important;
-    background: linear-gradient(90deg, rgba(72, 187, 177, 0.22), rgba(91, 164, 243, 0.10)) !important;
-    border: 1px solid rgba(72, 187, 177, 0.48) !important;
-    box-shadow: inset 4px 0 0 var(--ci-primary) !important;
-}
-
-section[data-testid="stSidebar"] .stButton button[data-testid*="secondary"] {
-    color: #d9e6ee !important;
-    background: rgba(255, 255, 255, 0.035) !important;
-    border: 1px solid rgba(154, 174, 186, 0.16) !important;
-    box-shadow: none !important;
-}
-
+section[data-testid="stSidebar"] .stButton button[data-testid="stBaseButton-primary"],
 section[data-testid="stSidebar"] .stButton button[data-testid*="primary"] {
-    color: var(--ci-text) !important;
-    background: linear-gradient(90deg, rgba(72, 187, 177, 0.22), rgba(91, 164, 243, 0.10)) !important;
-    border: 1px solid rgba(72, 187, 177, 0.48) !important;
-    box-shadow: inset 4px 0 0 var(--ci-primary) !important;
+    color: var(--ci-text, #edf3f5) !important;
+    background: rgba(72, 187, 177, 0.10) !important;
+    border: none !important;
+    border-left: 3px solid var(--ci-primary, #48bbb1) !important;
+    box-shadow: none !important;
+    font-weight: 600 !important;
+}
+
+section[data-testid="stSidebar"] .stButton button:disabled,
+section[data-testid="stSidebar"] .stButton button[disabled] {
+    color: rgba(154, 174, 186, 0.42) !important;
+    background: transparent !important;
+    border-color: transparent !important;
+    cursor: not-allowed !important;
+}
+
+.cc-sidebar-hint {
+    margin: 0.7rem 0 0.45rem;
+    padding: 0.6rem 0.65rem;
+    border-radius: 7px;
+    background: rgba(72, 187, 177, 0.075);
+    border: 1px solid rgba(72, 187, 177, 0.16);
+    color: #b8c8cf;
+    font-size: 0.72rem;
+    line-height: 1.42;
 }
 
 [data-testid="stSidebar"] [data-testid="stExpander"] {
@@ -2969,6 +2995,81 @@ section[data-testid="stSidebar"] .stButton button[data-testid*="primary"] {
     background: rgba(8, 16, 23, 0.96) !important;
     border-bottom: 1px solid rgba(154, 174, 186, 0.12) !important;
     box-shadow: 0 10px 30px rgba(0,0,0,0.24) !important;
+    margin: -0.85rem -1.5rem 0.75rem !important;
+    padding: 1rem 1.5rem !important;
+}
+
+.header-logo {
+    max-height: 58px !important;
+}
+
+.header-title {
+    font-size: 1.28rem !important;
+}
+
+.header-location {
+    font-size: 0.86rem !important;
+}
+
+.header-ub {
+    max-height: 50px !important;
+}
+
+.cc-station-intro {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1.5rem;
+    padding: 0.2rem 0 0.65rem;
+    border-bottom: 1px solid rgba(154, 174, 186, 0.12);
+    margin-bottom: 0.65rem;
+}
+
+.cc-station-intro h1 {
+    margin: 0 !important;
+    font-size: 1.55rem !important;
+}
+
+.cc-station-intro p:not(.cc-eyebrow) {
+    margin: 0.35rem 0 0;
+    max-width: 720px;
+    color: var(--ci-muted);
+    font-size: 0.92rem;
+    line-height: 1.45;
+}
+
+.cc-map-heading {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 0.35rem 0 0.35rem;
+}
+
+.cc-map-heading h3 {
+    margin: 0 !important;
+    font-size: 1.02rem !important;
+}
+
+.cc-map-heading p {
+    margin: 0.2rem 0 0;
+    color: var(--ci-muted);
+    font-size: 0.84rem;
+}
+
+div[data-testid="stFileUploader"] {
+    margin-bottom: 0.25rem;
+}
+
+.st-key-main_epw_upload_primary {
+    margin-bottom: 0 !important;
+}
+
+div[data-testid="stFileUploader"] section {
+    background: rgba(11, 20, 27, 0.88) !important;
+    border: 1px dashed rgba(72, 187, 177, 0.28) !important;
+    border-radius: 8px !important;
+    box-shadow: none !important;
 }
 
 .cc-hero-panel,
@@ -3236,10 +3337,6 @@ div[role="radiogroup"][aria-label="Dashboard view"] label:has(input:checked) {
         display: none !important;
     }
 
-    .cc-nav-group {
-        margin-top: 0.5rem;
-    }
-
     [data-testid="stSidebar"] .stButton > button {
         min-height: 36px !important;
         font-size: 0.9rem !important;
@@ -3254,6 +3351,11 @@ div[role="radiogroup"][aria-label="Dashboard view"] label:has(input:checked) {
     }
     .cc-summary-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .cc-station-intro,
+    .cc-map-heading {
+        align-items: flex-start;
+        flex-direction: column;
     }
 }
 </style>
@@ -3373,10 +3475,13 @@ def render_header():
 def render_landing_hero():
     st.markdown(
         """
-        <div class="hero-card">
-          <h2>Select weather file</h2>
-          <p>Upload or choose an EPW file to unlock climate diagnostics, comfort metrics, and solar analysis.</p>
-        </div>
+        <section class="cc-station-intro">
+          <div>
+            <p class="cc-eyebrow">Weather source</p>
+            <h1>Select weather file</h1>
+            <p>Choose a station or upload an EPW/ZIP file to begin the analysis workspace.</p>
+          </div>
+        </section>
         """,
         unsafe_allow_html=True,
     )
@@ -3386,7 +3491,7 @@ def render_landing_hero():
 
 
 def render_sidebar_filters(epw_loaded: bool) -> None:
-    with st.expander("⚙️ Settings & Filters", expanded=False):
+    with st.expander("Settings & Filters", expanded=False):
         st.caption("Refine the analysis sandbox. Settings persist for this session.")
         temp_unit = st.radio(
             "Temperature units",
@@ -3533,26 +3638,27 @@ def render_sidebar():
         if current_page == "Dashboard" and st.session_state.get("pdf_dashboard_autobuild_pending"):
             st.info("Building the full report. You will return to Export automatically.")
 
-        for group_label, group_items in PRIMARY_NAV_GROUPS:
-            st.markdown(f"<div class='cc-nav-group'>{group_label}</div>", unsafe_allow_html=True)
-            for label, page in group_items:
-                disabled = (not epw_loaded and page != DEFAULT_PAGE)
-                is_active = current_page == page
-                button_type = "primary" if is_active else "secondary"
-                key_slug = re.sub(r"[^a-zA-Z0-9_]+", "_", f"nav_{page}").strip("_").lower()
-                if st.button(
-                    label,
-                    key=key_slug,
-                    type=button_type,
-                    use_container_width=True,
-                    disabled=disabled,
-                ):
-                    st.session_state["nav_page"] = page
-                    st.session_state["active_page"] = "select_station" if page == DEFAULT_PAGE else "dashboard"
-                    _rerun()
+        for label, page in NAV_ITEMS:
+            disabled = (not epw_loaded and page != DEFAULT_PAGE)
+            is_active = current_page == page
+            button_type = "primary" if is_active else "secondary"
+            key_slug = re.sub(r"[^a-zA-Z0-9_]+", "_", f"nav_{page}").strip("_").lower()
+            if st.button(
+                label,
+                key=key_slug,
+                type=button_type,
+                use_container_width=True,
+                disabled=disabled,
+            ):
+                st.session_state["nav_page"] = page
+                st.session_state["active_page"] = "select_station" if page == DEFAULT_PAGE else "dashboard"
+                _rerun()
 
         if not epw_loaded:
-            st.info("Load a station from the map or upload an EPW/ZIP to unlock the analysis workspace.")
+            st.markdown(
+                "<div class='cc-sidebar-hint'>Load a station or upload an EPW/ZIP to unlock the workspace.</div>",
+                unsafe_allow_html=True,
+            )
 
         st.session_state["active_page"] = "select_station" if current_page == DEFAULT_PAGE else "dashboard"
 
@@ -3569,7 +3675,7 @@ def render_sidebar():
             """
             <div class="sidebar-brand">
                 <strong>BEVL Lab</strong><br/>
-                v1.1 - weather intelligence for research and practice
+                Weather intelligence for research and practice
             </div>
             """,
             unsafe_allow_html=True,
@@ -3698,12 +3804,19 @@ def _interactive_map_fragment() -> None:
         st.info("Station map is not available right now.")
         return
 
-    # ========== INTERACTIVE MAP (full-width card) ==========
-    with st.container(border=True):
-        st.markdown("### 🗺️ Interactive Map")
-        st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="cc-map-heading">
+          <div>
+            <h3>Interactive Map</h3>
+            <p>Select a station from the global EPW index.</p>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    map_height = 700
+    map_height = 580
     map_slot = st.empty()
     st.session_state["_map_slot"] = map_slot
     fig_map = _build_station_map_figure(stations, map_height)
@@ -3786,7 +3899,7 @@ def _station_search_fragment() -> None:
     if not isinstance(stations, pd.DataFrame) or stations.empty:
         return
 
-    st.subheader("🔍 Station Search", anchor=False)
+    st.subheader("Station Search", anchor=False)
     st.caption(f"{len(stations):,} verified download links. Search, then load once.")
     st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
 
@@ -3827,7 +3940,7 @@ def _station_search_fragment() -> None:
         if search and not matches.empty and choice_label:
             chosen_row = matches[matches["display_label"] == choice_label].iloc[0]
 
-        if st.button("📍 Load Selected Station", type="primary", use_container_width=True):
+        if st.button("Load Selected Station", type="primary", use_container_width=True):
             if chosen_row is not None:
                 station_info = {
                     "name": chosen_row.get("name", "Unknown"),
@@ -4060,9 +4173,6 @@ if controller_page != "select_station" or st.session_state.pop("_clear_map_on_ne
 main_upload = None
 def render_select_station_page():
     render_landing_hero()
-    st.markdown("<div id='station-picker'></div>", unsafe_allow_html=True)
-    # render_station_picker handles the map and list
-    render_station_picker()
     main_upload = st.file_uploader(
         "Upload EPW or ZIP file",
         type=["epw", "zip"],
@@ -4076,6 +4186,10 @@ def render_select_station_page():
             raw_epw_bytes = handle_epw_upload(main_upload, picker_key="main")
             if raw_epw_bytes is not None:
                 _rerun()
+
+    st.markdown("<div id='station-picker'></div>", unsafe_allow_html=True)
+    # render_station_picker handles the map and list
+    render_station_picker()
 
     if st.session_state.get("station_load_error"):
         debug = st.session_state.get("station_load_debug") or {}
@@ -16274,6 +16388,7 @@ def main():
     # 1. Setup session state & CSS
     st.markdown(PREMIUM_CSS, unsafe_allow_html=True)
     st.markdown(SECONDARY_CSS, unsafe_allow_html=True)
+    st.markdown(CLIMATE_INTELLIGENCE_CSS, unsafe_allow_html=True)
     _install_plotly_capture_hook()
 
     # 2. Render Header (Globally Fixed Sticky UI Bar)
