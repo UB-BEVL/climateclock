@@ -49,7 +49,7 @@ def compute_utci_approx(
 
     Ta = df[temp_col].to_numpy()
     RH = df[rh_col].astype(float).clip(0, 100).to_numpy()
-    ws = df[wind_col].astype(float).fillna(1.5).clip(lower=0.1).to_numpy()
+    ws = df[wind_col].astype(float).fillna(1.5).clip(0.5, 17.0).to_numpy()
 
 
     # Compute a simplified outdoor MRT using the Thorsson (2007) approach.

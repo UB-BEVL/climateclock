@@ -220,6 +220,23 @@ def _prepare_advanced_figure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
                 errors="coerce",
             )
 
+    if isinstance(out.index, pd.DatetimeIndex):
+        try:
+            # Force all timestamps to a single reference leap year (2020) to align multi-year or TMY datasets into a single 12-month sequence
+            new_index = pd.to_datetime(dict(
+                year=2020,
+                month=out.index.month,
+                day=out.index.day,
+                hour=out.index.hour,
+                minute=out.index.minute
+            ))
+            out.index = new_index
+            out = out.sort_index()
+            # De-duplicate by taking the average for any overlapping hourly timestamps
+            out = out.groupby(level=0).mean()
+        except Exception:
+            pass
+
     return out
 
 
@@ -1658,6 +1675,29 @@ def read_epw_with_schema(epw_bytes_or_path: Union[bytes, str, Path]):
 def build_clima_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     # Adds derived fields and convenience columns; returns cdf.
     wx = df.copy()
+    
+    if isinstance(wx.index, pd.DatetimeIndex):
+        try:
+            # Force all timestamps to a single reference year (2021) to prevent day-of-year gaps
+            # caused by leap/non-leap month transitions in typical meteorological year (TMY) datasets.
+            new_years = np.full(len(wx.index), 2021)
+            new_months = wx.index.month
+            new_days = wx.index.day
+            # Map Feb 29 to Feb 28 for non-leap year compatibility
+            feb29_mask = (new_months == 2) & (new_days == 29)
+            new_days = np.where(feb29_mask, 28, new_days)
+            
+            wx.index = pd.to_datetime(dict(
+                year=new_years,
+                month=new_months,
+                day=new_days,
+                hour=wx.index.hour,
+                minute=wx.index.minute
+            ))
+            wx = wx.sort_index()
+        except Exception:
+            pass
+
     for c in ["drybulb","dewpoint","relhum","atmos_pressure","windspd","winddir",
               "glohorrad","dirnorrad","difhorrad","exthorrad","extdirrad"]:
         if c in wx: wx[c] = wx[c].interpolate(limit=3, limit_direction="both")
@@ -4596,7 +4636,7 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
             ),
             "Precipitation": (
                 [0, 0.1, 2.5, 10.0, 999],
-                ["#111827", "#93c5fd", "#2563eb", "#1e3a8a"],
+                ["#ffffff", "#93c5fd", "#2563eb", "#1e3a8a"],
                 ["Dry", "Light", "Moderate", "Heavy"]
             ),
             "Wind Speed": (
@@ -4616,9 +4656,11 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
         zmin, zmax = None, None
         colorbar_dict = None
         show_scale = False
+        active_tick_labels = []
 
         if strip_name in discrete_scales:
             bounds, colors, ticks = discrete_scales[strip_name]
+            active_tick_labels = ticks
             
             # Special handling for Categorical Bins (Wind Speed, Solar, Wind Direction, Dry Bulb)
             if strip_name in ["Wind Speed", "Solar Radiation", "Wind Direction", "Dry Bulb Temperature", "Humidity", "Precipitation"]:
@@ -4734,8 +4776,8 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
         # Updated Hover Template: Remove Year
         hovertemplate = (
             "<b>%{x|%b %d} %{y}:00</b><br>" +
-            "Value: %{z:.2f}<br>" +
-            "Band: %{customdata}<extra></extra>"
+            f"{strip_name}: " +
+            "%{customdata}<extra></extra>"
             if customdata is not None
             else "<b>%{x|%b %d} %{y}:00</b><br>Value: %{z:.2f}<extra></extra>"
         )
@@ -4776,6 +4818,19 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
         total_valid_hours = float(np.sum(~np.isnan(pivot_plot_slice.values)))
         description = ""
         if total_valid_hours > 0:
+            def _category_distribution_text(labels: List[str], sort_desc: bool = False) -> str:
+                values = pd.to_numeric(pd.Series(np.ravel(pivot_plot_slice.values)), errors="coerce").dropna()
+                total = float(len(values))
+                if total <= 0 or not labels:
+                    return ""
+                rows = []
+                for idx, label in enumerate(labels):
+                    pct = float((values == idx).sum()) / total * 100.0
+                    rows.append((idx, label, pct))
+                if sort_desc:
+                    rows.sort(key=lambda item: (-item[2], item[0]))
+                return ", ".join(f"{label}: {pct:.1f}%" for _, label, pct in rows)
+
             if strip_name == "Dry Bulb Temperature":
                 # Assuming Comfort Zone is 20°C to 26.6°C (bin index 2)
                 # The data is binned 0-4. Bin 2 is Comf. Zone.
@@ -4798,6 +4853,11 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
                 pct = (comf_rh_hours / total_valid_hours) * 100
                 comf_rh_hours_int = int(comf_rh_hours)
                 description = f"({comf_rh_hours_int} hours / {pct:.1f}% in Comfort Zone 30–70%)"
+
+            elif strip_name == "Precipitation":
+                description = f"({_category_distribution_text(active_tick_labels)})"
+            elif strip_name == "Wind Direction":
+                description = f"({_category_distribution_text(active_tick_labels, sort_desc=True)})"
 
         # Add Title Annotation BELOW the heatmap
         fig.add_annotation(
@@ -4867,7 +4927,14 @@ def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: 
     
     return fig
 
-SOLAR_COLORSCALE = "YlOrRd"  # Unified colorscale for all solar irradiance heatmaps
+SOLAR_COLORSCALE = [
+    [0.00, "#ffffff"],
+    [0.02, "#fff7bc"],
+    [0.25, "#fec44f"],
+    [0.55, "#fe9929"],
+    [0.80, "#ec7014"],
+    [1.00, "#cc4c02"],
+]  # Unified zero-white colorscale for solar irradiance heatmaps
 
 # ========== PDF REPORT EXPORT ==========
 PDF_INK = (15, 23, 42)         # Near-black navy - primary text
@@ -6426,6 +6493,11 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
             piv = local.pivot_table(index="__hour", columns="__month", values=value_col, aggfunc="mean")
             if piv.empty:
                 return
+            heatmap_kwargs = {}
+            if colorscale == SOLAR_COLORSCALE:
+                max_val = pd.to_numeric(local[value_col], errors="coerce").max()
+                zmax = float(max_val) if pd.notna(max_val) and float(max_val) > 0 else 1.0
+                heatmap_kwargs = {"zmin": 0, "zmax": zmax}
             fig = go.Figure(
                 data=go.Heatmap(
                     z=piv.values,
@@ -6433,6 +6505,7 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                     y=[int(h) for h in piv.index],
                     colorscale=colorscale,
                     colorbar=dict(title=value_col),
+                    **heatmap_kwargs,
                 )
             )
             fig.update_layout(title=title, xaxis_title="Month", yaxis_title="Hour of Day")
@@ -7246,29 +7319,17 @@ def _wind_speed_frequency_dashboard_fig(cdf: Optional[pd.DataFrame]) -> go.Figur
 
 def render_precipitation_thermal_load_page() -> None:
     cdf = st.session_state.get("cdf")
-    precip_tab, load_tab = st.tabs([
-        "💧 Precipitation & Snow",
-        "🌡️ Degree Days & Loads",
-    ])
+    fig_precip = _monthly_precipitation_dashboard_fig(cdf)
+    _st_plotly_chart(fig_precip, use_container_width=True, key="precip_context_monthly_precip")
+    _add_manual_pdf_figure("Monthly Precipitation", fig_precip)
+    fig_snow = _snowfall_profile_dashboard_fig(cdf)
+    _st_plotly_chart(fig_snow, use_container_width=True, key="precip_context_snowfall")
+    _add_manual_pdf_figure("Snowfall Profile", fig_snow)
 
-    with precip_tab:
-        fig_precip = _monthly_precipitation_dashboard_fig(cdf)
-        _st_plotly_chart(fig_precip, use_container_width=True, key="precip_context_monthly_precip")
-        _add_manual_pdf_figure("Monthly Precipitation", fig_precip)
-        fig_snow = _snowfall_profile_dashboard_fig(cdf)
-        _st_plotly_chart(fig_snow, use_container_width=True, key="precip_context_snowfall")
-        _add_manual_pdf_figure("Snowfall Profile", fig_snow)
-        st.caption("Annual Diurnal Resource Heatmap cross-reference; precipitation row appears only when measurable precipitation is present.")
-        _render_captured_context_figure(
-            "Annual Diurnal Resource Heatmap",
-            ["annual_diurnal_resource_heatmap"],
-            "Cross-reference from Overview & Stats tab - shown here for precipitation timing context.",
-        )
-
-    with load_tab:
-        fig_dd = _degree_day_dashboard_fig(cdf)
-        _st_plotly_chart(fig_dd, use_container_width=True, key="precip_context_degree_days")
-        _add_manual_pdf_figure("Heating and Cooling Degree Days", fig_dd)
+    # Precipitation Heatmap
+    precip_col = _precip_depth_column(cdf)
+    if precip_col:
+        _render_heatmap(cdf, precip_col, "Precipitation Annual Heatmap (Hour x Day)", "mm", "Blues")
 
 def _koppen_classification(cdf: Optional[pd.DataFrame], header: Optional[dict] = None) -> Dict[str, str]:
     header = header or {}
@@ -8283,16 +8344,22 @@ def build_fig_e_hourly_timeseries_temperature(df, station_name):
         return placeholder_figure("Dry-bulb and dew-point data are required for temperature time-series analysis."), ""
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df['drybulb_C'], name="Dry-Bulb", line=dict(color='blue', width=0.8), opacity=0.85))
-    fig.add_trace(go.Scatter(x=df.index, y=df['dewpoint_C'], name="Dew-Point", line=dict(color='green', width=0.8), opacity=0.7))
-    fig.add_hline(y=18, line=dict(color='gray', dash='dot'), annotation_text="18°C base")
+    fig.add_trace(go.Scatter(x=df.index, y=df['drybulb_C'], name="Dry-Bulb Temperature", line=dict(color='blue', width=0.8), opacity=0.85))
+    fig.add_trace(go.Scatter(x=df.index, y=df['dewpoint_C'], name="Dew-Point Temperature", line=dict(color='green', width=0.8), opacity=0.7))
+    if not df.empty:
+        fig.add_trace(go.Scatter(x=[df.index[0], df.index[-1]], y=[18.0, 18.0], name="Heating Base (18°C)", line=dict(color='gray', dash='dot', width=1.5), mode='lines'))
     
     fig.update_layout(
         title="Full Hourly Time Series — Dry-Bulb and Dew-Point Temperature",
         yaxis_title="Temperature (°C)",
         height=400,
-        margin=dict(l=40, r=40, t=40, b=40),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        margin=dict(l=40, r=40, t=40, b=60),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5)
+    )
+    fig.update_xaxes(
+        tickformat="%b",
+        dtick="M1",
     )
     
     months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -8319,16 +8386,23 @@ def build_fig_f_hourly_timeseries_rh(df, station_name):
         return placeholder_figure("Relative humidity data is required for RH time-series analysis."), ""
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df['rh_pct'], fill='tozeroy', fillcolor='rgba(0,0,255,0.4)', mode='none', name='RH %'))
-    fig.add_hline(y=30, line=dict(color='orange', dash='dot'))
-    fig.add_hline(y=70, line=dict(color='steelblue', dash='dot'))
+    fig.add_trace(go.Scatter(x=df.index, y=df['rh_pct'], fill='tozeroy', fillcolor='rgba(0,0,255,0.12)', mode='lines', name='Relative Humidity', line=dict(color='blue', width=0.8)))
+    if not df.empty:
+        fig.add_trace(go.Scatter(x=[df.index[0], df.index[-1]], y=[30.0, 30.0], name="Dry Limit (30%)", line=dict(color='orange', dash='dot', width=1.5), mode='lines'))
+        fig.add_trace(go.Scatter(x=[df.index[0], df.index[-1]], y=[70.0, 70.0], name="Humid Limit (70%)", line=dict(color='steelblue', dash='dot', width=1.5), mode='lines'))
     
     fig.update_layout(
         title="Full Hourly Time Series — Relative Humidity",
         yaxis_title="Relative Humidity (%)",
         yaxis=dict(range=[0, 100]),
         height=400,
-        margin=dict(l=40, r=40, t=40, b=40)
+        margin=dict(l=40, r=40, t=40, b=60),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5)
+    )
+    fig.update_xaxes(
+        tickformat="%b",
+        dtick="M1",
     )
     
     months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -8432,8 +8506,8 @@ def render_raw_data_workspace_page():
         )
         st.dataframe(cov_df, use_container_width=True)
         st.divider()
-        st.markdown("### Precipitation & Thermal Load")
-        st.caption("Drainage, snow, degree-day, wind, and solar context collected for load sizing.")
+        st.markdown("### 💧 Precipitation & Snow")
+        st.caption("Understand rainfall and snowfall volume and seasonal distribution.")
         render_precipitation_thermal_load_page()
         st.divider()
     render_raw_data_page()
@@ -8935,6 +9009,11 @@ def render_dashboard_page():
                     raw_col="precipdepthclean",
                 )
                 if not pivot_binned.empty:
+                    precip_labels = ["Dry", "Light", "Moderate", "Heavy"]
+                    info["labels"] = precip_labels
+                    info["hover_labels"] = pivot_binned.map(
+                        lambda v: precip_labels[int(v)] if pd.notna(v) and 0 <= int(v) < len(precip_labels) else np.nan
+                    ).values
                     heatmap_dict["Precipitation"] = (pivot_binned, info)
 
             wind_col = get_metric_column(cdf, ["windspd", "wind_speed", "wspd"])
@@ -9203,222 +9282,238 @@ def render_dashboard_page():
         if comfort_annual is None or comfort_annual.empty:
             st.info("Comfort insights unlock automatically when dry-bulb, humidity, and wind speed data are available.")
         else:
-            latest = comfort_annual.iloc[-1]
-            comfort_pct = latest.get("fraction_in_comfort_band", np.nan)
-            comfort_hours = latest.get("hours_in_comfort_band", np.nan)
-            total_hours = latest.get("hours_total", np.nan)
-            di_discomfort = latest.get("hours_di_discomfort", np.nan)
-            utci_heat = latest.get("hours_utci_heat_stress", np.nan)
-            utci_cold = latest.get("hours_utci_cold_stress", np.nan)
-            hot_cols = sorted([c for c in latest.index if c.startswith("overheating_hours_")])
-            cold_cols = sorted([c for c in latest.index if c.startswith("cold_hours_below_")])
-            focus_col = f"overheating_hours_{focus_threshold}C"
-            if focus_col in hot_cols:
-                hot_cols.remove(focus_col)
-                hot_cols.insert(0, focus_col)
+            comfort_tab, loads_tab = st.tabs([
+                "😌 Comfort Compliance & Stress",
+                "🌡️ Degree Days & Loads",
+            ])
+            
+            with comfort_tab:
+                latest = comfort_annual.iloc[-1]
+                comfort_pct = latest.get("fraction_in_comfort_band", np.nan)
+                comfort_hours = latest.get("hours_in_comfort_band", np.nan)
+                total_hours = latest.get("hours_total", np.nan)
+                di_discomfort = latest.get("hours_di_discomfort", np.nan)
+                utci_heat = latest.get("hours_utci_heat_stress", np.nan)
+                utci_cold = latest.get("hours_utci_cold_stress", np.nan)
+                hot_cols = sorted([c for c in latest.index if c.startswith("overheating_hours_")])
+                cold_cols = sorted([c for c in latest.index if c.startswith("cold_hours_below_")])
+                focus_col = f"overheating_hours_{focus_threshold}C"
+                if focus_col in hot_cols:
+                    hot_cols.remove(focus_col)
+                    hot_cols.insert(0, focus_col)
 
-            comfort_value = "—" if pd.isna(comfort_pct) else f"{comfort_pct * 100:.1f} %"
-            comfort_delta = None
-            if not pd.isna(comfort_hours) and not pd.isna(total_hours):
-                comfort_delta = f"{comfort_hours:.0f}/{total_hours:.0f} h"
+                comfort_value = "—" if pd.isna(comfort_pct) else f"{comfort_pct * 100:.1f} %"
+                comfort_delta = None
+                if not pd.isna(comfort_hours) and not pd.isna(total_hours):
+                    comfort_delta = f"{comfort_hours:.0f}/{total_hours:.0f} h"
 
-            mc1, mc2, mc3 = st.columns(3)
-            mc1.metric("Comfort compliance", comfort_value, delta=comfort_delta)
+                mc1, mc2, mc3 = st.columns(3)
+                mc1.metric("Comfort compliance", comfort_value, delta=comfort_delta)
 
-            di_available = di_series is not None and not getattr(di_series, "empty", True)
-            utci_available = utci_series is not None and not getattr(utci_series, "empty", True)
+                di_available = di_series is not None and not getattr(di_series, "empty", True)
+                utci_available = utci_series is not None and not getattr(utci_series, "empty", True)
 
-            di_value = _fmt_hours(di_discomfort)
-            utci_value = _fmt_hours(utci_heat)
-            delta_cold = None if pd.isna(utci_cold) else f"Cold: {utci_cold:.0f} h"
+                di_value = _fmt_hours(di_discomfort)
+                utci_value = _fmt_hours(utci_heat)
+                delta_cold = None if pd.isna(utci_cold) else f"Cold: {utci_cold:.0f} h"
 
-            mc2.metric("DI discomfort", di_value)
-            mc3.metric("UTCI heat stress", utci_value, delta=delta_cold)
+                mc2.metric("DI discomfort", di_value)
+                mc3.metric("UTCI heat stress", utci_value, delta=delta_cold)
 
-            if not di_available:
-                mc2.caption("Needs dry-bulb and relative humidity to compute DI.")
-            if not utci_available:
-                mc3.caption("Needs dry-bulb, relative humidity, and wind speed for UTCI.")
+                if not di_available:
+                    mc2.caption("Needs dry-bulb and relative humidity to compute DI.")
+                if not utci_available:
+                    mc3.caption("Needs dry-bulb, relative humidity, and wind speed for UTCI.")
 
-            hot_display = []
-            for col in hot_cols[:2]:
-                thresh = col.replace("overheating_hours_", "").replace("C", "")
-                try:
-                    thresh_c = float(thresh)
-                except ValueError:
-                    thresh_c = float(focus_threshold)
-                hot_display.append((f"{format_threshold_label(thresh_c)} hours", latest.get(col, np.nan)))
-            if hot_display:
-                oc_cols = st.columns(len(hot_display))
-                for col_obj, (label, value) in zip(oc_cols, hot_display):
-                    col_obj.metric(label, _fmt_hours(value))
-            if cold_cols:
-                cc_cols = st.columns(min(len(cold_cols), 2))
-                for col_obj, col_name in zip(cc_cols, cold_cols[:2]):
-                    thresh = col_name.replace("cold_hours_below_", "").replace("C", "")
-                    try:
-                        thresh_c = float(thresh)
-                    except ValueError:
-                        thresh_c = 0.0
-                    col_obj.metric(f"{format_threshold_label(thresh_c, direction='<')} hours", _fmt_hours(latest.get(col_name, np.nan)))
-
-            if occupancy_mode != "24/7":
-                st.caption(f"Comfort metrics filtered to {occupancy_mode.lower()} hours.")
-            if comfort_mode != "Fixed 18–26 °C":
-                st.caption("Adaptive comfort band follows ASHRAE 55's running-mean method—great for naturally ventilated spaces.")
-            st.caption(
-                f"Focus threshold: tracking hours above {format_threshold_label(focus_threshold, direction='>')} per the Customize Analysis panel."
-            )
-
-            if loads_annual is not None and not loads_annual.empty:
-                loads_latest = loads_annual.iloc[-1]
-                l1, l2 = st.columns(2)
-                l1.metric(
-                    "Heating degree days",
-                    _fmt_value(loads_latest.get("heating_degree_days", np.nan)),
-                    delta=_fmt_value(loads_latest.get("heating_degree_hours", np.nan), " h")
-                )
-                l2.metric(
-                    "Cooling degree days",
-                    _fmt_value(loads_latest.get("cooling_degree_days", np.nan)),
-                    delta=_fmt_value(loads_latest.get("cooling_degree_hours", np.nan), " h")
-                )
-
-            if comfort_monthly is not None and not comfort_monthly.empty:
-                # Collapse multi-year monthly rows into one row per calendar month to avoid zig-zag lines
-                monthly = comfort_monthly.copy()
-                month_numbers = monthly.index.month
-
-                agg_spec = {}
-                for col in monthly.columns:
-                    if col.startswith("fraction_in_comfort_band"):
-                        agg_spec[col] = "mean"
-                    else:
-                        agg_spec[col] = "sum"
-
-                monthly_grouped = monthly.copy()
-                monthly_grouped["month_num"] = month_numbers
-                monthly_grouped = monthly_grouped.groupby("month_num").agg(agg_spec)
-                monthly_grouped = monthly_grouped.reindex(range(1, 13))
-
-                # Fill gaps for hour counts; keep comfort fraction as-is so missing months stay blank
-                for col in monthly_grouped.columns:
-                    if not col.startswith("fraction_in_comfort_band"):
-                        monthly_grouped[col] = monthly_grouped[col].fillna(0)
-
-                monthly_grouped.index = [pd.Timestamp(2001, int(m), 1).strftime("%b") for m in monthly_grouped.index]
-
-                fig_comfort = make_subplots(specs=[[{"secondary_y": True}]])
-                for idx, col_name in enumerate(hot_cols[:2]):
-                    thresh = col_name.replace("overheating_hours_", "").replace("C", "")
+                hot_display = []
+                for col in hot_cols[:2]:
+                    thresh = col.replace("overheating_hours_", "").replace("C", "")
                     try:
                         thresh_c = float(thresh)
                     except ValueError:
                         thresh_c = float(focus_threshold)
-                    fig_comfort.add_bar(
-                        name=format_threshold_label(thresh_c),
-                        x=monthly_grouped.index,
-                        y=monthly_grouped.get(col_name, pd.Series(index=monthly_grouped.index)).fillna(0),
-                        marker_color="#fb923c" if idx == 0 else "#f97316",
-                        opacity=0.6 if idx == 1 else 0.8,
-                        secondary_y=False,
-                    )
+                    hot_display.append((f"{format_threshold_label(thresh_c)} hours", latest.get(col, np.nan)))
+                if hot_display:
+                    oc_cols = st.columns(len(hot_display))
+                    for col_obj, (label, value) in zip(oc_cols, hot_display):
+                        col_obj.metric(label, _fmt_hours(value))
+                if cold_cols:
+                    cc_cols = st.columns(min(len(cold_cols), 2))
+                    for col_obj, col_name in zip(cc_cols, cold_cols[:2]):
+                        thresh = col_name.replace("cold_hours_below_", "").replace("C", "")
+                        try:
+                            thresh_c = float(thresh)
+                        except ValueError:
+                            thresh_c = 0.0
+                        col_obj.metric(f"{format_threshold_label(thresh_c, direction='<')} hours", _fmt_hours(latest.get(col_name, np.nan)))
 
-                if "hours_utci_heat_stress" in monthly_grouped:
-                    fig_comfort.add_bar(
-                        name="UTCI heat stress",
-                        x=monthly_grouped.index,
-                        y=monthly_grouped["hours_utci_heat_stress"].fillna(0),
-                        marker_color="#ef4444",
-                        opacity=0.5,
-                        secondary_y=False,
-                    )
-
-                if "fraction_in_comfort_band" in monthly_grouped:
-                    fig_comfort.add_scatter(
-                        name="Comfort %",
-                        x=monthly_grouped.index,
-                        y=(monthly_grouped["fraction_in_comfort_band"] * 100),
-                        mode="lines+markers",
-                        line=dict(color="#34d399", width=2.5),
-                        marker=dict(size=6),
-                        secondary_y=True,
-                    )
-
-                fig_comfort.update_layout(
-                    bargap=0.2,
-                    hovermode="x unified",
-                    margin=dict(l=0, r=0, t=30, b=0),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.12, xanchor="left", x=0),
+                if occupancy_mode != "24/7":
+                    st.caption(f"Comfort metrics filtered to {occupancy_mode.lower()} hours.")
+                if comfort_mode != "Fixed 18–26 °C":
+                    st.caption("Adaptive comfort band follows ASHRAE 55's running-mean method—great for naturally ventilated spaces.")
+                st.caption(
+                    f"Focus threshold: tracking hours above {format_threshold_label(focus_threshold, direction='>')} per the Customize Analysis panel."
                 )
-                fig_comfort.update_yaxes(title_text="Hours", secondary_y=False)
-                fig_comfort.update_yaxes(title_text="Comfort %", range=[0, 100], secondary_y=True)
-                _st_plotly_chart(fig_comfort, use_container_width=True)
-                _add_manual_pdf_figure("Comfort Loads", fig_comfort)
-            # Point-in-time probe: inspect weather and comfort metrics together at a chosen hour
-            with st.expander("Point-in-time probe", expanded=False):
-                if len(cdf.index):
-                    available_dates = sorted(pd.to_datetime(cdf.index.date).unique())
-                    default_date = available_dates[0]
-                    chosen_date = st.date_input(
-                        "Date",
-                        value=default_date,
-                        min_value=available_dates[0],
-                        max_value=available_dates[-1],
-                    )
-                    chosen_hour = st.slider("Hour (0–23)", 0, 23, 14)
-                    ts = pd.Timestamp(year=chosen_date.year, month=chosen_date.month, day=chosen_date.day, hour=int(chosen_hour))
-                    idx_tz = getattr(cdf.index, "tz", None)
-                    if idx_tz is not None:
-                        ts = ts.tz_localize(idx_tz, nonexistent="shift_forward", ambiguous="NaT")
-                    nearest_idx = cdf.index.get_indexer([ts], method="nearest")
-                    if nearest_idx[0] != -1:
-                        snap = cdf.iloc[nearest_idx[0]]
-                        snap_di = di_series.iloc[nearest_idx[0]] if di_series is not None and not getattr(di_series, "empty", True) else np.nan
-                        snap_utci = utci_series.iloc[nearest_idx[0]] if utci_series is not None and not getattr(utci_series, "empty", True) else np.nan
-                        snap_rows = [
-                            ("Dry-bulb (°C)", format_temperature(snap.get("drybulb"))),
-                            ("Rel humidity (%)", "—" if pd.isna(snap.get("relhum")) else f"{snap.get('relhum'):.0f} %"),
-                            ("Wind speed (m/s)", "—" if pd.isna(snap.get("windspd")) else f"{snap.get('windspd'):.1f}"),
-                            ("DI", "—" if pd.isna(snap_di) else f"{snap_di:.1f}"),
-                            ("UTCI (°C)", "—" if pd.isna(snap_utci) else f"{snap_utci:.1f}"),
-                            ("Heat index (°C)", "—" if heat_index_series is None or pd.isna(heat_index_series.iloc[nearest_idx[0]]) else f"{heat_index_series.iloc[nearest_idx[0]]:.1f}"),
-                            ("Humidex (°C)", "—" if humidex_series is None or pd.isna(humidex_series.iloc[nearest_idx[0]]) else f"{humidex_series.iloc[nearest_idx[0]]:.1f}"),
-                        ]
-                        snap_df = pd.DataFrame(snap_rows, columns=["Metric", "Value"]).set_index("Metric")
-                        st.table(snap_df)
-                    else:
-                        st.info("No data available for that selection.")
 
-            if percentiles_on and not comfort_annual.empty:
-                pct_cols = [c for c in latest.index if c.startswith("temp_p") or c.startswith("di_p") or c.startswith("utci_p")]
-                pct_series = latest[pct_cols].dropna()
-                hi_pct = None
-                hum_pct = None
-                if heat_index_series is not None and not heat_index_series.empty:
-                    hi_src = heat_index_series
-                    if occupancy_mask is not None:
-                        occ = occupancy_mask.reindex(hi_src.index).fillna(False)
-                        hi_src = hi_src.loc[occ]
-                    hi_pct = hi_src.quantile(0.95)
-                if humidex_series is not None and not humidex_series.empty:
-                    hum_src = humidex_series
-                    if occupancy_mask is not None:
-                        occ = occupancy_mask.reindex(hum_src.index).fillna(False)
-                        hum_src = hum_src.loc[occ]
-                    hum_pct = hum_src.quantile(0.95)
-                with st.expander("Percentile & feels-like diagnostics", expanded=False):
-                    if not pct_series.empty:
-                        st.write(pct_series.rename(lambda c: c.replace("_", " ")))
-                    hi_text = (
-                        f"Heat index 95th percentile: {format_temperature(hi_pct)}"
-                        if hi_pct is not None else "Heat index data unavailable."
+                if comfort_monthly is not None and not comfort_monthly.empty:
+                    # Collapse multi-year monthly rows into one row per calendar month to avoid zig-zag lines
+                    monthly = comfort_monthly.copy()
+                    month_numbers = monthly.index.month
+
+                    agg_spec = {}
+                    for col in monthly.columns:
+                        if col.startswith("fraction_in_comfort_band"):
+                            agg_spec[col] = "mean"
+                        else:
+                            agg_spec[col] = "sum"
+
+                    monthly_grouped = monthly.copy()
+                    monthly_grouped["month_num"] = month_numbers
+                    monthly_grouped = monthly_grouped.groupby("month_num").agg(agg_spec)
+                    monthly_grouped = monthly_grouped.reindex(range(1, 13))
+
+                    # Fill gaps for hour counts; keep comfort fraction as-is so missing months stay blank
+                    for col in monthly_grouped.columns:
+                        if not col.startswith("fraction_in_comfort_band"):
+                            monthly_grouped[col] = monthly_grouped[col].fillna(0)
+
+                    monthly_grouped.index = [pd.Timestamp(2001, int(m), 1).strftime("%b") for m in monthly_grouped.index]
+
+                    fig_comfort = make_subplots(specs=[[{"secondary_y": True}]])
+                    for idx, col_name in enumerate(hot_cols[:2]):
+                        thresh = col_name.replace("overheating_hours_", "").replace("C", "")
+                        try:
+                            thresh_c = float(thresh)
+                        except ValueError:
+                            thresh_c = float(focus_threshold)
+                        fig_comfort.add_bar(
+                            name=format_threshold_label(thresh_c),
+                            x=monthly_grouped.index,
+                            y=monthly_grouped.get(col_name, pd.Series(index=monthly_grouped.index)).fillna(0),
+                            marker_color="#fb923c" if idx == 0 else "#f97316",
+                            opacity=0.6 if idx == 1 else 0.8,
+                            secondary_y=False,
+                        )
+
+                    if "hours_utci_heat_stress" in monthly_grouped:
+                        fig_comfort.add_bar(
+                            name="UTCI heat stress",
+                            x=monthly_grouped.index,
+                            y=monthly_grouped["hours_utci_heat_stress"].fillna(0),
+                            marker_color="#ef4444",
+                            opacity=0.5,
+                            secondary_y=False,
+                        )
+
+                    if "fraction_in_comfort_band" in monthly_grouped:
+                        fig_comfort.add_scatter(
+                            name="Comfort %",
+                            x=monthly_grouped.index,
+                            y=(monthly_grouped["fraction_in_comfort_band"] * 100),
+                            mode="lines+markers",
+                            line=dict(color="#34d399", width=2.5),
+                            marker=dict(size=6),
+                            secondary_y=True,
+                        )
+
+                    fig_comfort.update_layout(
+                        bargap=0.2,
+                        hovermode="x unified",
+                        margin=dict(l=0, r=0, t=30, b=0),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.12, xanchor="left", x=0),
                     )
-                    hum_text = (
-                        f"Humidex 95th percentile: {format_temperature(hum_pct)}"
-                        if hum_pct is not None else "Humidex data unavailable."
+                    fig_comfort.update_yaxes(title_text="Hours", secondary_y=False)
+                    fig_comfort.update_yaxes(title_text="Comfort %", range=[0, 100], secondary_y=True)
+                    _st_plotly_chart(fig_comfort, use_container_width=True)
+                    _add_manual_pdf_figure("Comfort Loads", fig_comfort)
+
+                # Point-in-time probe: inspect weather and comfort metrics together at a chosen hour
+                with st.expander("Point-in-time probe", expanded=False):
+                    if len(cdf.index):
+                        available_dates = sorted(pd.to_datetime(cdf.index.date).unique())
+                        default_date = available_dates[0]
+                        chosen_date = st.date_input(
+                            "Date",
+                            value=default_date,
+                            min_value=available_dates[0],
+                            max_value=available_dates[-1],
+                            key="comfort_loads_pit_date"
+                        )
+                        chosen_hour = st.slider("Hour (0–23)", 0, 23, 14, key="comfort_loads_pit_hour")
+                        ts = pd.Timestamp(year=chosen_date.year, month=chosen_date.month, day=chosen_date.day, hour=int(chosen_hour))
+                        idx_tz = getattr(cdf.index, "tz", None)
+                        if idx_tz is not None:
+                            ts = ts.tz_localize(idx_tz, nonexistent="shift_forward", ambiguous="NaT")
+                        nearest_idx = cdf.index.get_indexer([ts], method="nearest")
+                        if nearest_idx[0] != -1:
+                            snap = cdf.iloc[nearest_idx[0]]
+                            snap_di = di_series.iloc[nearest_idx[0]] if di_series is not None and not getattr(di_series, "empty", True) else np.nan
+                            snap_utci = utci_series.iloc[nearest_idx[0]] if utci_series is not None and not getattr(utci_series, "empty", True) else np.nan
+                            snap_rows = [
+                                ("Dry-bulb (°C)", format_temperature(snap.get("drybulb"))),
+                                ("Rel humidity (%)", "—" if pd.isna(snap.get("relhum")) else f"{snap.get('relhum'):.0f} %"),
+                                ("Wind speed (m/s)", "—" if pd.isna(snap.get("windspd")) else f"{snap.get('windspd'):.1f}"),
+                                ("DI", "—" if pd.isna(snap_di) else f"{snap_di:.1f}"),
+                                ("UTCI (°C)", "—" if pd.isna(snap_utci) else f"{snap_utci:.1f}"),
+                                ("Heat index (°C)", "—" if heat_index_series is None or pd.isna(heat_index_series.iloc[nearest_idx[0]]) else f"{heat_index_series.iloc[nearest_idx[0]]:.1f}"),
+                                ("Humidex (°C)", "—" if humidex_series is None or pd.isna(humidex_series.iloc[nearest_idx[0]]) else f"{humidex_series.iloc[nearest_idx[0]]:.1f}"),
+                            ]
+                            snap_df = pd.DataFrame(snap_rows, columns=["Metric", "Value"]).set_index("Metric")
+                            st.table(snap_df)
+                        else:
+                            st.info("No data available for that selection.")
+
+                if percentiles_on and not comfort_annual.empty:
+                    pct_cols = [c for c in latest.index if c.startswith("temp_p") or c.startswith("di_p") or c.startswith("utci_p")]
+                    pct_series = latest[pct_cols].dropna()
+                    hi_pct = None
+                    hum_pct = None
+                    if heat_index_series is not None and not heat_index_series.empty:
+                        hi_src = heat_index_series
+                        if occupancy_mask is not None:
+                            occ = occupancy_mask.reindex(hi_src.index).fillna(False)
+                            hi_src = hi_src.loc[occ]
+                        hi_pct = hi_src.quantile(0.95)
+                    if humidex_series is not None and not humidex_series.empty:
+                        hum_src = humidex_series
+                        if occupancy_mask is not None:
+                            occ = occupancy_mask.reindex(hum_src.index).fillna(False)
+                            hum_src = hum_src.loc[occ]
+                        hum_pct = hum_src.quantile(0.95)
+                    with st.expander("Percentile & feels-like diagnostics", expanded=False):
+                        if not pct_series.empty:
+                            st.write(pct_series.rename(lambda c: c.replace("_", " ")))
+                        hi_text = (
+                            f"Heat index 95th percentile: {format_temperature(hi_pct)}"
+                            if hi_pct is not None else "Heat index data unavailable."
+                        )
+                        hum_text = (
+                            f"Humidex 95th percentile: {format_temperature(hum_pct)}"
+                            if hum_pct is not None else "Humidex data unavailable."
+                        )
+                        st.caption(f"{hi_text}\n\n{hum_text}")
+
+            with loads_tab:
+                if loads_annual is not None and not loads_annual.empty:
+                    loads_latest = loads_annual.iloc[-1]
+                    l1, l2 = st.columns(2)
+                    l1.metric(
+                        "Heating degree days",
+                        _fmt_value(loads_latest.get("heating_degree_days", np.nan)),
+                        delta=_fmt_value(loads_latest.get("heating_degree_hours", np.nan), " h")
                     )
-                    st.caption(f"{hi_text}\n\n{hum_text}")
+                    l2.metric(
+                        "Cooling degree days",
+                        _fmt_value(loads_latest.get("cooling_degree_days", np.nan)),
+                        delta=_fmt_value(loads_latest.get("cooling_degree_hours", np.nan), " h")
+                    )
+                else:
+                    st.info("Degree days metrics are not available.")
+                
+                # Render Degree Days Chart in Comfort & Loads tab
+                fig_dd = _degree_day_dashboard_fig(cdf)
+                _st_plotly_chart(fig_dd, use_container_width=True, key="comfort_loads_degree_days")
+                _add_manual_pdf_figure("Heating and Cooling Degree Days (Comfort)", fig_dd)
 
         st.markdown("### Advanced Comfort & Loads Diagnostics")
         df_cwec = _prepare_advanced_figure_df(cdf)
@@ -9470,8 +9565,8 @@ def render_dashboard_page():
         render_wind_page()
 
     if _render_dashboard_section("Precipitation"):
-        st.markdown("### Precipitation & Thermal Load")
-        st.caption("Drainage, snow, degree-day, wind, and solar context collected for load sizing.")
+        st.markdown("### 💧 Precipitation & Snow")
+        st.caption("Understand rainfall and snowfall volume and seasonal distribution.")
         render_precipitation_thermal_load_page()
         st.divider()
 
@@ -9947,6 +10042,7 @@ def render_trends_page():
         tickformat=tickformat_main,   # <-- add
         dtick=dtick_main,             # <-- add
         title_text="Month",
+        title_standoff=30,
         row=2, col=1
     )
 
@@ -9982,10 +10078,21 @@ def render_trends_page():
 
     # Reduce excess padding so the two panels read as a single, compact stack
     fig.update_layout(
-        margin=dict(l=70, r=30, t=45, b=40),
+        height=780,
+        margin=dict(l=80, r=40, t=125, b=95),
         plot_bgcolor="rgba(12, 17, 26, 1)",
         paper_bgcolor="rgba(12, 17, 26, 1)",
-        legend=dict(font=dict(color="#e5e7eb", size=12)),
+        legend=dict(
+            orientation="h",
+            x=0,
+            xanchor="left",
+            y=1.12,
+            yanchor="bottom",
+            font=dict(color="#e5e7eb", size=10),
+            bgcolor="rgba(12, 17, 26, 0.94)",
+            bordercolor="rgba(148, 163, 184, 0.28)",
+            borderwidth=1,
+        ),
         hoverlabel=dict(bgcolor="#0f172a", font=dict(color="#e5e7eb"))
     )
 
@@ -9995,16 +10102,16 @@ def render_trends_page():
     # ---------- FORCE LEGEND ORDER (must be RIGHT BEFORE plotly_chart) ----------
     # -------------------- FORCE LEGEND ORDER (bulletproof) --------------------
     desired_order = [
-        ("Average Dry bulb temperature", dict(mode="lines", line=dict(width=2.8, color="#ff5c52"))),
-        ("Dry bulb temperature range",   dict(mode="markers", marker=dict(size=10, color="#E74C3C"))),
-        ("Below comfort (T)",            dict(mode="lines", line=dict(width=2, color="rgba(52, 152, 219, 0.78)"))),
-        ("Within comfort (T)",           dict(mode="lines", line=dict(width=2, color="rgba(46, 204, 113, 0.82)"))),
-        ("Above comfort (T)",            dict(mode="lines", line=dict(width=2, color="rgba(231, 76, 60, 0.85)"))),
-        ("ASHRAE adaptive comfort (80%)",dict(mode="lines", line=dict(width=2, color="rgba(46, 204, 113, 0.9)"))),
-        ("Average Relative humidity",    dict(mode="lines", line=dict(width=2.8, color="#7cc7ff"))),
-        ("Below comfort (RH)",           dict(mode="lines", line=dict(width=2, color="rgba(174, 214, 241, 0.74)"))),
-        ("Within comfort (RH)",          dict(mode="lines", line=dict(width=2, color="rgba(93, 173, 226, 0.82)"))),
-        ("Above comfort (RH)",           dict(mode="lines", line=dict(width=2, color="rgba(27, 79, 114, 0.82)"))),
+        ("Avg dry-bulb",          dict(mode="lines", line=dict(width=2.8, color="#ff5c52"))),
+        ("Dry-bulb range",        dict(mode="markers", marker=dict(size=10, color="#E74C3C"))),
+        ("T below comfort",       dict(mode="lines", line=dict(width=2, color="rgba(52, 152, 219, 0.78)"))),
+        ("T within comfort",      dict(mode="lines", line=dict(width=2, color="rgba(46, 204, 113, 0.82)"))),
+        ("T above comfort",       dict(mode="lines", line=dict(width=2, color="rgba(231, 76, 60, 0.85)"))),
+        ("ASHRAE 80% band",       dict(mode="lines", line=dict(width=2, color="rgba(46, 204, 113, 0.9)"))),
+        ("Avg RH",                dict(mode="lines", line=dict(width=2.8, color="#7cc7ff"))),
+        ("RH below comfort",      dict(mode="lines", line=dict(width=2, color="rgba(174, 214, 241, 0.74)"))),
+        ("RH within comfort",     dict(mode="lines", line=dict(width=2, color="rgba(93, 173, 226, 0.82)"))),
+        ("RH above comfort",      dict(mode="lines", line=dict(width=2, color="rgba(27, 79, 114, 0.82)"))),
     ]
 
     # 1) Hide legend for ALL real traces (keeps visuals unchanged)
@@ -10159,7 +10266,7 @@ _UTCI_BANDS = [
     (-27, -13, "Strong Cold Stress (-27 - -13°C)", "#3559a6"),
     (-13, 0, "Moderate Cold Stress (-13 - 0°C)", "#4bb3d4"),
     (0, 9, "Slight Cold Stress (0 - 9°C)", "#8fe0ee"),
-    (9, 26, "No Stress (9 - 26°C)", "#ffffff"),
+    (9, 26, "No Stress (9 - 26°C)", "#a7f3d0"),
     (26, 32, "Moderate Heat Stress (26 - 32°C)", "#ffc080"),
     (32, 38, "Strong Heat Stress (32 - 38°C)", "#fc6554"),
     (38, 46, "Very Strong Heat Stress (38 - 46°C)", "#d12229"),
@@ -10170,14 +10277,14 @@ _PMV_BANDS = [
     (-100, -3.0, "Cold (< -3)", "#3559a6"),
     (-3.0, -2.0, "Cool (-3 to -2)", "#4bb3d4"),
     (-2.0, -1.0, "Slightly Cool (-2 to -1)", "#8fe0ee"),
-    (-1.0, 1.0, "Neutral (-1 to +1)", "#ffffff"),
+    (-1.0, 1.0, "Neutral (-1 to +1)", "#a7f3d0"),
     (1.0, 2.0, "Slightly Warm (+1 to +2)", "#ffc080"),
     (2.0, 3.0, "Warm (+2 to +3)", "#fc6554"),
     (3.0, 100, "Hot (> +3)", "#d12229"),
 ]
 
 _DI_BANDS = [
-    (-100, 21.0, "Comfortable (<= 21)", "#ffffff"),
+    (-100, 21.0, "Comfortable (<= 21)", "#a7f3d0"),
     (21.0, 24.0, "Slight Discomfort (21 - 24)", "#ffffb2"),
     (24.0, 27.0, "Discomfort (24 - 27)", "#fd8d3c"),
     (27.0, 29.0, "Strong Discomfort (27 - 29)", "#f03b20"),
@@ -10235,7 +10342,6 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
         colorscale=dscale,
         zmin=0, zmax=n_colors-1,
         showscale=False,
-        xgap=1, ygap=1,
         hoverinfo="text",
         text=hovertext.T
     ))
@@ -10247,8 +10353,8 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
         ))
     month_days = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
     month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    fig.update_xaxes(tickvals=month_days, ticktext=month_names, ticklen=5, range=[0.5, 366.5])
-    fig.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"], autorange="reversed", ticklen=5, range=[-0.5, 23.5])
+    fig.update_xaxes(tickvals=month_days, ticktext=month_names, ticklen=5, range=[0.5, 366.5], showgrid=False)
+    fig.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"], autorange="reversed", ticklen=5, range=[-0.5, 23.5], showgrid=False)
     fig.update_layout(height=450, margin=dict(t=30, b=40, l=50, r=20), legend=dict(y=1, yanchor="top", x=1.02, xanchor="left", traceorder="reversed"))
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
     _st_plotly_chart(fig, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{clean_loc}_{col}_{key_suffix}", "format": "png"}, "displayModeBar": True})
@@ -10266,22 +10372,48 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
             st.warning(f"Download {title_suffix} (HTML) failed: {e}")
 
 def _render_heatmap(cdf, col, title_suffix, y_label, color_scale):
+    import plotly.graph_objects as go
     st.markdown("---")
     location_label = get_clean_city_name()
     st.markdown(f"<h4>{location_label} – {title_suffix}</h4>", unsafe_allow_html=True)
-    st.caption("Rows track calendar days and columns track hours.")
+    st.caption("Rows track hours and columns track calendar days.")
     tmp = pd.DataFrame({"doy": cdf.index.dayofyear, "hour": cdf.index.hour, "val": cdf[col]}).dropna()
     if tmp.empty:
         st.info(f"No data for {title_suffix}.")
         return
-    mat = tmp.pivot_table(index="doy", columns="hour", values="val", aggfunc="mean").sort_index()
-    import plotly.express as px
-    fig_hm = px.imshow(
-        mat.values, origin="lower", aspect="auto",
-        labels=dict(x="Hour", y="Day", color=y_label),
-        height=350, color_continuous_scale=color_scale
+    mat = (
+        tmp.pivot_table(index="hour", columns="doy", values="val", aggfunc="mean")
+        .reindex(index=range(24))
+        .sort_index(axis=1)
     )
-    fig_hm.update_xaxes(side="bottom")
+    ref_year = 2020 if 366 in mat.columns else 2021
+    x_dates = [pd.Timestamp(ref_year, 1, 1) + pd.Timedelta(days=int(doy) - 1) for doy in mat.columns]
+    month_starts = pd.date_range(pd.Timestamp(ref_year, 1, 1), pd.Timestamp(ref_year, 12, 1), freq="MS")
+    fig_hm = go.Figure(
+        go.Heatmap(
+            z=mat.values,
+            x=x_dates,
+            y=mat.index,
+            colorscale=color_scale,
+            colorbar=dict(title=y_label),
+            hovertemplate="Date: %{x|%b %d}<br>Hour: %{y}:00<br>Value: %{z:.1f} " + y_label + "<extra></extra>",
+        )
+    )
+    fig_hm.update_xaxes(
+        title="Calendar day",
+        tickmode="array",
+        tickvals=month_starts,
+        ticktext=[d.strftime("%b") for d in month_starts],
+        showgrid=False,
+    )
+    fig_hm.update_yaxes(
+        title="Hour of day",
+        tickmode="array",
+        tickvals=[0, 6, 12, 18, 23],
+        ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"],
+        autorange="reversed",
+    )
+    fig_hm.update_layout(height=420, margin=dict(l=55, r=60, t=25, b=55))
     _st_plotly_chart(fig_hm, use_container_width=True)
     _add_manual_pdf_figure(f"{col} Annual Heatmap", fig_hm)
     d1, d2 = st.columns(2)
@@ -10306,7 +10438,7 @@ def render_temperature_page():
 def render_heatmap_page():
     cdf = st.session_state.get("cdf")
     if cdf is None: return
-    _render_heatmap(cdf, "drybulb", "Annual Heatmap (Day × Hour)", "°C", "RdYlBu_r")
+    _render_heatmap(cdf, "drybulb", "Annual Heatmap (Hour x Day)", "°C", "RdYlBu_r")
 
 def render_humidity_page():
     cdf = st.session_state.get("cdf")
@@ -10316,7 +10448,7 @@ def render_humidity_page():
         return
     _render_bar_chart(cdf, "relhum", "Humidity (Bar Chart)", "Relative Humidity (%)", "dodgerblue", "hum_bar")
     _render_daily_scatter(cdf, "relhum", "Humidity Daily scatter", "Relative Humidity (%)", "dodgerblue", "hum_scat")
-    _render_heatmap(cdf, "relhum", "Humidity Annual Heatmap (Day × Hour)", "%", "Blues")
+    _render_heatmap(cdf, "relhum", "Humidity Annual Heatmap (Hour x Day)", "%", "Blues")
 
 def render_utci_page():
     cdf = st.session_state.get("cdf")
@@ -12676,8 +12808,7 @@ def render_solar_page():
                                     labels=dict(x="Day of Year", y="Hour", color=_irr_cname),
                                     title=f"Annual heatmap — {_irr_label}",
                                     height=360, color_continuous_scale=SOLAR_COLORSCALE)
-                    if _irr_shared_max > 0:
-                        _fig_irr.update_traces(zmin=0, zmax=_irr_shared_max)
+                    _fig_irr.update_traces(zmin=0, zmax=_irr_shared_max if _irr_shared_max > 0 else 1.0)
                     _fig_irr.update_xaxes(tickvals=_month_days, ticktext=_month_names, side="bottom")
                     _fig_irr.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"])
                     _st_plotly_chart(_fig_irr, use_container_width=True)
@@ -13117,9 +13248,8 @@ def render_psychrometrics_page():
             # Convert hex to rgba fill
             r, g, b = int(zcolor[1:3], 16), int(zcolor[3:5], 16), int(zcolor[5:7], 16)
             fig_psy.add_trace(go.Scatter(
-                x=xs, y=ys, mode="lines",
-                line=dict(color=zcolor, width=2),
-                fill="toself", fillcolor=f"rgba({r},{g},{b},0.08)",
+                x=xs, y=ys, mode="none",
+                fill="toself", fillcolor=f"rgba({r},{g},{b},0.12)",
                 name=zname.replace("\n", " "), showlegend=False, hoverinfo="name",
             ))
             # Label at centroid
@@ -13133,14 +13263,13 @@ def render_psychrometrics_page():
 
     elif overlay_choice == "ASHRAE 55 Comfort Zone":
         for label, poly, color in [
-            ("Summer Comfort", [(23.5,1),(23.5,12),(26.5,12),(26.5,1)], "rgba(255,80,80,0.15)"),
-            ("Winter Comfort", [(20,1),(20,12),(24,12),(24,1)], "rgba(80,80,255,0.15)"),
+            ("Summer Comfort", [(23.5,1),(23.5,12),(26.5,12),(26.5,1)], "rgba(255,80,80,0.2)"),
+            ("Winter Comfort", [(20,1),(20,12),(24,12),(24,1)], "rgba(80,80,255,0.2)"),
         ]:
             xs = [v[0] for v in poly] + [poly[0][0]]
             ys = [v[1] for v in poly] + [poly[0][1]]
             fig_psy.add_trace(go.Scatter(
-                x=xs, y=ys, mode="lines", fill="toself", fillcolor=color,
-                line=dict(color="rgba(100,100,100,0.6)", width=1.2),
+                x=xs, y=ys, mode="none", fill="toself", fillcolor=color,
                 name=label, showlegend=True, hoverinfo="name",
             ))
 
@@ -13343,7 +13472,7 @@ def _clean_wind_frame(df: pd.DataFrame, wind_col: str, wdir_col: str) -> pd.Data
 
 def _wind_direction_categories(direction: pd.Series) -> pd.Categorical:
     direction = pd.to_numeric(direction, errors="coerce") % 360
-    sector_idx = np.floor(((direction + 11.25) % 360) / 22.5).astype(int).clip(0, 15)
+    sector_idx = np.floor(((direction + 11.25) % 360) / 22.5).fillna(-1).astype(int).clip(-1, 15)
     return pd.Categorical.from_codes(
         sector_idx.to_numpy(dtype=int),
         categories=WIND_DIRECTION_LABELS,
@@ -13380,8 +13509,8 @@ WIND_ROSE_DIR_LABELS = [
 
 
 def _wind_rose_direction_categories(direction: pd.Series) -> pd.Categorical:
-    direction = _normalize_wind_dir(direction).dropna()
-    sector_idx = np.floor(((direction + 11.25) % 360) / 22.5).astype(int).clip(0, 15)
+    direction = _normalize_wind_dir(direction)
+    sector_idx = np.floor(((direction + 11.25) % 360) / 22.5).fillna(-1).astype(int).clip(-1, 15)
     return pd.Categorical.from_codes(
         sector_idx.to_numpy(dtype=int),
         categories=WIND_ROSE_DIR_LABELS,
@@ -13413,81 +13542,134 @@ def _wind_rose_speed_bins_mph(speed_mps: pd.Series, num_bins: int = 6) -> tuple[
 def create_wind_rose(df):
     df = df.copy()
 
-    wind_spd_col = get_metric_column(df, ["wind_speed", "windspeed", "windspd", "ws", "wspd"])
-    wind_dir_col = get_metric_column(df, ["wind_direction", "winddir", "wd", "wdir", "wind_dir", "HourlyWindDirection"])
+    # Determine wind speed and direction columns dynamically
+    wind_spd_col = None
+    if "2dSpeed_m_s" in df.columns:
+        wind_spd_col = "2dSpeed_m_s"
+    else:
+        wind_spd_col = get_metric_column(df, ["wind_speed", "windspeed", "windspd", "ws", "wspd"])
+
+    wind_dir_col = None
+    if "Azimuth_deg" in df.columns:
+        wind_dir_col = "Azimuth_deg"
+    else:
+        wind_dir_col = get_metric_column(df, ["wind_direction", "winddir", "wd", "wdir", "wind_dir", "HourlyWindDirection"])
+
     if not wind_spd_col or not wind_dir_col:
         return None
 
     df[wind_spd_col] = pd.to_numeric(df[wind_spd_col], errors="coerce")
     df[wind_dir_col] = _normalize_wind_dir(df[wind_dir_col])
+
     df = df.dropna(subset=[wind_spd_col, wind_dir_col])
-    df = df[(df[wind_spd_col] >= 0) & (df[wind_spd_col] < 999)]
+    # Convert wind speed from m/s to mph
+    df.loc[:, "2dSpeed_mph"] = df[wind_spd_col] * 2.23694
+
+    df = df[(df["2dSpeed_mph"] >= 0) & (df["2dSpeed_mph"] < 999)]
     if df.empty:
         return None
 
-    # Convert wind speed from m/s to mph
-    df.loc[:, "Speed_mph"] = df[wind_spd_col] * 2.23694
+    # Define direction bins
+    dir_bins = np.arange(0, 361, 22.5)
+    dir_labels = [
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+    ]
 
-    # Dynamically create speed bins based on data, like the reference windrose.
-    speed_bins, speed_labels = _wind_rose_speed_bins_mph(df[wind_spd_col], num_bins=6)
+    # Dynamically create speed bins based on data
+    max_speed = df["2dSpeed_mph"].max()
+    num_bins = 6
+    speed_bins = np.linspace(0, max_speed, num_bins + 1)
+    speed_labels = [
+        f"{speed_bins[i]:.1f}-{speed_bins[i + 1]:.1f}"
+        for i in range(len(speed_bins) - 1)
+    ]
 
     # Categorize data
-    df.loc[:, "dir_cat"] = _wind_rose_direction_categories(df[wind_dir_col])
+    df.loc[:, "dir_cat"] = pd.cut(
+        df[wind_dir_col],
+        bins=dir_bins,
+        labels=dir_labels,
+        include_lowest=True,
+        ordered=False,
+    )
     df.loc[:, "speed_cat"] = pd.cut(
-        df["Speed_mph"], bins=speed_bins, labels=speed_labels, include_lowest=True, right=False, ordered=False,
+        df["2dSpeed_mph"],
+        bins=speed_bins,
+        labels=speed_labels,
+        include_lowest=True,
+        ordered=False,
     )
 
     # Count occurrences and calculate percentages
     wind_data = (
-        df.dropna(subset=["dir_cat", "speed_cat"])
-        .groupby(["dir_cat", "speed_cat"], observed=False)
-        .size()
-        .unstack(fill_value=0)
-        .reindex(index=WIND_ROSE_DIR_LABELS, columns=speed_labels, fill_value=0)
+        df.groupby(["dir_cat", "speed_cat"], observed=True).size().unstack(fill_value=0)
     )
-    speed_labels = [label for label in speed_labels if float(wind_data[label].sum()) > 0]
-    wind_data = wind_data.reindex(columns=speed_labels, fill_value=0)
+    # Convert index and columns to string lists to prevent any CategoricalIndex reindexing issues
+    wind_data.index = [str(i) for i in wind_data.index]
+    wind_data.columns = [str(c) for c in wind_data.columns]
+    
+    wind_data = wind_data.reindex(index=dir_labels, columns=speed_labels, fill_value=0)
+    
     total_count = wind_data.sum().sum()
-    if total_count == 0: return None
+    if total_count == 0:
+        return None
     wind_percentages = wind_data / total_count * 100
 
     # Create wind rose
     fig = go.Figure()
+
+    # RdYlBu (Blue through yellow to red, very distinct)
+    import plotly.express as px
     colors = px.colors.diverging.RdYlBu[::-1][: len(speed_labels)]
 
     for i, speed_cat in enumerate(speed_labels):
         fig.add_trace(
             go.Barpolar(
-                r=wind_percentages[speed_cat].reindex(WIND_ROSE_DIR_LABELS, fill_value=0),
-                theta=WIND_ROSE_DIR_LABELS,
+                r=wind_percentages[speed_cat],
+                theta=dir_labels,
                 name=f"{speed_cat} mph",
                 marker_color=colors[i],
                 marker_line_width=1,
                 opacity=0.8,
-                hovertemplate="Direction: %{theta}<br>Speed: " + speed_cat + " mph<br>Percentage: %{r:.1f}%<extra></extra>",
+                hovertemplate="Direction: %{theta}<br>"
+                + "Speed: "
+                + speed_cat
+                + " mph<br>"
+                + "Percentage: %{r:.1f}%<extra></extra>",
             )
         )
 
-    max_pct = wind_percentages.max().max()
-    if pd.isna(max_pct): max_pct = 10
-    
-    tick_step = max(5, int(max_pct / 5)) if max_pct >= 5 else 1
-
     fig.update_layout(
-        title={"text": "Wind Rose Diagram", "x": 0.5, "xanchor": "center", "yanchor": "top"},
-        font_size=12, legend_font_size=10,
+        title={
+            "text": "Wind Rose Diagram",
+            "x": 0.5,
+            "xanchor": "center",
+            "yanchor": "top",
+        },
+        font_size=12,
+        legend_font_size=10,
         polar=dict(
             radialaxis=dict(
-                visible=True, range=[0, max_pct * 1.05], ticksuffix="%", tickmode="array",
-                tickvals=np.arange(0, max_pct + tick_step, tick_step),
-                ticktext=[f"{i}%" for i in range(0, int(max_pct + tick_step), tick_step)],
+                visible=True,
+                range=[0, wind_percentages.max().max()],
+                ticksuffix="%",
+                tickmode="array",
+                tickvals=np.arange(0, wind_percentages.max().max(), 5),
+                ticktext=[
+                    f"{i}%" for i in range(0, int(wind_percentages.max().max()), 5)
+                ],
             ),
             angularaxis=dict(direction="clockwise", rotation=90),
-            bgcolor="rgba(0,0,0,0)",
+            bgcolor="rgba(0,0,0,0)",  # Set polar area background to transparent
         ),
-        height=620, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
-        margin=dict(t=80, b=80, l=40, r=40)
+        width=620,
+        height=620,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(
+            orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5
+        ),
     )
 
     return fig
@@ -13506,20 +13688,41 @@ def build_fig_l(df, station_name):
     if mat.empty:
         return placeholder_figure("Not enough wind data to build heatmap."), ""
 
+        # Ensure pivot aligns with our 365-day date range
+    if mat.shape[1] > 365:
+        mat_plot = mat.iloc[:, :365]
+    else:
+        mat_plot = mat.reindex(columns=range(1, 366))
+    
+    dates_2021 = pd.date_range(start="2021-01-01", periods=365, freq="D")
+    month_starts = pd.date_range(start="2021-01-01", end="2021-12-01", freq="MS")
+
     fig = go.Figure(data=go.Heatmap(
-        z=mat.values,
-        x=mat.columns,
-        y=mat.index,
+        z=mat_plot.values,
+        x=dates_2021,
+        y=mat_plot.index,
         colorscale="Blues",
         colorbar=dict(title="m/s"),
+        hovertemplate="Date: %{x|%b %d}<br>Hour: %{y}:00<br>Wind Speed: %{z:.2f} m/s<extra></extra>",
     ))
     fig.update_layout(
         title="Wind Speed by Hour and Day",
-        xaxis_title="Day of Year",
+        xaxis=dict(
+            title="Calendar day",
+            tickmode="array",
+            tickvals=month_starts,
+            ticktext=[d.strftime("%b") for d in month_starts],
+            showgrid=False,
+        ),
         yaxis_title="Hour of Day",
-        yaxis=dict(autorange="reversed"),
+        yaxis=dict(
+            tickmode="array",
+            tickvals=[0, 6, 12, 18, 23],
+            ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"],
+            autorange="reversed"
+        ),
         height=400,
-        margin=dict(l=40, r=40, t=40, b=40),
+        margin=dict(l=55, r=40, t=40, b=55),
     )
 
     if not isinstance(df.index, pd.DatetimeIndex):
@@ -13844,6 +14047,11 @@ def render_wind_page():
     if fig is not None:
         _st_plotly_chart(fig, use_container_width=True,
                         config={"displayModeBar": True})
+        st.caption(
+            "Wind-rose sectors show prevailing direction and speed-class frequency. "
+            "The legend keys show the speed categories (in m/s). Read the longest sectors first, "
+            "then compare color distribution to understand whether wind is frequent, strong, or diffuse."
+        )
         _add_manual_pdf_figure("Annual Wind Rose", fig)
         clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
         with st.expander("Export wind rose", expanded=False):
@@ -15876,6 +16084,12 @@ def render_future_climate_page():
         target_year = st.selectbox("Reporting year", fepw.TARGET_YEARS, format_func=lambda y: f"{y}")
         use_sensor_baseline = st.toggle("Use sensor-calibrated baseline", value=True)
         temp_only = st.toggle("Apply CMIP6 deltas to temperature only", value=False)
+        st.caption(
+            "CMIP6 deltas are monthly climate-change adjustments from global model ensembles. "
+            "This feature keeps your EPW's hour-by-hour local weather pattern, then shifts temperature, "
+            "humidity, wind, and solar values for the selected SSP pathway and year so you can test future "
+            "comfort and load risk."
+        )
         baseline_name = "Current EPW"
         baseline_frame = st.session_state.get("cdf")
         if baseline_frame is None or baseline_frame.empty:
@@ -15899,10 +16113,35 @@ def render_future_climate_page():
             st.session_state["cmip6_latitude"] = current_lat
             st.session_state["cmip6_is_custom"] = False
 
+        # Show CMIP6 Deltas table
+        if cmip6_table is not None:
+            s_map = fepw.SCENARIO_MAP.get(scenario_label, scenario_label)
+            active_deltas = cmip6_table[(cmip6_table["scenario"] == s_map) & (cmip6_table["year"] == target_year)]
+            if not active_deltas.empty:
+                with st.expander("ℹ️ Show applied monthly CMIP6 delta values", expanded=False):
+                    st.markdown(f"**Monthly Climate Deltas for {scenario_label} ({target_year})**")
+                    cols_to_show = ["month", "delta_temp", "delta_rh", "delta_wind", "delta_ghi"]
+                    available_cols = [c for c in cols_to_show if c in active_deltas.columns]
+                    display_deltas = active_deltas[available_cols].copy()
+                    
+                    rename_dict = {
+                        "month": "Month",
+                        "delta_temp": "Temp Delta (°C)",
+                        "delta_rh": "RH Delta (%)",
+                        "delta_wind": "Wind Delta (m/s)",
+                        "delta_ghi": "GHI Delta (W/m²)"
+                    }
+                    display_deltas = display_deltas.rename(columns=rename_dict)
+                    if "Month" in display_deltas.columns:
+                        import calendar
+                        display_deltas["Month"] = display_deltas["Month"].apply(lambda m: calendar.month_name[int(m)] if pd.notna(m) and 1 <= int(m) <= 12 else str(m))
+                    st.dataframe(display_deltas, use_container_width=True, hide_index=True)
+
         with st.expander("Use custom CMIP6 delta CSV", expanded=False):
             st.caption(
                 "Upload a CSV with columns scenario, year, month, delta_temp, delta_rh, "
-                "delta_wind, delta_ghi (optionally lat_band). Sources: WeatherShift™, epwshiftr, etc."
+                "delta_wind, and delta_ghi, with optional lat_band. Each row tells the app how much to "
+                "shift one month for a scenario and reporting year."
             )
             custom_deltas = st.file_uploader("Custom delta table", type=["csv"], key="custom_delta_upload")
             if custom_deltas is not None:
@@ -15927,7 +16166,7 @@ def render_future_climate_page():
         else:
             bias_payload = None
 
-        st.info("These scenarios morph a typical year by applying average climate deltas—they are not weather forecasts for a specific future year.")
+        st.info("These scenarios morph a typical year by applying average climate deltas for planning and design-weather review; they are not weather forecasts for a specific future date.")
 
         with st.spinner("Morphing EPW datasets with CMIP6 deltas…"):
             payloads = fepw.generate_download_payloads(
@@ -16136,47 +16375,72 @@ def render_future_climate_page():
                         st.info("The selected future scenario does not change the available comfort/load metrics enough to plot a comparison.")
 
             # ── DIURNAL HEATMAPS ──────────────────────────────────
-            st.markdown("#### Diurnal Heatmap — Future Temperature")
-            _month_labels = [pd.Timestamp(2001, m, 1).strftime("%b") for m in range(1, 13)]
+            st.markdown(f"#### Diurnal Heatmap — Future Temperature ({target_year})")
             _hour_labels = [f"{h:02d}:00" for h in range(24)]
+
+            def _date_label_from_key(day_key: object) -> str:
+                try:
+                    return pd.Timestamp(f"2000-{day_key}").strftime("%b %d")
+                except Exception:
+                    return str(day_key)
+
+            def _date_axis_labels(grid: Optional[pd.DataFrame]) -> List[str]:
+                if grid is None:
+                    return []
+                return [_date_label_from_key(day_key) for day_key in grid.columns]
+
+            def _monthly_date_ticks(date_labels: List[str]) -> List[str]:
+                ticks = [label for label in date_labels if label.endswith("01")]
+                if ticks:
+                    return ticks
+                step = max(len(date_labels) // 12, 1)
+                return date_labels[::step]
 
             def _build_diurnal_grid(df_src, col="drybulb"):
                 if col not in df_src.columns:
                     return None
                 tmp = df_src[[col]].copy()
-                tmp["month"] = tmp.index.month
+                idx = pd.DatetimeIndex(tmp.index)
+                tmp["date_key"] = idx.strftime("%m-%d")
                 tmp["hour"] = tmp.index.hour
-                return tmp.pivot_table(values=col, index="hour", columns="month", aggfunc="mean")
+                grid = tmp.pivot_table(values=col, index="hour", columns="date_key", aggfunc="mean")
+                return grid.reindex(index=range(24), columns=sorted(grid.columns))
 
             grid_future = _build_diurnal_grid(future_df)
             grid_base = _build_diurnal_grid(base_df)
 
             if grid_future is not None:
+                _date_labels = _date_axis_labels(grid_future)
+                _date_ticks = _monthly_date_ticks(_date_labels)
                 h1, h2 = st.columns(2)
                 with h1:
                     st.caption(f"{target_year} · {scenario_label}")
                     fig_heat_f = go.Figure(go.Heatmap(
-                        z=grid_future.values, x=_month_labels, y=_hour_labels,
+                        z=grid_future.values, x=_date_labels, y=_hour_labels,
                         colorscale="RdYlBu_r", colorbar=dict(title="°C"),
-                        hovertemplate="Month: %{x}<br>Hour: %{y}<br>Temp: %{z:.1f} °C<extra></extra>",
+                        hovertemplate=f"Date: %{{x}}, {target_year}<br>Hour: %{{y}}<br>Temp: %{{z:.1f}} °C<extra></extra>",
                     ))
                     fig_heat_f.update_layout(height=380, margin=dict(l=60, r=10, t=30, b=40),
-                                             yaxis=dict(autorange="reversed"), template=PLOTLY_TEMPLATE,
+                                             xaxis=dict(title=f"Date ({target_year})", tickmode="array", tickvals=_date_ticks, ticktext=_date_ticks, showgrid=False),
+                                             yaxis=dict(autorange="reversed", showgrid=False), template=PLOTLY_TEMPLATE,
                                              paper_bgcolor="#0f172a", plot_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
                     _st_plotly_chart(fig_heat_f, use_container_width=True)
                 with h2:
                     st.caption("ΔT (Future – Baseline)")
                     if grid_base is not None:
-                        delta_grid = grid_future - grid_base.reindex_like(grid_future).fillna(0)
-                        abs_max = max(abs(delta_grid.values.min()), abs(delta_grid.values.max()), 0.1)
+                        delta_grid = grid_future - grid_base.reindex(index=grid_future.index, columns=grid_future.columns)
+                        delta_values = delta_grid.to_numpy(dtype=float)
+                        abs_max = np.nanmax(np.abs(delta_values)) if np.isfinite(delta_values).any() else 0.1
+                        abs_max = max(abs_max, 0.1)
                         fig_heat_d = go.Figure(go.Heatmap(
-                            z=delta_grid.values, x=_month_labels, y=_hour_labels,
+                            z=delta_grid.values, x=_date_labels, y=_hour_labels,
                             colorscale="RdBu_r", zmid=0, zmin=-abs_max, zmax=abs_max,
                             colorbar=dict(title="Δ°C"),
-                            hovertemplate="Month: %{x}<br>Hour: %{y}<br>ΔT: %{z:+.2f} °C<extra></extra>",
+                            hovertemplate=f"Date: %{{x}}, {target_year}<br>Hour: %{{y}}<br>ΔT: %{{z:+.2f}} °C<extra></extra>",
                         ))
                         fig_heat_d.update_layout(height=380, margin=dict(l=60, r=10, t=30, b=40),
-                                                 yaxis=dict(autorange="reversed"), template=PLOTLY_TEMPLATE,
+                                                 xaxis=dict(title=f"Date ({target_year})", tickmode="array", tickvals=_date_ticks, ticktext=_date_ticks, showgrid=False),
+                                                 yaxis=dict(autorange="reversed", showgrid=False), template=PLOTLY_TEMPLATE,
                                                  paper_bgcolor="#0f172a", plot_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
                         _st_plotly_chart(fig_heat_d, use_container_width=True)
 
@@ -16185,20 +16449,23 @@ def render_future_climate_page():
                 utci_future = ce.compute_utci_approx(build_clima_dataframe(future_df))
                 utci_base = ce.compute_utci_approx(baseline_frame)
                 tmp_uf = pd.DataFrame({"UTCI": utci_future}, index=future_df.index)
-                tmp_uf["month"] = tmp_uf.index.month; tmp_uf["hour"] = tmp_uf.index.hour
-                grid_utci = tmp_uf.pivot_table(values="UTCI", index="hour", columns="month", aggfunc="mean")
-                st.markdown("#### Diurnal Heatmap — UTCI (Future)")
-                fig_utci_h = go.Figure(go.Heatmap(
-                    z=grid_utci.values, x=_month_labels, y=_hour_labels,
-                    colorscale=[[0, "#2166ac"], [0.35, "#67a9cf"], [0.5, "#fddbc7"],
-                                [0.7, "#ef8a62"], [1, "#b2182b"]],
-                    colorbar=dict(title="UTCI °C"),
-                    hovertemplate="Month: %{x}<br>Hour: %{y}<br>UTCI: %{z:.1f} °C<extra></extra>",
-                ))
-                fig_utci_h.update_layout(height=380, margin=dict(l=60, r=10, t=30, b=40),
-                                         yaxis=dict(autorange="reversed"), template=PLOTLY_TEMPLATE,
-                                         paper_bgcolor="#0f172a", plot_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
-                _st_plotly_chart(fig_utci_h, use_container_width=True)
+                grid_utci = _build_diurnal_grid(tmp_uf, "UTCI")
+                st.markdown(f"#### Diurnal Heatmap — UTCI (Future {target_year})")
+                if grid_utci is not None:
+                    _utci_date_labels = _date_axis_labels(grid_utci)
+                    _utci_date_ticks = _monthly_date_ticks(_utci_date_labels)
+                    fig_utci_h = go.Figure(go.Heatmap(
+                        z=grid_utci.values, x=_utci_date_labels, y=_hour_labels,
+                        colorscale=[[0, "#2166ac"], [0.35, "#67a9cf"], [0.5, "#fddbc7"],
+                                    [0.7, "#ef8a62"], [1, "#b2182b"]],
+                        colorbar=dict(title="UTCI °C"),
+                        hovertemplate=f"Date: %{{x}}, {target_year}<br>Hour: %{{y}}<br>UTCI: %{{z:.1f}} °C<extra></extra>",
+                    ))
+                    fig_utci_h.update_layout(height=380, margin=dict(l=60, r=10, t=30, b=40),
+                                             xaxis=dict(title=f"Date ({target_year})", tickmode="array", tickvals=_utci_date_ticks, ticktext=_utci_date_ticks, showgrid=False),
+                                             yaxis=dict(autorange="reversed", showgrid=False), template=PLOTLY_TEMPLATE,
+                                             paper_bgcolor="#0f172a", plot_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
+                    _st_plotly_chart(fig_utci_h, use_container_width=True)
             except Exception:
                 utci_future = None
                 utci_base = None
