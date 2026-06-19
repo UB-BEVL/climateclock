@@ -13557,16 +13557,16 @@ WIND_ROSE_DIR_LABELS = [
     "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
 ]
 
-WIND_ROSE_SPEED_BINS_MPH = [0.0, 1.0, 4.0, 8.0, 13.0, 19.0, 25.0, 32.0, np.inf]
+WIND_ROSE_SPEED_BINS_MPH = [0.0, 0.1, 0.5, 1.0, 2.0, 4.0, 8.0, 13.0, np.inf]
 WIND_ROSE_SPEED_LABELS = [
     "Calm",
+    "Trace air",
     "Light air",
     "Light breeze",
     "Gentle breeze",
     "Moderate breeze",
     "Fresh breeze",
-    "Strong breeze",
-    "Near gale+",
+    "Strong breeze+",
 ]
 WIND_ROSE_SPEED_COLORS = [
     "#5eead4",
@@ -13579,14 +13579,14 @@ WIND_ROSE_SPEED_COLORS = [
     "#a855f7",
 ]
 WIND_ROSE_SPEED_HOVER_LABELS = {
-    "Calm": "Calm (<1 mph)",
-    "Light air": "Light air (1-3 mph)",
-    "Light breeze": "Light breeze (4-7 mph)",
-    "Gentle breeze": "Gentle breeze (8-12 mph)",
-    "Moderate breeze": "Moderate breeze (13-18 mph)",
-    "Fresh breeze": "Fresh breeze (19-24 mph)",
-    "Strong breeze": "Strong breeze (25-31 mph)",
-    "Near gale+": "Near gale+ (32+ mph)",
+    "Calm": "Calm (<0.1 mph)",
+    "Trace air": "Trace air (0.1-0.5 mph)",
+    "Light air": "Light air (0.5-1 mph)",
+    "Light breeze": "Light breeze (1-2 mph)",
+    "Gentle breeze": "Gentle breeze (2-4 mph)",
+    "Moderate breeze": "Moderate breeze (4-8 mph)",
+    "Fresh breeze": "Fresh breeze (8-13 mph)",
+    "Strong breeze+": "Strong breeze+ (13+ mph)",
 }
 
 
@@ -13645,46 +13645,71 @@ def create_wind_rose(df):
         "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
     ]
 
-    # Use named Beaufort-style mph classes so calm files do not render as "0.0-0.5 mph".
+    # Use low-wind-sensitive mph classes so sheltered files do not collapse into one calm bin.
     speed_bins, speed_labels = _wind_rose_speed_bins_mph(df[wind_spd_col])
 
-    # Categorize data
-    df.loc[:, "dir_cat"] = pd.cut(
-        df[wind_dir_col],
+    calm_label = speed_labels[0]
+    moving_speed_labels = speed_labels[1:]
+    calm_cutoff_mph = speed_bins[1]
+    total_count = len(df)
+    calm_pct = float((df["2dSpeed_mph"] <= calm_cutoff_mph).sum() / total_count * 100) if total_count else 0.0
+    moving_df = df[df["2dSpeed_mph"] > calm_cutoff_mph].copy()
+
+    # Calm wind has no meaningful direction, so keep it out of directional sectors.
+    moving_df.loc[:, "dir_cat"] = pd.cut(
+        moving_df[wind_dir_col],
         bins=dir_bins,
         labels=dir_labels,
         include_lowest=True,
         ordered=False,
     )
-    df.loc[:, "speed_cat"] = pd.cut(
-        df["2dSpeed_mph"],
-        bins=speed_bins,
-        labels=speed_labels,
+    moving_df.loc[:, "speed_cat"] = pd.cut(
+        moving_df["2dSpeed_mph"],
+        bins=speed_bins[1:],
+        labels=moving_speed_labels,
         include_lowest=True,
         ordered=False,
     )
 
     # Count occurrences and calculate percentages
-    wind_data = (
-        df.groupby(["dir_cat", "speed_cat"], observed=True).size().unstack(fill_value=0)
-    )
+    if moving_df.empty:
+        wind_data = pd.DataFrame(0, index=dir_labels, columns=moving_speed_labels)
+    else:
+        wind_data = (
+            moving_df.groupby(["dir_cat", "speed_cat"], observed=True).size().unstack(fill_value=0)
+        )
     # Convert index and columns to string lists to prevent any CategoricalIndex reindexing issues
     wind_data.index = [str(i) for i in wind_data.index]
     wind_data.columns = [str(c) for c in wind_data.columns]
     
-    wind_data = wind_data.reindex(index=dir_labels, columns=speed_labels, fill_value=0)
+    wind_data = wind_data.reindex(index=dir_labels, columns=moving_speed_labels, fill_value=0)
     
-    total_count = wind_data.sum().sum()
     if total_count == 0:
         return None
     wind_percentages = wind_data / total_count * 100
+    radial_max = float(wind_percentages.max().max()) if not wind_percentages.empty else 0.0
+    radial_upper = max(5.0, math.ceil(radial_max / 5.0) * 5.0)
+    radial_ticks = np.arange(0, radial_upper + 0.1, 5)
 
     # Create wind rose
     fig = go.Figure()
 
     colors = WIND_ROSE_SPEED_COLORS
 
-    for i, speed_cat in enumerate(speed_labels):
+    fig.add_trace(
+        go.Barpolar(
+            r=[0] * len(dir_labels),
+            theta=dir_labels,
+            name=_wind_rose_speed_hover_label(calm_label),
+            marker_color=colors[0],
+            marker_line_width=0,
+            opacity=0.86,
+            showlegend=True,
+            hoverinfo="skip",
+        )
+    )
+
+    for i, speed_cat in enumerate(moving_speed_labels, start=1):
         hover_speed = _wind_rose_speed_hover_label(speed_cat)
         values = wind_percentages[speed_cat]
         has_data = values.sum() > 0
@@ -13707,10 +13732,25 @@ def create_wind_rose(df):
             )
         )
 
+    fig.add_annotation(
+        text=f"<b>Calm</b><br>{calm_pct:.1f}%",
+        x=0.37,
+        y=0.45,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        align="center",
+        font=dict(size=13, color="#f8fafc"),
+        bgcolor="rgba(11, 20, 27, 0.82)",
+        bordercolor="rgba(94, 234, 212, 0.45)",
+        borderpad=5,
+    )
+
     fig.update_layout(
         title={
             "text": "Wind Rose Diagram",
             "x": 0.38,
+            "y": 0.96,
             "xanchor": "center",
             "yanchor": "top",
         },
@@ -13718,21 +13758,20 @@ def create_wind_rose(df):
         font_size=12,
         legend_font_size=11,
         polar=dict(
-            domain=dict(x=[0.02, 0.72], y=[0.02, 0.98]),
+            domain=dict(x=[0.02, 0.72], y=[0.0, 0.9]),
             radialaxis=dict(
                 visible=True,
-                range=[0, wind_percentages.max().max()],
+                range=[0, radial_upper],
                 ticksuffix="%",
                 tickmode="array",
-                tickvals=np.arange(0, wind_percentages.max().max(), 5),
-                ticktext=[
-                    f"{i}%" for i in range(0, int(wind_percentages.max().max()), 5)
-                ],
+                tickvals=radial_ticks,
+                ticktext=[f"{int(i)}%" for i in radial_ticks],
             ),
             angularaxis=dict(direction="clockwise", rotation=90),
             bgcolor="rgba(0,0,0,0)",  # Set polar area background to transparent
         ),
         autosize=True,
+        barmode="stack",
         height=680,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -13749,7 +13788,7 @@ def create_wind_rose(df):
             itemclick=False,
             itemdoubleclick=False,
         ),
-        margin=dict(l=22, r=250, t=64, b=24),
+        margin=dict(l=22, r=250, t=92, b=24),
     )
 
     return fig
@@ -14129,8 +14168,8 @@ def render_wind_page():
                         config={"displayModeBar": True})
         st.caption(
             "Wind-rose sectors show prevailing direction and speed-class frequency. "
-            "The legend keys show the speed categories (in m/s). Read the longest sectors first, "
-            "then compare color distribution to understand whether wind is frequent, strong, or diffuse."
+            "Calm hours are summarized in the center because calm wind has no meaningful direction. "
+            "The legend keys use site-scaled moving-wind categories in mph."
         )
         _add_manual_pdf_figure("Annual Wind Rose", fig)
         clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
