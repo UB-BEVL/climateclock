@@ -2878,11 +2878,16 @@ section[data-testid="stSidebar"][aria-expanded="false"] *::after {
     display: none !important;
 }
 
+.cc-sidebar-brand-zone {
+    display: block;
+    margin: 0 0 2.25rem;
+}
+
 .cc-sidebar-brand {
     display: flex;
     align-items: center;
     gap: 0.55rem;
-    margin: 0 0 0.35rem;
+    margin: 0 0 0.45rem;
     padding: 0.2rem 0.1rem;
 }
 
@@ -2923,7 +2928,7 @@ section[data-testid="stSidebar"][aria-expanded="false"] *::after {
     gap: 0.4rem;
     align-items: center;
     padding: 0 0.1rem 0.35rem;
-    margin-bottom: 0.4rem;
+    margin-bottom: 0;
     border-bottom: 1px solid rgba(154, 174, 186, 0.10);
 }
 
@@ -3093,8 +3098,9 @@ section[data-testid="stSidebar"] .stButton button[disabled] {
 
 .cc-map-heading p {
     margin: 0.2rem 0 0;
-    color: var(--ci-muted);
-    font-size: 0.84rem;
+    color: #c4d1d6;
+    font-size: 0.92rem;
+    line-height: 1.45;
 }
 
 div[data-testid="stFileUploader"] {
@@ -3110,6 +3116,37 @@ div[data-testid="stFileUploader"] section {
     border: 1px dashed rgba(72, 187, 177, 0.28) !important;
     border-radius: 8px !important;
     box-shadow: none !important;
+}
+
+.cc-source-divider {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 0.85rem;
+    margin: 1.05rem 0 1rem;
+    color: #c4d1d6;
+    font-size: 0.74rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.cc-source-divider::before,
+.cc-source-divider::after {
+    content: "";
+    height: 1px;
+    background: rgba(196, 209, 214, 0.28);
+}
+
+.cc-source-divider span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.4rem;
+    min-height: 1.45rem;
+    border-radius: 999px;
+    border: 1px solid rgba(196, 209, 214, 0.24);
+    background: rgba(11, 20, 27, 0.96);
 }
 
 .cc-hero-panel,
@@ -3657,18 +3694,20 @@ def render_sidebar():
 
         st.markdown(
             f"""
-            <div class="cc-sidebar-brand">
-                <div class="cc-sidebar-mark">CI</div>
-                <div>
-                    <div class="cc-sidebar-title">Climate Intelligence</div>
-                    <div class="cc-sidebar-subtitle">{loc_label}</div>
+            <div class="cc-sidebar-brand-zone">
+                <div class="cc-sidebar-brand">
+                    <div class="cc-sidebar-mark">CI</div>
+                    <div>
+                        <div class="cc-sidebar-title">Climate Intelligence</div>
+                        <div class="cc-sidebar-subtitle">{loc_label}</div>
+                    </div>
                 </div>
-            </div>
-            <div class="cc-sidebar-status">
-                <span class="cc-status-dot {'is-ready' if epw_loaded else ''}"></span>
-                <div>
-                    <strong>{status_label}</strong>
-                    <span>{source_label}</span>
+                <div class="cc-sidebar-status">
+                    <span class="cc-status-dot {'is-ready' if epw_loaded else ''}"></span>
+                    <div>
+                        <strong>{status_label}</strong>
+                        <span>{source_label}</span>
+                    </div>
                 </div>
             </div>
             """,
@@ -4226,6 +4265,15 @@ def render_select_station_page():
             raw_epw_bytes = handle_epw_upload(main_upload, picker_key="main")
             if raw_epw_bytes is not None:
                 _rerun()
+
+    st.markdown(
+        """
+        <div class="cc-source-divider" role="separator" aria-label="Alternative weather source">
+            <span>OR</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown("<div id='station-picker'></div>", unsafe_allow_html=True)
     # render_station_picker handles the map and list
@@ -6951,14 +6999,12 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                                 
                         # 4x4 Diurnal Wind Rose Matrix
                         try:
-                            max_spd = wdf_dir["Speed_mph"].max() if "Speed_mph" in wdf_dir else (pd.to_numeric(wdf_dir[w_col], errors="coerce") * 2.23694).max()
-                            if pd.isna(max_spd) or max_spd <= 0: max_spd = 10
-                            speed_bins = np.linspace(0, max_spd, 7)
-                            speed_bins[-1] = max(speed_bins[-1], max_spd + 1e-9)
-                            speed_labels = [f"{speed_bins[i]:.1f}-{speed_bins[i+1]:.1f}" for i in range(6)]
+                            wdf_dir["Speed_mph"] = pd.to_numeric(wdf_dir[w_col], errors="coerce") * 2.23694
+                            speed_bins, speed_labels = _wind_rose_speed_bins_mph(wdf_dir[w_col])
                             dir_bins = np.arange(0, 361, 22.5)
                             dir_labels = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
-                            colors = px.colors.diverging.RdYlBu[::-1][:6]
+                            colors = WIND_ROSE_SPEED_COLORS
+                            shown_speed_legends = set()
                             
                             fig_matrix = make_subplots(
                                 rows=4, cols=4,
@@ -6968,7 +7014,6 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                                 horizontal_spacing=0.03
                             )
                             
-                            wdf_dir["Speed_mph"] = pd.to_numeric(wdf_dir[w_col], errors="coerce") * 2.23694
                             for i, season in enumerate(["Winter", "Spring", "Summer", "Autumn"]):
                                 for j, tod in enumerate(["Night", "Morning", "Afternoon", "Evening"]):
                                     subset = wdf_dir[(wdf_dir["__season"] == season) & (wdf_dir["__tod"] == tod)].copy()
@@ -6984,16 +7029,21 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                                     wind_pct = wind_data / total * 100
                                     
                                     for k, speed_cat in enumerate(speed_labels):
-                                        show_leg = (i == 0 and j == 0)
+                                        if wind_pct[speed_cat].sum() <= 0:
+                                            continue
+                                        show_leg = speed_cat not in shown_speed_legends
+                                        if show_leg:
+                                            shown_speed_legends.add(speed_cat)
+                                        hover_speed = _wind_rose_speed_hover_label(speed_cat)
                                         fig_matrix.add_trace(
                                             go.Barpolar(
                                                 r=wind_pct[speed_cat].reindex(dir_labels, fill_value=0),
                                                 theta=dir_labels,
-                                                name=f"{speed_cat} mph",
-                                                marker_color=colors[k],
+                                                name=hover_speed,
+                                                marker_color=colors[k % len(colors)],
                                                 marker_line_width=0,
                                                 showlegend=show_leg,
-                                                hovertemplate=f"Season: {season}<br>ToD: {tod}<br>Dir: %{{theta}}<br>Speed: {speed_cat} mph<br>Pct: %{{r:.1f}}%<extra></extra>"
+                                                hovertemplate=f"Season: {season}<br>ToD: {tod}<br>Dir: %{{theta}}<br>Speed: {hover_speed}<br>Pct: %{{r:.1f}}%<extra></extra>"
                                             ),
                                             row=i+1, col=j+1
                                         )
@@ -13507,6 +13557,38 @@ WIND_ROSE_DIR_LABELS = [
     "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
 ]
 
+WIND_ROSE_SPEED_BINS_MPH = [0.0, 1.0, 4.0, 8.0, 13.0, 19.0, 25.0, 32.0, np.inf]
+WIND_ROSE_SPEED_LABELS = [
+    "Calm",
+    "Light air",
+    "Light breeze",
+    "Gentle breeze",
+    "Moderate breeze",
+    "Fresh breeze",
+    "Strong breeze",
+    "Near gale+",
+]
+WIND_ROSE_SPEED_COLORS = [
+    "#5eead4",
+    "#38bdf8",
+    "#60a5fa",
+    "#a3e635",
+    "#facc15",
+    "#fb923c",
+    "#ef4444",
+    "#a855f7",
+]
+WIND_ROSE_SPEED_HOVER_LABELS = {
+    "Calm": "Calm (<1 mph)",
+    "Light air": "Light air (1-3 mph)",
+    "Light breeze": "Light breeze (4-7 mph)",
+    "Gentle breeze": "Gentle breeze (8-12 mph)",
+    "Moderate breeze": "Moderate breeze (13-18 mph)",
+    "Fresh breeze": "Fresh breeze (19-24 mph)",
+    "Strong breeze": "Strong breeze (25-31 mph)",
+    "Near gale+": "Near gale+ (32+ mph)",
+}
+
 
 def _wind_rose_direction_categories(direction: pd.Series) -> pd.Categorical:
     direction = _normalize_wind_dir(direction)
@@ -13519,24 +13601,11 @@ def _wind_rose_direction_categories(direction: pd.Series) -> pd.Categorical:
 
 
 def _wind_rose_speed_bins_mph(speed_mps: pd.Series, num_bins: int = 6) -> tuple[list[float], list[str]]:
-    speed_mph = pd.to_numeric(speed_mps, errors="coerce") * 2.23694
-    speed_mph = speed_mph.mask((speed_mph < 0) | (speed_mph >= 999 * 2.23694)).dropna()
-    if speed_mph.empty:
-        return [0.0, 1.0], ["0.0-1.0"]
+    return WIND_ROSE_SPEED_BINS_MPH, WIND_ROSE_SPEED_LABELS
 
-    max_speed = float(speed_mph.max())
-    if pd.isna(max_speed) or max_speed <= 0:
-        max_speed = 1.0
 
-    speed_bins = np.linspace(0, max_speed, num_bins + 1)
-    speed_bins[-1] = max(speed_bins[-1], max_speed + 1e-9)
-    step = max_speed / max(num_bins, 1)
-    decimals = 1 if step >= 0.1 else min(4, int(np.ceil(-np.log10(max(step, 1e-6)))) + 1)
-    speed_labels = [
-        f"{speed_bins[i]:.{decimals}f}-{speed_bins[i + 1]:.{decimals}f}"
-        for i in range(len(speed_bins) - 1)
-    ]
-    return speed_bins.tolist(), speed_labels
+def _wind_rose_speed_hover_label(speed_label: str) -> str:
+    return WIND_ROSE_SPEED_HOVER_LABELS.get(speed_label, speed_label)
 
 
 def create_wind_rose(df):
@@ -13576,14 +13645,8 @@ def create_wind_rose(df):
         "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
     ]
 
-    # Dynamically create speed bins based on data
-    max_speed = df["2dSpeed_mph"].max()
-    num_bins = 6
-    speed_bins = np.linspace(0, max_speed, num_bins + 1)
-    speed_labels = [
-        f"{speed_bins[i]:.1f}-{speed_bins[i + 1]:.1f}"
-        for i in range(len(speed_bins) - 1)
-    ]
+    # Use named Beaufort-style mph classes so calm files do not render as "0.0-0.5 mph".
+    speed_bins, speed_labels = _wind_rose_speed_bins_mph(df[wind_spd_col])
 
     # Categorize data
     df.loc[:, "dir_cat"] = pd.cut(
@@ -13619,37 +13682,43 @@ def create_wind_rose(df):
     # Create wind rose
     fig = go.Figure()
 
-    # RdYlBu (Blue through yellow to red, very distinct)
-    import plotly.express as px
-    colors = px.colors.diverging.RdYlBu[::-1][: len(speed_labels)]
+    colors = WIND_ROSE_SPEED_COLORS
 
     for i, speed_cat in enumerate(speed_labels):
+        hover_speed = _wind_rose_speed_hover_label(speed_cat)
+        values = wind_percentages[speed_cat]
+        has_data = values.sum() > 0
         fig.add_trace(
             go.Barpolar(
-                r=wind_percentages[speed_cat],
+                r=values,
                 theta=dir_labels,
-                name=f"{speed_cat} mph",
-                marker_color=colors[i],
+                name=hover_speed,
+                marker_color=colors[i % len(colors)],
                 marker_line_width=1,
-                opacity=0.8,
-                hovertemplate="Direction: %{theta}<br>"
-                + "Speed: "
-                + speed_cat
-                + " mph<br>"
-                + "Percentage: %{r:.1f}%<extra></extra>",
+                opacity=0.86 if has_data else 0.55,
+                showlegend=True,
+                hovertemplate=(
+                    "Direction: %{theta}<br>"
+                    + "Speed: "
+                    + hover_speed
+                    + "<br>"
+                    + "Percentage: %{r:.1f}%<extra></extra>"
+                ),
             )
         )
 
     fig.update_layout(
         title={
             "text": "Wind Rose Diagram",
-            "x": 0.5,
+            "x": 0.38,
             "xanchor": "center",
             "yanchor": "top",
         },
+        showlegend=True,
         font_size=12,
-        legend_font_size=10,
+        legend_font_size=11,
         polar=dict(
+            domain=dict(x=[0.02, 0.72], y=[0.02, 0.98]),
             radialaxis=dict(
                 visible=True,
                 range=[0, wind_percentages.max().max()],
@@ -13663,13 +13732,24 @@ def create_wind_rose(df):
             angularaxis=dict(direction="clockwise", rotation=90),
             bgcolor="rgba(0,0,0,0)",  # Set polar area background to transparent
         ),
-        width=620,
-        height=620,
+        autosize=True,
+        height=680,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         legend=dict(
-            orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5
+            title=dict(text="Wind speed", font=dict(size=12)),
+            orientation="v",
+            yanchor="top",
+            y=0.92,
+            xanchor="left",
+            x=0.78,
+            bgcolor="rgba(11, 20, 27, 0.78)",
+            bordercolor="rgba(196, 209, 214, 0.18)",
+            borderwidth=1,
+            itemclick=False,
+            itemdoubleclick=False,
         ),
+        margin=dict(l=22, r=250, t=64, b=24),
     )
 
     return fig
