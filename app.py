@@ -4425,8 +4425,9 @@ def setup_cdf():
 # ========== HEATMAP HELPERS (ANNUAL DIURNAL RESOURCE) ==========
 
 WIND_SPEED_ALIASES = [
-    "windspeed", "windspd", "wind_speed", "wspd", "ws",
-    "windspeedms", "wind speed", "windspeed_ms", "HourlyWindSpeed",
+    "windspd", "wind_speed", "wind_speed_ms", "windspd_ms",
+    "windspeed", "wspd", "ws", "windspeedms", "wind speed",
+    "windspeed_ms", "HourlyWindSpeed",
 ]
 PRECIP_ALIASES = [
     "liqprecipdepth", "liqpreciprate", "precipwtr", "precipitation",
@@ -4439,16 +4440,37 @@ def find_column_by_fuzzy_match(df: pd.DataFrame, keywords: List[str], exclude_co
     """Find a column in df by fuzzy matching against keywords (case-insensitive, substring)."""
     if exclude_cols is None:
         exclude_cols = []
-    # Build a mapping from lowercase name to original name (filtered)
-    col_map = {c.lower(): c for c in df.columns if c not in exclude_cols}
-    for keyword in keywords:
-        kw_lower = keyword.lower()
-        for col_low, col_orig in col_map.items():
-            if kw_lower in col_low or col_low in kw_lower:
+    exclude_norms = {str(c).lower() for c in exclude_cols}
+    columns = []
+    for col in df.columns:
+        col_low = str(col).lower()
+        if col in exclude_cols or col_low in exclude_norms:
+            continue
+        columns.append((col_low, re.sub(r"[^a-z0-9]+", "", col_low), col))
+
+    keys = [
+        (str(keyword).lower(), re.sub(r"[^a-z0-9]+", "", str(keyword).lower()))
+        for keyword in keywords
+        if str(keyword).strip()
+    ]
+
+    for kw_lower, _ in keys:
+        for col_low, _, col_orig in columns:
+            if col_low == kw_lower:
                 return col_orig
-            kw_norm = re.sub(r"[^a-z0-9]+", "", kw_lower)
-            col_norm = re.sub(r"[^a-z0-9]+", "", col_low)
-            if kw_norm and (kw_norm in col_norm or col_norm in kw_norm):
+
+    for _, kw_norm in keys:
+        for _, col_norm, col_orig in columns:
+            if kw_norm and col_norm == kw_norm:
+                return col_orig
+
+    for _, kw_norm in keys:
+        if len(kw_norm) < 3 or kw_norm in {"wind"}:
+            continue
+        for _, col_norm, col_orig in columns:
+            if len(col_norm) < 3:
+                continue
+            if kw_norm in col_norm or col_norm in kw_norm:
                 return col_orig
     return None
 
@@ -13616,7 +13638,7 @@ def create_wind_rose(df):
     if "2dSpeed_m_s" in df.columns:
         wind_spd_col = "2dSpeed_m_s"
     else:
-        wind_spd_col = get_metric_column(df, ["wind_speed", "windspeed", "windspd", "ws", "wspd"])
+        wind_spd_col = get_metric_column(df, WIND_SPEED_ALIASES)
 
     wind_dir_col = None
     if "Azimuth_deg" in df.columns:
@@ -13638,12 +13660,7 @@ def create_wind_rose(df):
     if df.empty:
         return None
 
-    # Define direction bins
-    dir_bins = np.arange(0, 361, 22.5)
-    dir_labels = [
-        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
-    ]
+    dir_labels = WIND_ROSE_DIR_LABELS
 
     # Use low-wind-sensitive mph classes so sheltered files do not collapse into one calm bin.
     speed_bins, speed_labels = _wind_rose_speed_bins_mph(df[wind_spd_col])
@@ -13656,13 +13673,7 @@ def create_wind_rose(df):
     moving_df = df[df["2dSpeed_mph"] > calm_cutoff_mph].copy()
 
     # Calm wind has no meaningful direction, so keep it out of directional sectors.
-    moving_df.loc[:, "dir_cat"] = pd.cut(
-        moving_df[wind_dir_col],
-        bins=dir_bins,
-        labels=dir_labels,
-        include_lowest=True,
-        ordered=False,
-    )
+    moving_df.loc[:, "dir_cat"] = _wind_rose_direction_categories(moving_df[wind_dir_col])
     moving_df.loc[:, "speed_cat"] = pd.cut(
         moving_df["2dSpeed_mph"],
         bins=speed_bins[1:],
@@ -13695,16 +13706,21 @@ def create_wind_rose(df):
     fig = go.Figure()
 
     colors = WIND_ROSE_SPEED_COLORS
+    polar_domain_x = [0.02, 0.76]
+    polar_domain_y = [0.08, 0.92]
+    polar_center_x = sum(polar_domain_x) / 2
+    polar_center_y = sum(polar_domain_y) / 2
 
     fig.add_trace(
         go.Barpolar(
             r=[0] * len(dir_labels),
             theta=dir_labels,
+            width=[20] * len(dir_labels),
             name=_wind_rose_speed_hover_label(calm_label),
             marker_color=colors[0],
             marker_line_width=0,
             opacity=0.86,
-            showlegend=True,
+            showlegend=bool(calm_pct > 0),
             hoverinfo="skip",
         )
     )
@@ -13717,11 +13733,13 @@ def create_wind_rose(df):
             go.Barpolar(
                 r=values,
                 theta=dir_labels,
+                width=[20] * len(dir_labels),
                 name=hover_speed,
                 marker_color=colors[i % len(colors)],
+                marker_line_color="rgba(8, 13, 18, 0.58)",
                 marker_line_width=1,
                 opacity=0.86 if has_data else 0.55,
-                showlegend=True,
+                showlegend=bool(has_data),
                 hovertemplate=(
                     "Direction: %{theta}<br>"
                     + "Speed: "
@@ -13733,9 +13751,9 @@ def create_wind_rose(df):
         )
 
     fig.add_annotation(
-        text=f"<b>Calm</b><br>{calm_pct:.1f}%",
-        x=0.37,
-        y=0.45,
+        text=f"<b>{'No moving wind' if moving_df.empty else 'Calm'}</b><br>{calm_pct:.1f}%",
+        x=polar_center_x,
+        y=polar_center_y,
         xref="paper",
         yref="paper",
         showarrow=False,
@@ -13748,17 +13766,17 @@ def create_wind_rose(df):
 
     fig.update_layout(
         title={
-            "text": "Wind Rose Diagram",
-            "x": 0.38,
-            "y": 0.96,
+            "text": "Wind Rose",
+            "x": 0.5,
+            "y": 0.98,
             "xanchor": "center",
             "yanchor": "top",
         },
         showlegend=True,
-        font_size=12,
+        font=dict(size=12, color="#e5edf5", family=CHART_FONT_FAMILY),
         legend_font_size=11,
         polar=dict(
-            domain=dict(x=[0.02, 0.72], y=[0.0, 0.9]),
+            domain=dict(x=polar_domain_x, y=polar_domain_y),
             radialaxis=dict(
                 visible=True,
                 range=[0, radial_upper],
@@ -13766,29 +13784,45 @@ def create_wind_rose(df):
                 tickmode="array",
                 tickvals=radial_ticks,
                 ticktext=[f"{int(i)}%" for i in radial_ticks],
+                gridcolor="rgba(148, 163, 184, 0.22)",
+                linecolor="rgba(148, 163, 184, 0.32)",
+                tickfont=dict(size=11, color="#cbd5e1"),
+                angle=90,
             ),
-            angularaxis=dict(direction="clockwise", rotation=90),
+            angularaxis=dict(
+                direction="clockwise",
+                rotation=90,
+                gridcolor="rgba(148, 163, 184, 0.16)",
+                linecolor="rgba(148, 163, 184, 0.32)",
+                tickfont=dict(size=11, color="#f8fafc"),
+            ),
             bgcolor="rgba(0,0,0,0)",  # Set polar area background to transparent
         ),
         autosize=True,
         barmode="stack",
-        height=680,
+        height=600,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         legend=dict(
             title=dict(text="Wind speed", font=dict(size=12)),
             orientation="v",
             yanchor="top",
-            y=0.92,
+            y=0.9,
             xanchor="left",
-            x=0.78,
+            x=0.81,
             bgcolor="rgba(11, 20, 27, 0.78)",
             bordercolor="rgba(196, 209, 214, 0.18)",
             borderwidth=1,
             itemclick=False,
             itemdoubleclick=False,
         ),
-        margin=dict(l=22, r=250, t=92, b=24),
+        margin=dict(l=24, r=210, t=72, b=32),
+        meta=dict(
+            wind_speed_col=str(wind_spd_col),
+            wind_dir_col=str(wind_dir_col),
+            calm_pct=calm_pct,
+            moving_hours=int(len(moving_df)),
+        ),
     )
 
     return fig
@@ -14166,11 +14200,18 @@ def render_wind_page():
     if fig is not None:
         _st_plotly_chart(fig, use_container_width=True,
                         config={"displayModeBar": True})
-        st.caption(
-            "Wind-rose sectors show prevailing direction and speed-class frequency. "
-            "Calm hours are summarized in the center because calm wind has no meaningful direction. "
-            "The legend keys use site-scaled moving-wind categories in mph."
-        )
+        wind_fig_meta = fig.layout.meta if getattr(fig.layout, "meta", None) else {}
+        if isinstance(wind_fig_meta, dict) and int(wind_fig_meta.get("moving_hours", 1) or 0) == 0:
+            st.caption(
+                "All valid wind-speed observations are at or below the calm threshold, so no directional sectors are shown. "
+                "Calm hours are summarized in the center because calm wind has no meaningful direction."
+            )
+        else:
+            st.caption(
+                "Wind-rose sectors show prevailing direction and speed-class frequency. "
+                "Calm hours are summarized in the center because calm wind has no meaningful direction. "
+                "The legend shows only speed classes present in the selected data."
+            )
         _add_manual_pdf_figure("Annual Wind Rose", fig)
         clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
         with st.expander("Export wind rose", expanded=False):
