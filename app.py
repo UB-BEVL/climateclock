@@ -7024,11 +7024,11 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                                 
                         # 4x4 Diurnal Wind Rose Matrix
                         try:
-                            wdf_dir["Speed_mph"] = pd.to_numeric(wdf_dir[w_col], errors="coerce") * 2.23694
-                            speed_bins, speed_labels = _wind_rose_speed_bins_mph(wdf_dir[w_col])
-                            dir_bins = np.arange(0, 361, 22.5)
-                            dir_labels = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
-                            colors = WIND_ROSE_SPEED_COLORS
+                            wdf_dir["Speed_mps"] = pd.to_numeric(wdf_dir[w_col], errors="coerce")
+                            speed_bins, speed_labels = _wind_rose_speed_bins_mps(wdf_dir[w_col])
+                            dir_labels = WIND_ROSE_DIR_LABELS
+                            theta_degrees = np.arange(0, 360, 22.5)
+                            colors = WIND_ROSE_SPEED_COLORS_MPS
                             shown_speed_legends = set()
                             
                             fig_matrix = make_subplots(
@@ -7045,8 +7045,8 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                                     if len(subset) < 10:
                                         continue
                                         
-                                    subset["dir_cat"] = pd.cut(subset[wd_col], bins=dir_bins, labels=dir_labels, include_lowest=True, ordered=False)
-                                    subset["speed_cat"] = pd.cut(subset["Speed_mph"], bins=speed_bins, labels=speed_labels, include_lowest=True, ordered=False)
+                                    subset["dir_cat"] = _wind_rose_direction_categories(subset[wd_col])
+                                    subset["speed_cat"] = pd.cut(subset["Speed_mps"], bins=speed_bins, labels=speed_labels, include_lowest=True, ordered=False)
                                     
                                     wind_data = subset.groupby(["dir_cat", "speed_cat"], observed=True).size().unstack(fill_value=0).reindex(index=dir_labels, columns=speed_labels, fill_value=0)
                                     total = wind_data.sum().sum()
@@ -7063,12 +7063,14 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                                         fig_matrix.add_trace(
                                             go.Barpolar(
                                                 r=wind_pct[speed_cat].reindex(dir_labels, fill_value=0),
-                                                theta=dir_labels,
+                                                theta=theta_degrees,
+                                                width=[20] * len(dir_labels),
+                                                customdata=dir_labels,
                                                 name=hover_speed,
                                                 marker_color=colors[k % len(colors)],
                                                 marker_line_width=0,
                                                 showlegend=show_leg,
-                                                hovertemplate=f"Season: {season}<br>ToD: {tod}<br>Dir: %{{theta}}<br>Speed: {hover_speed}<br>Pct: %{{r:.1f}}%<extra></extra>"
+                                                hovertemplate=f"Season: {season}<br>ToD: {tod}<br>Dir: %{{customdata}}<br>Speed: {hover_speed}<br>Pct: %{{r:.1f}}%<extra></extra>"
                                             ),
                                             row=i+1, col=j+1
                                         )
@@ -13582,38 +13584,6 @@ WIND_ROSE_DIR_LABELS = [
     "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
 ]
 
-WIND_ROSE_SPEED_BINS_MPH = [0.0, 0.1, 0.5, 1.0, 2.0, 4.0, 8.0, 13.0, np.inf]
-WIND_ROSE_SPEED_LABELS = [
-    "Calm",
-    "Trace air",
-    "Light air",
-    "Light breeze",
-    "Gentle breeze",
-    "Moderate breeze",
-    "Fresh breeze",
-    "Strong breeze+",
-]
-WIND_ROSE_SPEED_COLORS = [
-    "#5eead4",
-    "#38bdf8",
-    "#60a5fa",
-    "#a3e635",
-    "#facc15",
-    "#fb923c",
-    "#ef4444",
-    "#a855f7",
-]
-WIND_ROSE_SPEED_HOVER_LABELS = {
-    "Calm": "Calm (<0.1 mph)",
-    "Trace air": "Trace air (0.1-0.5 mph)",
-    "Light air": "Light air (0.5-1 mph)",
-    "Light breeze": "Light breeze (1-2 mph)",
-    "Gentle breeze": "Gentle breeze (2-4 mph)",
-    "Moderate breeze": "Moderate breeze (4-8 mph)",
-    "Fresh breeze": "Fresh breeze (8-13 mph)",
-    "Strong breeze+": "Strong breeze+ (13+ mph)",
-}
-
 WIND_ROSE_SPEED_BINS_MPS = [0.0, 0.2, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, np.inf]
 WIND_ROSE_SPEED_LABELS_MPS = [
     "Calm (<0.2 m/s)",
@@ -13647,16 +13617,12 @@ def _wind_rose_direction_categories(direction: pd.Series) -> pd.Categorical:
     )
 
 
-def _wind_rose_speed_bins_mph(speed_mps: pd.Series, num_bins: int = 6) -> tuple[list[float], list[str]]:
-    return WIND_ROSE_SPEED_BINS_MPH, WIND_ROSE_SPEED_LABELS
-
-
 def _wind_rose_speed_bins_mps(speed_mps: pd.Series) -> tuple[list[float], list[str]]:
     return WIND_ROSE_SPEED_BINS_MPS, WIND_ROSE_SPEED_LABELS_MPS
 
 
 def _wind_rose_speed_hover_label(speed_label: str) -> str:
-    return WIND_ROSE_SPEED_HOVER_LABELS.get(speed_label, speed_label)
+    return speed_label
 
 
 def create_wind_rose(df):
@@ -14252,8 +14218,12 @@ def render_wind_page():
         st.warning(f"Wind Rose failed to render: {_wr_err}")
 
     if fig is not None:
-        _st_plotly_chart(fig, use_container_width=True,
-                        config={"displayModeBar": True})
+        _st_plotly_chart(
+            fig,
+            use_container_width=True,
+            key="wind_rose_classic_mps_v2",
+            config={"displayModeBar": True},
+        )
         wind_fig_meta = fig.layout.meta if getattr(fig.layout, "meta", None) else {}
         if isinstance(wind_fig_meta, dict) and int(wind_fig_meta.get("moving_hours", 1) or 0) == 0:
             st.caption(
