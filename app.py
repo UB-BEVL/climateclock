@@ -701,6 +701,9 @@ def _apply_global_plot_style(fig_obj: object) -> object:
         # Normalize to a Figure
         if not isinstance(fig_obj, go.Figure):
             fig_obj = go.Figure(fig_obj)
+        layout_meta = getattr(fig_obj.layout, "meta", None)
+        if isinstance(layout_meta, dict) and layout_meta.get("preserve_plot_style"):
+            return fig_obj
 
         template_name = _dashboard_template_name()
         # Apply template (this also sets font colors, bg colors, axes defaults)
@@ -13622,6 +13625,16 @@ WIND_ROSE_SPEED_LABELS_MPS = [
     "10-12 m/s",
     "12+ m/s",
 ]
+WIND_ROSE_SPEED_COLORS_MPS = [
+    "#f46d43",
+    "#fdae61",
+    "#fee08b",
+    "#abdda4",
+    "#66c2a5",
+    "#74add1",
+    "#5e4fa2",
+    "#1f238f",
+]
 
 
 def _wind_rose_direction_categories(direction: pd.Series) -> pd.Categorical:
@@ -13717,33 +13730,20 @@ def create_wind_rose(df):
     direction_totals = wind_percentages.sum(axis=1)
     radial_max = float(direction_totals.max()) if not direction_totals.empty else 0.0
     radial_upper = max(5.0, math.ceil(radial_max / 5.0) * 5.0)
-    radial_ticks = np.arange(0, radial_upper + 0.1, 5)
+    radial_step = 2 if radial_upper <= 14 else 5 if radial_upper <= 35 else 10
+    radial_ticks = np.arange(0, radial_upper + 0.1, radial_step)
 
     # Create wind rose
     fig = go.Figure()
 
-    colors = WIND_ROSE_SPEED_COLORS
-    polar_domain_x = [0.02, 0.76]
-    polar_domain_y = [0.08, 0.92]
+    colors = WIND_ROSE_SPEED_COLORS_MPS
+    polar_domain_x = [0.02, 0.72]
+    polar_domain_y = [0.05, 0.94]
     polar_center_x = sum(polar_domain_x) / 2
     polar_center_y = sum(polar_domain_y) / 2
+    polar_radius_y = (polar_domain_y[1] - polar_domain_y[0]) / 2
 
-    fig.add_trace(
-        go.Barpolar(
-            r=[0] * len(dir_labels),
-            theta=theta_degrees,
-            width=[sector_width] * len(dir_labels),
-            customdata=dir_labels,
-            name=_wind_rose_speed_hover_label(calm_label),
-            marker_color=colors[0],
-            marker_line_width=0,
-            opacity=0.86,
-            showlegend=bool(calm_pct > 0),
-            hoverinfo="skip",
-        )
-    )
-
-    for i, speed_cat in enumerate(moving_speed_labels, start=1):
+    for i, speed_cat in enumerate(moving_speed_labels):
         hover_speed = _wind_rose_speed_hover_label(speed_cat)
         values = wind_percentages[speed_cat].reindex(dir_labels, fill_value=0).to_numpy(dtype=float)
         has_data = float(np.nansum(values)) > 0
@@ -13755,9 +13755,9 @@ def create_wind_rose(df):
                 customdata=dir_labels,
                 name=hover_speed,
                 marker_color=colors[i % len(colors)],
-                marker_line_color="rgba(8, 13, 18, 0.58)",
-                marker_line_width=1,
-                opacity=0.86 if has_data else 0.55,
+                marker_line_color="rgba(31, 41, 55, 0.55)",
+                marker_line_width=0.8,
+                opacity=0.92 if has_data else 0.45,
                 showlegend=bool(has_data),
                 hovertemplate=(
                     "Direction: %{customdata}<br>"
@@ -13769,6 +13769,24 @@ def create_wind_rose(df):
             )
         )
 
+    for tick in radial_ticks:
+        if tick <= 0:
+            continue
+        fig.add_annotation(
+            text=f"{int(tick)}%",
+            x=polar_center_x,
+            y=polar_center_y + (float(tick) / radial_upper) * polar_radius_y,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            align="center",
+            font=dict(size=9, color="#111827"),
+            bgcolor="#ffffff",
+            bordercolor="#111827",
+            borderwidth=1,
+            borderpad=1,
+        )
+
     fig.add_annotation(
         text=f"<b>{'No moving wind' if moving_df.empty else 'Calm'}</b><br>{calm_pct:.1f}%",
         x=polar_center_x,
@@ -13777,10 +13795,20 @@ def create_wind_rose(df):
         yref="paper",
         showarrow=False,
         align="center",
-        font=dict(size=13, color="#f8fafc"),
-        bgcolor="rgba(11, 20, 27, 0.82)",
-        bordercolor="rgba(94, 234, 212, 0.45)",
-        borderpad=5,
+        font=dict(size=12, color="#111827"),
+        bgcolor="rgba(255, 255, 255, 0.9)",
+        bordercolor="rgba(17, 24, 39, 0.55)",
+        borderpad=4,
+    )
+    fig.add_annotation(
+        text="Radial scale is % of time.",
+        x=0.795,
+        y=0.62,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        align="left",
+        font=dict(size=11, color="#111827"),
     )
 
     fig.update_layout(
@@ -13790,9 +13818,10 @@ def create_wind_rose(df):
             "y": 0.98,
             "xanchor": "center",
             "yanchor": "top",
+            "font": dict(size=18, color="#111827", family=CHART_FONT_FAMILY),
         },
         showlegend=True,
-        font=dict(size=12, color="#e5edf5", family=CHART_FONT_FAMILY),
+        font=dict(size=12, color="#111827", family=CHART_FONT_FAMILY),
         legend_font_size=11,
         polar=dict(
             domain=dict(x=polar_domain_x, y=polar_domain_y),
@@ -13803,10 +13832,11 @@ def create_wind_rose(df):
                 tickmode="array",
                 tickvals=radial_ticks,
                 ticktext=[f"{int(i)}%" for i in radial_ticks],
-                gridcolor="rgba(148, 163, 184, 0.22)",
-                linecolor="rgba(148, 163, 184, 0.32)",
-                tickfont=dict(size=11, color="#cbd5e1"),
-                angle=45,
+                showticklabels=False,
+                gridcolor="rgba(107, 114, 128, 0.72)",
+                linecolor="rgba(17, 24, 39, 0.72)",
+                tickfont=dict(size=10, color="#111827"),
+                angle=90,
             ),
             angularaxis=dict(
                 direction="clockwise",
@@ -13814,36 +13844,38 @@ def create_wind_rose(df):
                 tickmode="array",
                 tickvals=theta_degrees,
                 ticktext=dir_labels,
-                gridcolor="rgba(148, 163, 184, 0.16)",
-                linecolor="rgba(148, 163, 184, 0.32)",
-                tickfont=dict(size=11, color="#f8fafc"),
+                gridcolor="rgba(107, 114, 128, 0.72)",
+                linecolor="rgba(17, 24, 39, 0.72)",
+                tickfont=dict(size=11, color="#111827"),
             ),
-            bgcolor="rgba(0,0,0,0)",  # Set polar area background to transparent
+            bgcolor="#ffffff",
         ),
         autosize=True,
         barmode="stack",
-        height=600,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        height=620,
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
         legend=dict(
-            title=dict(text="Wind speed", font=dict(size=12)),
+            title=dict(text="Wind Speed (m/s)", font=dict(size=12, color="#111827")),
             orientation="v",
             yanchor="top",
             y=0.9,
             xanchor="left",
-            x=0.81,
-            bgcolor="rgba(11, 20, 27, 0.78)",
-            bordercolor="rgba(196, 209, 214, 0.18)",
+            x=0.785,
+            bgcolor="rgba(255, 255, 255, 0.96)",
+            bordercolor="rgba(17, 24, 39, 0.45)",
             borderwidth=1,
+            font=dict(color="#111827", size=11),
             itemclick=False,
             itemdoubleclick=False,
         ),
-        margin=dict(l=24, r=210, t=72, b=32),
+        margin=dict(l=28, r=220, t=70, b=34),
         meta=dict(
             wind_speed_col=str(wind_spd_col),
             wind_dir_col=str(wind_dir_col),
             calm_pct=calm_pct,
             moving_hours=int(len(moving_df)),
+            preserve_plot_style=True,
         ),
     )
 
