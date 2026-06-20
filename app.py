@@ -13611,6 +13611,18 @@ WIND_ROSE_SPEED_HOVER_LABELS = {
     "Strong breeze+": "Strong breeze+ (13+ mph)",
 }
 
+WIND_ROSE_SPEED_BINS_MPS = [0.0, 0.2, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, np.inf]
+WIND_ROSE_SPEED_LABELS_MPS = [
+    "Calm (<0.2 m/s)",
+    "0.2-2 m/s",
+    "2-4 m/s",
+    "4-6 m/s",
+    "6-8 m/s",
+    "8-10 m/s",
+    "10-12 m/s",
+    "12+ m/s",
+]
+
 
 def _wind_rose_direction_categories(direction: pd.Series) -> pd.Categorical:
     direction = _normalize_wind_dir(direction)
@@ -13624,6 +13636,10 @@ def _wind_rose_direction_categories(direction: pd.Series) -> pd.Categorical:
 
 def _wind_rose_speed_bins_mph(speed_mps: pd.Series, num_bins: int = 6) -> tuple[list[float], list[str]]:
     return WIND_ROSE_SPEED_BINS_MPH, WIND_ROSE_SPEED_LABELS
+
+
+def _wind_rose_speed_bins_mps(speed_mps: pd.Series) -> tuple[list[float], list[str]]:
+    return WIND_ROSE_SPEED_BINS_MPS, WIND_ROSE_SPEED_LABELS_MPS
 
 
 def _wind_rose_speed_hover_label(speed_label: str) -> str:
@@ -13653,29 +13669,29 @@ def create_wind_rose(df):
     df[wind_dir_col] = _normalize_wind_dir(df[wind_dir_col])
 
     df = df.dropna(subset=[wind_spd_col, wind_dir_col])
-    # Convert wind speed from m/s to mph
-    df.loc[:, "2dSpeed_mph"] = df[wind_spd_col] * 2.23694
+    df.loc[:, "__wind_speed_mps"] = pd.to_numeric(df[wind_spd_col], errors="coerce")
 
-    df = df[(df["2dSpeed_mph"] >= 0) & (df["2dSpeed_mph"] < 999)]
+    df = df[(df["__wind_speed_mps"] >= 0) & (df["__wind_speed_mps"] < 999)]
     if df.empty:
         return None
 
     dir_labels = WIND_ROSE_DIR_LABELS
+    theta_degrees = np.arange(0, 360, 22.5)
+    sector_width = 20.0
 
-    # Use low-wind-sensitive mph classes so sheltered files do not collapse into one calm bin.
-    speed_bins, speed_labels = _wind_rose_speed_bins_mph(df[wind_spd_col])
+    speed_bins, speed_labels = _wind_rose_speed_bins_mps(df[wind_spd_col])
 
     calm_label = speed_labels[0]
     moving_speed_labels = speed_labels[1:]
-    calm_cutoff_mph = speed_bins[1]
+    calm_cutoff_mps = speed_bins[1]
     total_count = len(df)
-    calm_pct = float((df["2dSpeed_mph"] <= calm_cutoff_mph).sum() / total_count * 100) if total_count else 0.0
-    moving_df = df[df["2dSpeed_mph"] > calm_cutoff_mph].copy()
+    calm_pct = float((df["__wind_speed_mps"] <= calm_cutoff_mps).sum() / total_count * 100) if total_count else 0.0
+    moving_df = df[df["__wind_speed_mps"] > calm_cutoff_mps].copy()
 
     # Calm wind has no meaningful direction, so keep it out of directional sectors.
     moving_df.loc[:, "dir_cat"] = _wind_rose_direction_categories(moving_df[wind_dir_col])
     moving_df.loc[:, "speed_cat"] = pd.cut(
-        moving_df["2dSpeed_mph"],
+        moving_df["__wind_speed_mps"],
         bins=speed_bins[1:],
         labels=moving_speed_labels,
         include_lowest=True,
@@ -13698,7 +13714,8 @@ def create_wind_rose(df):
     if total_count == 0:
         return None
     wind_percentages = wind_data / total_count * 100
-    radial_max = float(wind_percentages.max().max()) if not wind_percentages.empty else 0.0
+    direction_totals = wind_percentages.sum(axis=1)
+    radial_max = float(direction_totals.max()) if not direction_totals.empty else 0.0
     radial_upper = max(5.0, math.ceil(radial_max / 5.0) * 5.0)
     radial_ticks = np.arange(0, radial_upper + 0.1, 5)
 
@@ -13714,8 +13731,9 @@ def create_wind_rose(df):
     fig.add_trace(
         go.Barpolar(
             r=[0] * len(dir_labels),
-            theta=dir_labels,
-            width=[20] * len(dir_labels),
+            theta=theta_degrees,
+            width=[sector_width] * len(dir_labels),
+            customdata=dir_labels,
             name=_wind_rose_speed_hover_label(calm_label),
             marker_color=colors[0],
             marker_line_width=0,
@@ -13727,13 +13745,14 @@ def create_wind_rose(df):
 
     for i, speed_cat in enumerate(moving_speed_labels, start=1):
         hover_speed = _wind_rose_speed_hover_label(speed_cat)
-        values = wind_percentages[speed_cat]
-        has_data = values.sum() > 0
+        values = wind_percentages[speed_cat].reindex(dir_labels, fill_value=0).to_numpy(dtype=float)
+        has_data = float(np.nansum(values)) > 0
         fig.add_trace(
             go.Barpolar(
                 r=values,
-                theta=dir_labels,
-                width=[20] * len(dir_labels),
+                theta=theta_degrees,
+                width=[sector_width] * len(dir_labels),
+                customdata=dir_labels,
                 name=hover_speed,
                 marker_color=colors[i % len(colors)],
                 marker_line_color="rgba(8, 13, 18, 0.58)",
@@ -13741,7 +13760,7 @@ def create_wind_rose(df):
                 opacity=0.86 if has_data else 0.55,
                 showlegend=bool(has_data),
                 hovertemplate=(
-                    "Direction: %{theta}<br>"
+                    "Direction: %{customdata}<br>"
                     + "Speed: "
                     + hover_speed
                     + "<br>"
@@ -13787,11 +13806,14 @@ def create_wind_rose(df):
                 gridcolor="rgba(148, 163, 184, 0.22)",
                 linecolor="rgba(148, 163, 184, 0.32)",
                 tickfont=dict(size=11, color="#cbd5e1"),
-                angle=90,
+                angle=45,
             ),
             angularaxis=dict(
                 direction="clockwise",
                 rotation=90,
+                tickmode="array",
+                tickvals=theta_degrees,
+                ticktext=dir_labels,
                 gridcolor="rgba(148, 163, 184, 0.16)",
                 linecolor="rgba(148, 163, 184, 0.32)",
                 tickfont=dict(size=11, color="#f8fafc"),
