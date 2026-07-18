@@ -3899,46 +3899,13 @@ def render_landing_hero():
 
 def render_sidebar_filters(epw_loaded: bool) -> None:
     with st.expander("⚙️ Advanced Controls", expanded=False):
-        st.caption("Temperature analysis controls for threshold tuning and unit selection.")
-        temp_unit = st.radio(
+        st.radio(
             "Temperature units",
             options=["C", "F"],
             index=0 if _temp_unit() == "C" else 1,
             format_func=lambda u: "Celsius (°C)" if u == "C" else "Fahrenheit (°F)",
             key="temperature_unit",
         )
-        current_threshold_c = float(st.session_state.get("custom_overheat_threshold", 30))
-        unit_label = "°F" if temp_unit == "F" else "°C"
-        if temp_unit == "F":
-            threshold_slider = st.slider(
-                f"Focus comfort threshold ({unit_label})",
-                min_value=int(round(_c_to_f(24))),
-                max_value=int(round(_c_to_f(36))),
-                value=int(round(_c_to_f(current_threshold_c))),
-                step=1,
-                help="Adds this threshold across comfort analytics.",
-            )
-            threshold_c = _f_to_c(threshold_slider)
-        else:
-            threshold_slider = st.slider(
-                f"Focus comfort threshold ({unit_label})",
-                min_value=24,
-                max_value=36,
-                value=int(round(current_threshold_c)),
-                step=1,
-                help="Adds this threshold across comfort analytics.",
-            )
-            threshold_c = float(threshold_slider)
-        st.session_state["custom_overheat_threshold"] = float(threshold_c)
-
-        _phase_a_busy = bool(st.session_state.get("is_loading") or st.session_state.get("load_requested"))
-        if not _phase_a_busy:
-            st.caption("All temperature-derived charts now reflect this additional heat load until you toggle it off.")
-
-        if not epw_loaded:
-            st.caption("Load a weather file to unlock the temperature analysis sliders.")
-
-        st.markdown("<div class='cc-advanced-controls-bottom'></div>", unsafe_allow_html=True)
 
     base_cdf = st.session_state.get("cdf_raw")
     if base_cdf is not None:
@@ -11030,6 +10997,7 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
     import plotly.graph_objects as go
     import numpy as np
     st.markdown("---")
+    st.markdown(f"**{title_suffix}**")
     tmp = pd.DataFrame({"doy": cdf.index.dayofyear, "hour": cdf.index.hour, "val": cdf[col]}).dropna()
     if tmp.empty:
         st.info(f"No data for {title_suffix}.")
@@ -11087,7 +11055,7 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
     month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
     fig.update_xaxes(tickvals=month_days, ticktext=month_names, ticklen=5, range=[0.5, 366.5], showgrid=False)
     fig.update_yaxes(tickvals=[0, 6, 12, 18, 23], ticktext=["12AM", "6AM", "12PM", "6PM", "11PM"], autorange="reversed", ticklen=5, range=[-0.5, 23.5], showgrid=False)
-    fig.update_layout(height=450, margin=dict(t=30, b=40, l=50, r=20), legend=dict(y=1, yanchor="top", x=1.02, xanchor="left", traceorder="reversed"))
+    fig.update_layout(title=title_suffix, height=450, margin=dict(t=55, b=40, l=50, r=20), legend=dict(y=1, yanchor="top", x=1.02, xanchor="left", traceorder="reversed"))
     clean_loc = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
     _st_plotly_chart(fig, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{clean_loc}_{col}_{key_suffix}", "format": "png"}, "displayModeBar": True})
     _add_manual_pdf_figure(f"{col} Annual Heatmap", fig)
@@ -11106,6 +11074,7 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
 def _render_heatmap(cdf, col, title_suffix, y_label, color_scale):
     import plotly.graph_objects as go
     st.markdown("---")
+    st.markdown(f"**{title_suffix}**")
     tmp = pd.DataFrame({"doy": cdf.index.dayofyear, "hour": cdf.index.hour, "val": cdf[col]}).dropna()
     if tmp.empty:
         st.info(f"No data for {title_suffix}.")
@@ -11911,7 +11880,7 @@ def render_solar_page():
             x=[az_unit(a)[0] * 1.12 for _, a in cardinals],
             y=[az_unit(a)[1] * 1.12 for _, a in cardinals],
             text=[t for t, _ in cardinals], mode="text", showlegend=False, hoverinfo="skip",
-            textfont=dict(size=16, color="#e5e7eb", family="Arial Black")
+            textfont=dict(size=16, color="#3d2e22", family="Arial Black")
         ))
 
         # Altitude ring labels (placed toward southern rim for readability)
@@ -12249,12 +12218,12 @@ def render_solar_page():
                 y=1.02,
                 xanchor="left",
                 x=0,
-                bgcolor="rgba(0,0,0,0.55)",
-                bordercolor="#444",
+                bgcolor="rgba(250, 246, 241, 0.9)",
+                bordercolor="rgba(192, 130, 90, 0.2)",
                 borderwidth=1,
-                font=dict(color="#e5e7eb")
+                font=dict(color="#3d2e22")
             ),
-            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#e5e7eb"),
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#3d2e22"),
             uirevision="sunpath_2d_arch"
         )
 
@@ -12719,26 +12688,26 @@ def render_solar_page():
                 y=1.02,
                 xanchor="center",
                 x=0.5,
-                bgcolor="rgba(13,17,23,0.85)",
-                bordercolor="#2a2f3a",
+                bgcolor="rgba(250, 246, 241, 0.9)",
+                bordercolor="rgba(192, 130, 90, 0.2)",
                 borderwidth=1,
-                font=dict(color="#e5e7eb", size=12)
+                font=dict(color=CHART_LIGHT_TEXT, size=12)
             ),
             scene=dict(
-                xaxis=dict(range=[-1.2, 1.2], visible=True, showbackground=False, showgrid=True, gridcolor="#475569", zeroline=True, zerolinecolor="#94a3b8", title="", tickfont=dict(color="#94a3b8")),
-                yaxis=dict(range=[-1.2, 1.2], visible=True, showbackground=False, showgrid=True, gridcolor="#475569", zeroline=True, zerolinecolor="#94a3b8", title="", tickfont=dict(color="#94a3b8")),
+                xaxis=dict(range=[-1.2, 1.2], visible=True, showbackground=False, showgrid=True, gridcolor="rgba(192, 130, 90, 0.18)", zeroline=True, zerolinecolor="rgba(192, 130, 90, 0.35)", title="", tickfont=dict(color="#7a6555")),
+                yaxis=dict(range=[-1.2, 1.2], visible=True, showbackground=False, showgrid=True, gridcolor="rgba(192, 130, 90, 0.18)", zeroline=True, zerolinecolor="rgba(192, 130, 90, 0.35)", title="", tickfont=dict(color="#7a6555")),
                 zaxis=dict(range=[0.0, 1.1], visible=False),
                 aspectmode="manual",
                 aspectratio=dict(x=1, y=1, z=0.5),
-                bgcolor="#0d1117",
+                bgcolor=CHART_LIGHT_BG,
             ),
             scene_camera=dict(
                 eye=camera_eye if camera_eye is not None else dict(x=1.2, y=1.8, z=0.8),
                 up=dict(x=0, y=0, z=1)
             ),
-            plot_bgcolor="#0d1117",
-            paper_bgcolor="#0d1117",
-            font=dict(color="#e5e7eb"),
+            plot_bgcolor=CHART_LIGHT_BG,
+            paper_bgcolor=CHART_LIGHT_BG,
+            font=dict(color=CHART_LIGHT_TEXT),
             dragmode="turntable",
             scene_dragmode="turntable",
             uirevision="sunpath3d"
@@ -13499,7 +13468,7 @@ def render_solar_page():
             yaxis_title="Irradiance (W/m²)", xaxis_title="",
             height=360, margin=dict(l=0, r=0, t=40, b=0),
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#f8fafc"),
+            font=dict(color=CHART_LIGHT_TEXT),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         fig_solar.update_xaxes(showgrid=False, linecolor="rgba(255,255,255,0.2)",
@@ -14051,10 +14020,14 @@ def render_psychrometrics_interactive_section(
                         verts = all_zones[target_id]["polygon"]
                         xs = [v[0] for v in verts] + [verts[0][0]]
                         ys = [v[1] for v in verts] + [verts[0][1]]
+                        _zone_color = all_zones[target_id]["color"]
+                        _zr = int(_zone_color[1:3], 16)
+                        _zg = int(_zone_color[3:5], 16)
+                        _zb = int(_zone_color[5:7], 16)
                         fig_psy.add_trace(go.Scatter(
                             x=xs, y=ys, mode="lines",
-                            line=dict(width=2, color=all_zones[target_id]["color"]),
-                            fill="toself", fillcolor=f"rgba({int(all_zones[target_id]["color"][1:3],16)},{int(all_zones[target_id]["color"][3:5],16)},{int(all_zones[target_id]["color"][5:7],16)},0.12)",
+                            line=dict(width=2, color=_zone_color),
+                            fill="toself", fillcolor=f"rgba({_zr},{_zg},{_zb},0.12)",
                             name=active_ds, showlegend=False, hoverinfo="name",
                         ))
                         # Annotation
@@ -14483,7 +14456,7 @@ def render_psychrometrics_interactive_section(
         showlegend=False,
         hovermode="closest",
         paper_bgcolor="rgba(0,0,0,0)",
-        title=dict(text="Psychrometric Chart – ASHRAE Style", x=0.01, xanchor="left", yanchor="top", font=dict(size=18, color="#ffffff")),
+        title=dict(text="Psychrometric Chart – ASHRAE Style", x=0.01, xanchor="left", yanchor="top", font=dict(size=18, color=CHART_LIGHT_TEXT)),
     )
 
     clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
