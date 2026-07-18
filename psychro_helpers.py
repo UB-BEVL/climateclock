@@ -223,3 +223,146 @@ def wetbulb_curve(T_axis, twb_target, P_kPa, n_pts=200):
         t_out.append(t)
         w_out.append(gpkg(np.array([w_val]))[0])
     return np.array(t_out), np.array(w_out)
+
+
+def get_design_strategy_polygons(P_kPa=101.325, Trm=20.0):
+    """Return dict of strategy_name -> list of (T, w_gpkg) polygon vertices.
+    These define the boundary polygons for the 4 climate design strategies.
+    """
+    cz = _comfort_zone(Trm)
+    cz_tlo, cz_thi = cz[0][0], cz[2][0]
+    
+    def ws(t):
+        return gpkg(w_sat(np.array([t]), P_kPa))[0]
+
+    strategies = {}
+    
+    # 1. Natural Ventilation (covers comfort zone + ventilation cooling zone)
+    # Typically cz_tlo to cz_thi + 2°C, and humidity 4.0 to min(ws(T), 12.0) g/kg
+    strategies["Natural Ventilation"] = [
+        (cz_tlo, 4.0),
+        (cz_tlo, min(ws(cz_tlo), 12.0)),
+        (cz_thi + 2, min(ws(cz_thi + 2), 12.0)),
+        (cz_thi + 2, 4.0)
+    ]
+    
+    # 2. Direct Evaporative Cooling (hot, dry region)
+    # Typically cz_thi to 44°C, humidity 0 to 8-10 g/kg
+    strategies["Direct Evaporative Cooling"] = [
+        (cz_thi, 0.0),
+        (cz_thi, 8.0),
+        (34.0, 10.0),
+        (44.0, 4.0),
+        (44.0, 0.0)
+    ]
+    
+    # 3. Heating (all cold hours below comfort limit)
+    # Typically -15°C to cz_tlo, humidity 0 to 12.0 g/kg
+    strategies["Heating"] = [
+        (-15.0, 0.0),
+        (-15.0, 12.0),
+        (cz_tlo, 12.0),
+        (cz_tlo, 0.0)
+    ]
+    
+    # 4. Dehumidification (warm, humid region above comfort limits)
+    # Typically cz_tlo to 44°C, humidity > 12.0 g/kg up to saturation line (clipped at 25 g/kg)
+    t_vals = np.linspace(cz_tlo, 44.0, 8)
+    sat_pts = [(t, min(ws(t), 25.0)) for t in t_vals]
+    strategies["Dehumidification"] = [
+        (cz_tlo, 12.0)
+    ] + sat_pts + [
+        (44.0, 12.0)
+    ]
+    
+    return strategies
+
+# ──────────────── Unified Strategy Zones ────────────────
+
+# Color palette for the 16 strategies (high-contrast, dark‑theme friendly)
+strategy_color_map = {
+    "Unclassified": "#94a3b8",
+    "Dehumidification": "#9467bd",
+    "Active Solar": "#e377c2",
+    "Passive Solar Heating": "#bcbd22",
+    "Internal Gains": "#8c564b",
+    "Comfort Zone": "#2ca02c",
+    "Mass Cooling": "#ff7f0e",
+    "Evaporative Cooling": "#1f77b4",
+    "Natural Ventilation": "#17becf",
+    "Heating": "#f97316",
+    "Humidification": "#3b82f6",
+    "Direct Evaporative Cooling": "#ff9896",
+    "Night Ventilation & Mass Cooling": "#c5b0d5",
+    "A/C & Dehumidification": "#8c564b",
+    "Passive Solar Heating (Alt)": "#d62728",
+    "Active Solar (Alt)": "#2ca02c",
+}
+
+def get_all_strategy_zones(P_kPa=101.325, Trm=20.0):
+    """Return a dict mapping a numeric ID (as string) to a dict with
+    - name: human readable strategy name
+    - polygon: list of (T, w_gpkg) vertices
+    - color: hex string for Plotly outlines/fills
+    This combines the 4 design‑strategy polygons and the Givoni bioclimatic zones
+    (total 16 entries)."""
+    # 4 design‑strategy polygons from existing helper
+    design_strategies = get_design_strategy_polygons(P_kPa, Trm)
+
+    # Givoni zones (already contain many of the same names; we will keep them distinct)
+    givoni = givoni_zones(P_kPa, Trm)
+
+    # Build a combined ordered dict. The ordering follows the IDs defined in the
+    # implementation plan (1‑16). We'll map IDs manually for clarity.
+    combined = {}
+    # Mapping of IDs to names (adjust to match the reference video order)
+    id_to_name = [
+        "Comfort Zone",
+        "Natural Ventilation",
+        "Direct Evaporative Cooling",
+        "Mass Cooling",
+        "Night Ventilation & Mass Cooling",
+        "Dehumidification",
+        "Heating",
+        "Humidification",
+        "Passive Solar Heating",
+        "Active Solar",
+        "Internal Gains",
+        "Evaporative Cooling",
+        "Unclassified",
+        "A/C & Dehumidification",
+        "Passive Solar Heating (Alt)",
+        "Active Solar (Alt)"
+    ]
+    # Helper to fetch polygon and color
+    for idx, name in enumerate(id_to_name, start=1):
+        # Prefer Givoni definition if present, else design‑strategy definition
+        polygon = None
+        if name in givoni:
+            polygon = givoni[name]
+        elif name in design_strategies:
+            polygon = design_strategies[name]
+        else:
+            # Some names are placeholders; skip if not found
+            continue
+        color = strategy_color_map.get(name, "#ffffff")
+        combined[str(idx)] = {
+            "name": name,
+            "polygon": polygon,
+            "color": color,
+        }
+    return combined
+
+def compute_centroids(zones_dict):
+    """Compute simple centroid (average of vertices) for each zone.
+    Returns a dict mapping zone id (string) to (x, y) coordinates.
+    """
+    centroids = {}
+    for zid, info in zones_dict.items():
+        verts = info["polygon"]
+        if not verts:
+            continue
+        xs = [v[0] for v in verts]
+        ys = [v[1] for v in verts]
+        centroids[zid] = (sum(xs) / len(xs), sum(ys) / len(ys))
+    return centroids
