@@ -125,7 +125,7 @@ def placeholder_figure(message):
     fig.add_annotation(text=message, x=0.5, y=0.5, xref="paper", yref="paper",
                        showarrow=False, font=dict(size=16, color="gray"))
     fig.update_layout(xaxis_visible=False, yaxis_visible=False,
-                      plot_bgcolor="white", height=400)
+                      plot_bgcolor=CHART_LIGHT_BG, height=400)
     return fig
 
 def resolve_longwave_column(df):
@@ -630,9 +630,9 @@ PRIMARY_NAV_GROUPS = [
     (
         "Start",
         [
-            ("Map", "Select weather file"),
+            ("Location", "Select weather file"),
             ("Overview", "Overview"),
-            ("Dashboard", "Dashboard"),
+            ("Detail View", "Dashboard"),
         ],
     ),
     (
@@ -652,7 +652,7 @@ PRIMARY_NAV_GROUPS = [
     (
         "Outputs",
         [
-            ("Export", "Export"),
+            ("Report", "Export"),
         ],
     ),
 ]
@@ -3496,7 +3496,7 @@ div[data-testid="stMetric"] {
     font-size: 1.35rem !important;
 }
 
-div[role="radiogroup"][aria-label="Dashboard view"] {
+div[role="radiogroup"][aria-label="Detail view"] {
     display: flex !important;
     flex-wrap: wrap;
     gap: 0.5rem !important;
@@ -3507,7 +3507,7 @@ div[role="radiogroup"][aria-label="Dashboard view"] {
     border-radius: 8px;
 }
 
-div[role="radiogroup"][aria-label="Dashboard view"] label {
+div[role="radiogroup"][aria-label="Detail view"] label {
     min-height: 38px;
     padding: 0.48rem 0.75rem !important;
     border: 1px solid transparent;
@@ -3516,11 +3516,11 @@ div[role="radiogroup"][aria-label="Dashboard view"] label {
     font-weight: 650;
 }
 
-div[role="radiogroup"][aria-label="Dashboard view"] label > div:first-child {
+div[role="radiogroup"][aria-label="Detail view"] label > div:first-child {
     display: none !important;
 }
 
-div[role="radiogroup"][aria-label="Dashboard view"] label:has(input:checked) {
+div[role="radiogroup"][aria-label="Detail view"] label:has(input:checked) {
     color: var(--ci-text) !important;
     background: rgba(74, 144, 164, 0.1) !important;
     border-color: rgba(74, 144, 164, 0.3);
@@ -3579,6 +3579,40 @@ div[role="radiogroup"][aria-label="Dashboard view"] label:has(input:checked) {
 
 [data-testid="stPlotlyChart"] svg.main-svg {
     min-height: 420px !important;
+}
+
+[data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]),
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] > div,
+[data-testid="stCaptionContainer"] p,
+[data-testid="stMarkdownContainer"] p {
+    max-width: 100% !important;
+    min-width: 0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-break: normal !important;
+}
+
+[data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]),
+[data-testid="stCaptionContainer"] {
+    overflow-x: hidden !important;
+}
+
+[data-testid="stCaptionContainer"] p {
+    line-height: 1.45 !important;
+}
+
+.cc-chart-caption {
+    width: 100%;
+    max-width: 100%;
+    margin: 0.35rem 0 0;
+    padding: 0.72rem 0 0.05rem;
+    border-top: 1px solid rgba(139, 90, 43, 0.12);
+    color: var(--ci-muted, #6b5a4b);
+    font-size: 0.84rem;
+    line-height: 1.5;
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 .stButton button,
@@ -3854,6 +3888,21 @@ def get_clean_city_name() -> str:
     return full_label
 
 
+def _nav_display_label(label: str, page: str, epw_loaded: bool) -> str:
+    """Return the sidebar label while keeping internal page names stable."""
+    if page == DEFAULT_PAGE:
+        if epw_loaded or st.session_state.get("selected_station") or st.session_state.get("sel_station"):
+            city_label = get_clean_city_name()
+            if _is_valid_label_value(city_label) and city_label not in {"Unknown Location", "Location: N/A"}:
+                return city_label
+        return "Location"
+    if page == "Dashboard":
+        return "Detail View"
+    if page == "Export":
+        return "Report"
+    return label
+
+
 def render_header():
     logo_src = f"data:image/png;base64,{LOGO_PRIMARY}" if LOGO_PRIMARY else ""
     ub_src = f"data:image/png;base64,{LOGO_SECONDARY}" if LOGO_SECONDARY else ""
@@ -3952,23 +4001,6 @@ def render_sidebar():
             current_page = DEFAULT_PAGE
         st.session_state["nav_page"] = current_page
 
-        header = st.session_state.get("header", {})
-        loc_meta = header.get("location", {}) if isinstance(header, dict) else {}
-        loc_city = (
-            (header.get("city") if isinstance(header, dict) else None)
-            or loc_meta.get("city")
-            or loc_meta.get("state_province")
-            or ""
-        )
-        loc_country = (
-            (header.get("country") if isinstance(header, dict) else None)
-            or loc_meta.get("country")
-            or ""
-        )
-        loc_label = ", ".join([p for p in [loc_city, loc_country] if p]) or "Weather Workspace"
-        status_label = "EPW loaded" if epw_loaded else "No file loaded"
-        source_label = st.session_state.get("source_label") or "Select a station or upload EPW"
-
         st.markdown(
             f"""
             <div class="cc-sidebar-brand-zone">
@@ -3979,31 +4011,25 @@ def render_sidebar():
                         <div class="cc-sidebar-subtitle">Weather Workspace</div>
                     </div>
                 </div>
-                <div class="cc-sidebar-status">
-                    <span class="cc-status-dot {'is-ready' if epw_loaded else ''}"></span>
-                    <div>
-                        <strong>{status_label}</strong>
-                        <span>{source_label}</span>
-                    </div>
-                </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
         if current_page == "Dashboard" and st.session_state.get("pdf_dashboard_autobuild_pending"):
-            st.info("Building the full report. You will return to Export automatically.")
+            st.info("Building the full report. You will return to Report automatically.")
 
         for label, page in NAV_ITEMS:
             disabled = (not epw_loaded and page != DEFAULT_PAGE)
             is_active = current_page == page
             button_type = "primary" if is_active else "secondary"
+            display_label = _nav_display_label(label, page, epw_loaded)
             help_text = None
             if page == "Psychrometrics":
                 help_text = "Charts showing how air temperature and humidity interact to affect human comfort."
             key_slug = re.sub(r"[^a-zA-Z0-9_]+", "_", f"nav_{page}").strip("_").lower()
             if st.button(
-                label,
+                display_label,
                 key=key_slug,
                 type=button_type,
                 use_container_width=True,
@@ -4141,8 +4167,8 @@ def _build_station_map_figure(stations: pd.DataFrame, map_height: int) -> go.Fig
         dragmode="pan",
         margin=dict(l=0, r=0, t=12, b=0),
         height=map_height,
-        paper_bgcolor="#0b0f1a",
-        plot_bgcolor="#0b0f1a",
+        paper_bgcolor=CHART_LIGHT_BG,
+        plot_bgcolor=CHART_LIGHT_BG,
         hovermode="closest",
         clickmode="event+select",
         showlegend=False,
@@ -6820,7 +6846,7 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                     showarrow=False,
                     align="right",
                     font=dict(size=11),
-                    bgcolor="white",
+                    bgcolor=CHART_LIGHT_BG,
                     bordercolor="gray",
                 )
                 fig_dd.update_layout(title="Heating and Cooling Degree Days", barmode="group", height=520)
@@ -8488,6 +8514,385 @@ def _nav_jump_button(label: str, page: str, *, key: str, disabled: bool = False)
         _rerun()
 
 
+def _longest_true_run(values: Iterable[bool]) -> int:
+    longest = 0
+    current = 0
+    for value in values:
+        if bool(value):
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
+def _monthly_grouped_series(cdf: pd.DataFrame, series: pd.Series, agg: str = "mean", fill_value: float = np.nan) -> pd.Series:
+    out_index = pd.Index(range(1, 13), name="month")
+    if series is None or series.empty:
+        return pd.Series(fill_value, index=out_index, dtype=float)
+    month = _month_series_for_cdf(cdf, series.index)
+    local = pd.DataFrame({"month": month, "value": series}).dropna()
+    if local.empty:
+        return pd.Series(fill_value, index=out_index, dtype=float)
+    grouped_src = local.groupby("month")["value"]
+    if agg == "sum":
+        grouped = grouped_src.sum()
+    elif agg == "min":
+        grouped = grouped_src.min()
+    elif agg == "max":
+        grouped = grouped_src.max()
+    else:
+        grouped = grouped_src.mean()
+    return grouped.reindex(out_index, fill_value=fill_value).astype(float)
+
+
+def _overview_dewpoint_series(cdf: pd.DataFrame) -> pd.Series:
+    dew_col = get_metric_column(cdf, ["dewpoint", "dew_point", "temp_dew", "dew_temperature"])
+    dew = _metric_series_from_hourly(cdf, dew_col, "temp")
+    if not dew.empty:
+        return dew
+
+    temp_col = get_metric_column(cdf, ["drybulb", "dry_bulb", "temp", "temperature"])
+    rh_col = get_metric_column(cdf, ["relhum", "relative_humidity", "rh"])
+    temp = _metric_series_from_hourly(cdf, temp_col, "temp")
+    rh = _metric_series_from_hourly(cdf, rh_col, "rh")
+    if temp.empty or rh.empty:
+        return pd.Series(dtype=float)
+
+    aligned = pd.concat([temp.rename("temp"), rh.rename("rh")], axis=1).dropna()
+    if aligned.empty:
+        return pd.Series(dtype=float)
+    rh_clip = aligned["rh"].clip(lower=1, upper=100)
+    alpha = np.log(rh_clip / 100.0) + (17.625 * aligned["temp"]) / (243.04 + aligned["temp"])
+    dew_calc = (243.04 * alpha) / (17.625 - alpha)
+    return pd.Series(dew_calc, index=aligned.index, name="dewpoint")
+
+
+def _overview_precipitation_summary(cdf: pd.DataFrame) -> Dict[str, object]:
+    month_index = pd.Index(range(1, 13), name="month")
+    empty_months = pd.Series(0.0, index=month_index)
+    summary: Dict[str, object] = {
+        "available": False,
+        "depth_available": False,
+        "source_col": None,
+        "monthly": empty_months.copy(),
+        "wet_days_by_month": empty_months.copy(),
+        "heavy_days_by_month": empty_months.copy(),
+        "dry_days_by_month": empty_months.copy(),
+        "water_balance": empty_months.copy(),
+        "annual_total_mm": np.nan,
+        "wet_days": 0,
+        "heavy_days": 0,
+        "max_1d_mm": np.nan,
+        "max_3d_mm": np.nan,
+        "max_5d_mm": np.nan,
+        "longest_dry_spell": 0,
+        "wettest_month": None,
+        "driest_month": None,
+        "monthly_label": "Rainfall",
+        "monthly_unit": "mm",
+    }
+
+    precip_col = _precip_depth_column(cdf)
+    precip = _metric_series_from_hourly(cdf, precip_col, "precip")
+    if precip_col and not precip.empty and float(precip.max()) > 0:
+        monthly = _monthly_grouped_series(cdf, precip, "sum", 0.0)
+        summary.update({
+            "available": True,
+            "depth_available": True,
+            "source_col": precip_col,
+            "monthly": monthly,
+            "annual_total_mm": float(monthly.sum()),
+        })
+
+        if isinstance(precip.index, pd.DatetimeIndex):
+            daily = precip.resample("D").sum().dropna()
+            if not daily.empty:
+                wet_mask = daily >= 1.0
+                heavy_mask = daily >= 25.0
+                dry_mask = daily < 1.0
+                wet_by_month = wet_mask.groupby(daily.index.month).sum().reindex(month_index, fill_value=0).astype(float)
+                heavy_by_month = heavy_mask.groupby(daily.index.month).sum().reindex(month_index, fill_value=0).astype(float)
+                dry_by_month = dry_mask.groupby(daily.index.month).sum().reindex(month_index, fill_value=0).astype(float)
+                mean_monthly = max(float(monthly.mean()), 0.1)
+                flood_score = ((monthly / max(float(monthly.max()), 0.1)) * 72.0 + (heavy_by_month / max(float(heavy_by_month.max()), 1.0)) * 28.0).clip(0, 100)
+                days_in_month = pd.Series([calendar.monthrange(2021, m)[1] for m in month_index], index=month_index, dtype=float)
+                rain_deficit = (1.0 - (monthly / mean_monthly)).clip(0, 1)
+                drought_score = ((dry_by_month / days_in_month) * 64.0 + rain_deficit * 36.0).clip(0, 100)
+                water_balance = (flood_score - drought_score).clip(-100, 100)
+
+                summary.update({
+                    "wet_days_by_month": wet_by_month,
+                    "heavy_days_by_month": heavy_by_month,
+                    "dry_days_by_month": dry_by_month,
+                    "water_balance": water_balance,
+                    "wet_days": int(wet_mask.sum()),
+                    "heavy_days": int(heavy_mask.sum()),
+                    "max_1d_mm": float(daily.max()),
+                    "max_3d_mm": float(daily.rolling(3, min_periods=1).sum().max()),
+                    "max_5d_mm": float(daily.rolling(5, min_periods=1).sum().max()),
+                    "longest_dry_spell": _longest_true_run(dry_mask.tolist()),
+                })
+
+        positive_months = monthly[monthly > 0]
+        summary["wettest_month"] = int(monthly.idxmax()) if not monthly.empty else None
+        summary["driest_month"] = int(positive_months.idxmin()) if not positive_months.empty else None
+        return summary
+
+    fallback_col = _precipitable_water_column(cdf)
+    fallback = _metric_series_from_hourly(cdf, fallback_col, "precip")
+    if fallback_col and not fallback.empty and float(fallback.max()) > 0:
+        summary.update({
+            "available": True,
+            "depth_available": False,
+            "source_col": fallback_col,
+            "monthly": _monthly_grouped_series(cdf, fallback, "mean", 0.0),
+            "monthly_label": "Precipitable water",
+            "monthly_unit": "mm",
+        })
+    return summary
+
+
+def _build_overview_weather_by_month_figure(cdf: pd.DataFrame, location_label: str, precip_info: Dict[str, object]) -> go.Figure:
+    months = list(range(1, 13))
+    labels = [calendar.month_abbr[m] for m in months]
+    fig = make_subplots(
+        rows=5,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.035,
+        row_heights=[0.18, 0.20, 0.16, 0.24, 0.18],
+    )
+
+    # Sky-cover composition: clear, mixed, and overcast hours.
+    cloud_col = get_metric_column(cdf, ["totskycvr", "total_sky_cover", "sky_cover", "cloud_cover", "cloud"])
+    cloud = _metric_series_from_hourly(cdf, cloud_col, "")
+    cloud = cloud.mask((cloud < 0) | (cloud > 10)).dropna()
+    if not cloud.empty:
+        cloud_month = _month_series_for_cdf(cdf, cloud.index)
+        cloud_local = pd.DataFrame({"month": cloud_month, "cloud": cloud}).dropna()
+        clear_pct = cloud_local.groupby("month")["cloud"].apply(lambda s: float((s <= 2).mean() * 100)).reindex(months, fill_value=0)
+        mixed_pct = cloud_local.groupby("month")["cloud"].apply(lambda s: float(((s > 2) & (s < 8)).mean() * 100)).reindex(months, fill_value=0)
+        overcast_pct = cloud_local.groupby("month")["cloud"].apply(lambda s: float((s >= 8).mean() * 100)).reindex(months, fill_value=0)
+        for name, values, color in [
+            ("clear", clear_pct, "#83aee3"),
+            ("partly cloudy", mixed_pct, "#cbd9e6"),
+            ("overcast", overcast_pct, "#8f9499"),
+        ]:
+            fig.add_trace(go.Bar(x=months, y=values, name=name, marker_color=color, hovertemplate=f"{name}: %{{y:.0f}}%<extra></extra>"), row=1, col=1)
+    else:
+        fig.add_annotation(text="Sky cover unavailable", x=6.5, y=50, showarrow=False, row=1, col=1)
+
+    # Rainfall ribbon.
+    monthly_precip = precip_info.get("monthly", pd.Series(0.0, index=months))
+    if not isinstance(monthly_precip, pd.Series):
+        monthly_precip = pd.Series(monthly_precip, index=months)
+    monthly_precip = monthly_precip.reindex(months, fill_value=0).astype(float)
+    precip_label = str(precip_info.get("monthly_label") or "Rainfall")
+    precip_unit = str(precip_info.get("monthly_unit") or "mm")
+    fig.add_trace(
+        go.Scatter(
+            x=months,
+            y=monthly_precip.values,
+            mode="lines+markers",
+            fill="tozeroy",
+            name=precip_label,
+            line=dict(color="#4f8f5f", width=2),
+            marker=dict(size=7, color="#2f6d46"),
+            hovertemplate=f"{precip_label}: %{{y:.1f}} {precip_unit}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    if bool(precip_info.get("depth_available")) and float(monthly_precip.max()) > 0:
+        wettest = int(monthly_precip.idxmax())
+        wettest_val = float(monthly_precip.loc[wettest])
+        fig.add_annotation(
+            x=wettest,
+            y=wettest_val,
+            text=f"{wettest_val:.0f} mm / {wettest_val / 25.4:.1f} in",
+            showarrow=True,
+            arrowhead=2,
+            ax=0,
+            ay=-28,
+            row=2,
+            col=1,
+        )
+
+    # Muggy-hours band, based on dew point when available.
+    dew = _overview_dewpoint_series(cdf)
+    if not dew.empty:
+        muggy = (dew >= 18.0).astype(float) * 100.0
+        muggy_pct = _monthly_grouped_series(cdf, muggy, "mean", 0.0)
+        muggy_label = "muggy hours"
+    else:
+        temp = _metric_series_from_hourly(cdf, get_metric_column(cdf, ["drybulb", "dry_bulb", "temp", "temperature"]), "temp")
+        rh = _metric_series_from_hourly(cdf, get_metric_column(cdf, ["relhum", "relative_humidity", "rh"]), "rh")
+        aligned = pd.concat([temp.rename("temp"), rh.rename("rh")], axis=1).dropna()
+        muggy_pct = _monthly_grouped_series(cdf, (((aligned["temp"] >= 20) & (aligned["rh"] >= 70)).astype(float) * 100.0), "mean", 0.0) if not aligned.empty else pd.Series(0.0, index=months)
+        muggy_label = "humid heat hours"
+    fig.add_trace(
+        go.Scatter(
+            x=months,
+            y=muggy_pct.reindex(months, fill_value=0).values,
+            mode="lines",
+            fill="tozeroy",
+            name=muggy_label,
+            line=dict(color="#d9896b", width=2),
+            fillcolor="rgba(217,137,107,0.38)",
+            hovertemplate=f"{muggy_label}: %{{y:.0f}}%<extra></extra>",
+        ),
+        row=3,
+        col=1,
+    )
+
+    # Temperature range with comfort-zone background.
+    temp_col = get_metric_column(cdf, ["drybulb", "dry_bulb", "temp", "temperature"])
+    temp = _metric_series_from_hourly(cdf, temp_col, "temp")
+    if not temp.empty:
+        t_mean = _monthly_grouped_series(cdf, temp, "mean", np.nan)
+        t_min = _monthly_grouped_series(cdf, temp, "min", np.nan)
+        t_max = _monthly_grouped_series(cdf, temp, "max", np.nan)
+        for y0, y1, color in [
+            (-60, 0, "#6da7bd"),
+            (0, 10, "#75a36c"),
+            (10, 18, "#9abc74"),
+            (18, 26, "#e9cc68"),
+            (26, 32, "#cf795b"),
+            (32, 60, "#b85f4f"),
+        ]:
+            fig.add_hrect(y0=y0, y1=y1, fillcolor=color, opacity=0.20, line_width=0, row=4, col=1)
+        fig.add_trace(
+            go.Scatter(
+                x=months + months[::-1],
+                y=list(t_max.values) + list(t_min.values[::-1]),
+                fill="toself",
+                fillcolor="rgba(61,46,34,0.12)",
+                line=dict(color="rgba(0,0,0,0)"),
+                name="temperature range",
+                hoverinfo="skip",
+            ),
+            row=4,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=months,
+                y=t_mean.values,
+                mode="lines+markers",
+                name="mean dry bulb",
+                line=dict(color="#3d2e22", width=2),
+                marker=dict(size=7),
+                hovertemplate="Mean dry bulb: %{y:.1f} C<extra></extra>",
+            ),
+            row=4,
+            col=1,
+        )
+    else:
+        fig.add_annotation(text="Temperature unavailable", x=6.5, y=20, showarrow=False, row=4, col=1)
+
+    # Hydrologic signal: positive values flag wetter/heavy-rain months, negative values flag dry-spell months.
+    water_balance = precip_info.get("water_balance", pd.Series(0.0, index=months))
+    if not isinstance(water_balance, pd.Series):
+        water_balance = pd.Series(water_balance, index=months)
+    water_balance = water_balance.reindex(months, fill_value=0).astype(float)
+    water_colors = ["#2f80c9" if v >= 0 else "#b8793f" for v in water_balance.values]
+    fig.add_trace(
+        go.Bar(
+            x=months,
+            y=water_balance.values,
+            name="water signal",
+            marker_color=water_colors,
+            hovertemplate="Water signal: %{y:.0f}<extra></extra>",
+        ),
+        row=5,
+        col=1,
+    )
+    fig.add_hline(y=0, line_color="rgba(61,46,34,0.35)", line_width=1, row=5, col=1)
+
+    current_month = int(pd.Timestamp.today().month)
+    fig.add_vline(x=current_month, line_color="#ef4444", line_width=1.5, opacity=0.85)
+    fig.add_annotation(text="Now", x=current_month + 0.05, y=-92, showarrow=False, font=dict(color="#ef4444"), row=5, col=1)
+
+    fig.update_layout(
+        title=f"{location_label} Weather By Month",
+        height=720,
+        barmode="stack",
+        hovermode="x unified",
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(l=64, r=28, t=92, b=54),
+    )
+    fig.update_xaxes(tickmode="array", tickvals=months, ticktext=labels, range=[0.5, 12.5], showgrid=True, gridcolor=CHART_LIGHT_GRID)
+    fig.update_yaxes(title_text="Sky", ticksuffix="%", range=[0, 100], row=1, col=1)
+    fig.update_yaxes(title_text=precip_unit, rangemode="tozero", row=2, col=1)
+    fig.update_yaxes(title_text="Muggy", ticksuffix="%", range=[0, 100], row=3, col=1)
+    fig.update_yaxes(title_text="Temp C", row=4, col=1)
+    fig.update_yaxes(title_text="Water", range=[-105, 105], row=5, col=1)
+    return fig
+
+
+def _render_overview_precipitation_tracker(precip_info: Dict[str, object]) -> None:
+    if not bool(precip_info.get("available")):
+        st.warning(
+            "Rainfall depth is not populated in this EPW file, so flood and drought indicators cannot be computed from the weather file alone."
+        )
+        return
+
+    if not bool(precip_info.get("depth_available")):
+        source_col = precip_info.get("source_col") or "precipitable water"
+        st.warning(
+            f"Liquid rainfall depth is missing or all zero. Showing `{source_col}` as atmospheric moisture only; use observed rain gauges, design storms, or forecast rainfall for flood/drought analysis."
+        )
+        return
+
+    monthly = precip_info.get("monthly")
+    water_balance = precip_info.get("water_balance")
+    wet_days = precip_info.get("wet_days_by_month")
+    heavy_days = precip_info.get("heavy_days_by_month")
+    dry_days = precip_info.get("dry_days_by_month")
+    if not isinstance(monthly, pd.Series):
+        monthly = pd.Series(0.0, index=range(1, 13))
+    if not isinstance(water_balance, pd.Series):
+        water_balance = pd.Series(0.0, index=range(1, 13))
+    if not isinstance(wet_days, pd.Series):
+        wet_days = pd.Series(0.0, index=range(1, 13))
+    if not isinstance(heavy_days, pd.Series):
+        heavy_days = pd.Series(0.0, index=range(1, 13))
+    if not isinstance(dry_days, pd.Series):
+        dry_days = pd.Series(0.0, index=range(1, 13))
+
+    annual_total = float(precip_info.get("annual_total_mm") or 0.0)
+    max_1d = float(precip_info.get("max_1d_mm") or 0.0)
+    max_5d = float(precip_info.get("max_5d_mm") or 0.0)
+    metric_cols = st.columns(6)
+    metric_cols[0].metric("Annual rain", f"{annual_total:.0f} mm", f"{annual_total / 25.4:.1f} in")
+    metric_cols[1].metric("Wet days", f"{int(precip_info.get('wet_days') or 0)} d", ">= 1 mm")
+    metric_cols[2].metric("Heavy-rain days", f"{int(precip_info.get('heavy_days') or 0)} d", ">= 25 mm")
+    metric_cols[3].metric("Max 1-day rain", f"{max_1d:.0f} mm", f"{max_1d / 25.4:.1f} in")
+    metric_cols[4].metric("Max 5-day rain", f"{max_5d:.0f} mm", f"{max_5d / 25.4:.1f} in")
+    metric_cols[5].metric("Longest dry spell", f"{int(precip_info.get('longest_dry_spell') or 0)} d", "< 1 mm/day")
+
+    labels = [calendar.month_abbr[m] for m in range(1, 13)]
+    signal = pd.Series("Balanced", index=range(1, 13), dtype=object)
+    signal.loc[water_balance > 30] = "Flood-watch"
+    signal.loc[water_balance < -30] = "Drought-watch"
+    monthly_table = pd.DataFrame({
+        "Month": labels,
+        "Rain (mm)": monthly.reindex(range(1, 13), fill_value=0).round(1).values,
+        "Rain (in)": (monthly.reindex(range(1, 13), fill_value=0) / 25.4).round(2).values,
+        "Wet days": wet_days.reindex(range(1, 13), fill_value=0).astype(int).values,
+        "Heavy-rain days": heavy_days.reindex(range(1, 13), fill_value=0).astype(int).values,
+        "Dry days": dry_days.reindex(range(1, 13), fill_value=0).astype(int).values,
+        "Signal": signal.values,
+    })
+    with st.expander("Monthly rainfall indicators for flood and drought screening", expanded=False):
+        st.dataframe(monthly_table, use_container_width=True, hide_index=True)
+        st.caption(
+            "Flood-watch is a screening flag for wetter months and heavy-rain days; drought-watch is a screening flag for long dry spells and below-average monthly rain. EPW/TMY rainfall is climate-normal data, so pair it with observed gauges, soil/infiltration data, drainage capacity, stream gauges, and forecast rainfall before making flood or drought predictions."
+        )
+
+
 def render_overview_page():
     cdf = st.session_state.get("cdf")
     header = st.session_state.get("header") or {}
@@ -8499,12 +8904,6 @@ def render_overview_page():
     location_label = _safe_location_label(header)
     source_label = st.session_state.get("source_label") or "EPW weather file"
     focus_threshold = float(st.session_state.get("custom_overheat_threshold", 30))
-
-    try:
-        tmin, tmax = cdf.index.min(), cdf.index.max()
-        data_window = f"{tmin:%b %d, %Y} to {tmax:%b %d, %Y}"
-    except Exception:
-        data_window = "EPW annual weather period"
 
     rows = len(cdf)
     coverage = float(cdf.notna().mean().mean() * 100) if rows else 0.0
@@ -8523,7 +8922,6 @@ def render_overview_page():
             </div>
             <div class="cc-hero-meta">
                 <span>{_ui_escape(source_label)}</span>
-                <span>{_ui_escape(data_window)}</span>
                 <span>{rows:,} hourly records</span>
             </div>
         </section>
@@ -8625,6 +9023,21 @@ def render_overview_page():
             """,
             unsafe_allow_html=True,
         )
+
+    # WeatherSpark-style monthly profile and hydrologic screening
+    st.markdown("<div class='section-gap-lg'></div>", unsafe_allow_html=True)
+    st.markdown("### Weather By Month")
+    st.caption("A compact month-by-month view of sky cover, rainfall, humidity, temperature, and water stress signals.")
+    precip_info = _overview_precipitation_summary(cdf)
+    fig_weather_month = _build_overview_weather_by_month_figure(cdf, location_label, precip_info)
+    _st_plotly_chart(
+        fig_weather_month,
+        use_container_width=True,
+        key="overview_weather_by_month",
+        config={"displayModeBar": True, "toImageButtonOptions": {"filename": f"{get_clean_city_name().replace(' ', '_')}_weather_by_month", "format": "png", "scale": 2}},
+    )
+    _add_manual_pdf_figure("Overview Weather By Month", fig_weather_month)
+    _render_overview_precipitation_tracker(precip_info)
 
     # ── Monthly Temperature & Humidity Chart ──────────────────────
     st.markdown("<div class='section-gap-lg'></div>", unsafe_allow_html=True)
@@ -8830,58 +9243,36 @@ def render_overview_page():
                 unsafe_allow_html=True,
             )
 
-    # ── Simplified Diurnal Resource Heatmaps ──────────────────────
+    # Annual wind rose
     st.markdown("<div class='section-gap-lg'></div>", unsafe_allow_html=True)
-    st.markdown("### 🗓️ Annual Fingerprint Heatmaps")
-    st.caption("Hour-of-day × day-of-year patterns for temperature and solar radiation — revealing seasonal and diurnal rhythms at a glance.")
+    st.markdown("### Annual Wind Rose")
+    st.caption("Prevailing wind direction and wind-speed frequency for the selected location.")
 
-    _ov_hm_c1, _ov_hm_c2 = st.columns(2)
-
-    if "drybulb" in cdf and isinstance(cdf.index, pd.DatetimeIndex):
-        _ov_db_series = pd.to_numeric(cdf["drybulb"], errors="coerce")
-        _ov_db_mat = _advanced_day_hour_matrix(cdf, _ov_db_series)
-        if not _ov_db_mat.empty:
-            with _ov_hm_c1:
-                fig_ov_temp_hm = go.Figure(data=go.Heatmap(
-                    z=_ov_db_mat.values,
-                    x=_ov_db_mat.columns,
-                    y=_ov_db_mat.index,
-                    colorscale="RdBu_r",
-                    colorbar=dict(title="°C", len=0.8),
-                    hovertemplate="Day %{x}, Hour %{y}<br>%{z:.1f} °C<extra></extra>",
-                ))
-                fig_ov_temp_hm.update_layout(
-                    title="Dry-Bulb Temperature",
-                    xaxis_title="Day of Year",
-                    yaxis_title="Hour",
-                    yaxis=dict(autorange="reversed"),
-                    height=340,
-                    margin=dict(l=40, r=16, t=44, b=40),
+    wind_spd_col = get_metric_column(cdf, WIND_SPEED_ALIASES)
+    wind_dir_col = get_metric_column(cdf, ["wind_direction", "winddir", "wd", "wdir", "wind_dir", "HourlyWindDirection"])
+    if not wind_spd_col or not wind_dir_col:
+        st.info("Wind speed and direction are not available for this EPW file.")
+    else:
+        try:
+            overview_wind_df = _clean_wind_frame(cdf, wind_spd_col, wind_dir_col)
+            fig_overview_wind = create_wind_rose(overview_wind_df)
+            if fig_overview_wind is None:
+                st.info("Not enough valid wind data to construct a wind rose.")
+            else:
+                fig_overview_wind.update_layout(
+                    title_text="Annual Wind Rose",
+                    height=560,
+                    margin=dict(l=24, r=210, t=64, b=30),
                 )
-                _st_plotly_chart(fig_ov_temp_hm, use_container_width=True, key="overview_hm_temp")
-
-    if "glohorrad" in cdf and isinstance(cdf.index, pd.DatetimeIndex):
-        _ov_sol_series = pd.to_numeric(cdf["glohorrad"], errors="coerce").clip(lower=0)
-        _ov_sol_mat = _advanced_day_hour_matrix(cdf, _ov_sol_series)
-        if not _ov_sol_mat.empty:
-            with _ov_hm_c2:
-                fig_ov_sol_hm = go.Figure(data=go.Heatmap(
-                    z=_ov_sol_mat.values,
-                    x=_ov_sol_mat.columns,
-                    y=_ov_sol_mat.index,
-                    colorscale="YlOrRd",
-                    colorbar=dict(title="W/m²", len=0.8),
-                    hovertemplate="Day %{x}, Hour %{y}<br>%{z:.0f} W/m²<extra></extra>",
-                ))
-                fig_ov_sol_hm.update_layout(
-                    title="Solar Radiation (GHI)",
-                    xaxis_title="Day of Year",
-                    yaxis_title="Hour",
-                    yaxis=dict(autorange="reversed"),
-                    height=340,
-                    margin=dict(l=40, r=16, t=44, b=40),
+                _st_plotly_chart(
+                    fig_overview_wind,
+                    use_container_width=True,
+                    key="overview_wind_rose",
+                    config={"displayModeBar": True},
                 )
-                _st_plotly_chart(fig_ov_sol_hm, use_container_width=True, key="overview_hm_solar")
+                _add_manual_pdf_figure("Overview Annual Wind Rose", fig_overview_wind)
+        except Exception as exc:
+            st.warning(f"Wind rose failed to render: {exc}")
 
     # ── Workspace Navigation Cards ────────────────────────────────
 
@@ -8899,10 +9290,10 @@ def render_overview_page():
     )
     flow_cols = st.columns(4)
     flow_items = [
-        ("🔬 Dashboard", "Deep-dive into climate, comfort, solar, psychrometrics, wind, and raw data"),
+        ("🔬 Detail View", "Deep-dive into climate, comfort, solar, psychrometrics, wind, and raw data"),
         ("📈 Predictions", "Short-term forecast and future climate scenarios (2050/2080)"),
         ("📡 Live Data", "Compare EPW baselines against real-time sensor readings"),
-        ("📄 Export", "Generate PDF reports and download chart-level SVG, HTML, and CSV"),
+        ("📄 Report", "Generate PDF reports and download chart-level SVG, HTML, and CSV"),
     ]
     for col, (title, desc) in zip(flow_cols, flow_items):
         col.markdown(
@@ -8939,6 +9330,56 @@ def render_climate_page():
         render_heatmap_page()
     with humidity_tab:
         render_humidity_page()
+
+
+def _embed_advanced_figure_caption(fig: go.Figure, caption: str) -> go.Figure:
+    """Place Advanced Diagnostics captions inside the Plotly canvas below the legend."""
+    if not caption:
+        return fig
+    clean_caption = " ".join(str(caption).split())
+    wrapped_caption = "<br>".join(
+        textwrap.wrap(
+            _ui_escape(clean_caption),
+            width=165,
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+    )
+    line_count = max(1, wrapped_caption.count("<br>") + 1)
+    layout_json = fig.layout.to_plotly_json()
+    margin = dict(layout_json.get("margin") or {})
+    current_bottom = int(margin.get("b") or 0)
+    bottom_margin = max(current_bottom, 88 + (line_count * 18))
+    margin["b"] = bottom_margin
+
+    current_height = layout_json.get("height")
+    height_update = {}
+    if current_height:
+        try:
+            height_update["height"] = int(current_height) + max(0, bottom_margin - current_bottom)
+        except Exception:
+            pass
+
+    legend = getattr(fig.layout, "legend", None)
+    legend_y = getattr(legend, "y", None) if legend is not None else None
+    caption_y = -0.31 if isinstance(legend_y, (int, float)) and legend_y < 0 else -0.18
+
+    fig.update_layout(margin=margin, **height_update)
+    fig.add_annotation(
+        text=wrapped_caption,
+        x=0,
+        y=caption_y,
+        xref="paper",
+        yref="paper",
+        xanchor="left",
+        yanchor="top",
+        showarrow=False,
+        align="left",
+        font=dict(size=11, color="#6b5a4b"),
+    )
+    return fig
+
+
 def build_fig_d_mrt_heatmap(df, station_name):
     df = _prepare_advanced_figure_df(df)
     missing = [c for c in ["drybulb_C", "ghi_Wm2"] if c not in df.columns]
@@ -8964,8 +9405,8 @@ def build_fig_d_mrt_heatmap(df, station_name):
         xaxis_title="Day of Year",
         yaxis_title="Hour of Day",
         yaxis=dict(autorange="reversed"),
-        height=400,
-        margin=dict(l=40, r=40, t=40, b=40)
+        height=460,
+        margin=dict(l=48, r=48, t=54, b=54)
     )
     
     months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -8988,30 +9429,7 @@ def build_fig_d_mrt_heatmap(df, station_name):
         "peak_mrt_hour_end": peak_mrt_hour_end,
         "mrt_delta": mrt_delta
     })
-    caption_wrapped =  "<br>".join(textwrap.wrap(caption, width=70))
-    fig.update_layout(
-        height=760,
-        margin=dict(l=40, r=40, t=40, b=320)
-    )
-
-    fig.add_annotation(
-        x=0,
-        y=-0.22,
-        xref="paper",
-        yref="paper",
-        xanchor="left",
-        yanchor="top",
-        showarrow=False,
-        align="left",
-        text=caption,
-        font=dict(
-            size=13,
-            color="#3d2e22",
-            family="DM Sans, Inter, Segoe UI, Helvetica, Arial, sans-serif"
-        )
-    )
-
-    return fig, ""
+    return fig, caption
     
 def build_fig_e_hourly_timeseries_temperature(df, station_name):
     df = _prepare_advanced_figure_df(df)
@@ -9195,7 +9613,7 @@ def render_export_page():
     st.markdown(
         """
         <section class="cc-page-intro">
-            <p class="cc-eyebrow">Export</p>
+            <p class="cc-eyebrow">Report</p>
             <h1>Reporting Center</h1>
             <p>Generate a complete PDF report, review captured figures, and keep chart-level SVG,
             HTML, and CSV exports tied to the analysis sections where they belong.</p>
@@ -9328,9 +9746,9 @@ def render_dashboard_page():
         st.markdown(
             """
             <section class="cc-pdf-capture-screen">
-                <p class="cc-eyebrow">Export</p>
+                <p class="cc-eyebrow">Report</p>
                 <h1>Building PDF report</h1>
-                <p>Capturing dashboard figures and compiling the report. You will return to Export automatically.</p>
+                <p>Capturing detail-view figures and compiling the report. You will return to Report automatically.</p>
             </section>
             """,
             unsafe_allow_html=True,
@@ -9352,7 +9770,7 @@ def render_dashboard_page():
         st.caption("PDF capture mode: rendering all dashboard sections once for the report.")
     else:
         dashboard_section = st.radio(
-            "Dashboard view",
+            "Detail view",
             _visible_tabs,
             key="dashboard_section_nav",
             horizontal=True,
@@ -9500,11 +9918,8 @@ def render_dashboard_page():
         st.table(seasonal_df)
 
         try:
-            tmin, tmax = cdf.index.min(), cdf.index.max()
             n_hours = len(cdf)
-            st.caption(
-                f"Data window: **{tmin:%b %d, %Y} — {tmax:%b %d, %Y}**  ·  Records: **{n_hours:,}** hours"
-            )
+            st.caption(f"Records: **{n_hours:,}** hourly EPW values")
         except Exception as e:
             st.warning(f"Data window failed: {e}")
 
@@ -10209,8 +10624,36 @@ def render_dashboard_page():
                         st.caption(f"{hi_text}\n\n{hum_text}")
 
         with loads_tab:
+            st.caption("**HDD (Heating Degree Days)** measures accumulated temperature departures below 18°C, approximating heating demand. **CDD (Cooling Degree Days)** measures departures above 18°C, approximating cooling demand.")
+            loads_latest = None
+            dd_rows_df = None
             if loads_annual is not None and not loads_annual.empty:
                 loads_latest = loads_annual.iloc[-1]
+                # Percentage of hours above/below 18°C base
+                try:
+                    t_col = get_metric_column(cdf, ["drybulb", "dry_bulb", "temp", "temperature"])
+                    if t_col:
+                        temp_series = pd.to_numeric(cdf[t_col], errors="coerce").dropna()
+                        total_h = len(temp_series)
+                        if total_h > 0:
+                            heating_hours = int((temp_series < 18.0).sum())
+                            cooling_hours = int((temp_series > 18.0).sum())
+                            neutral_hours = total_h - heating_hours - cooling_hours
+                            dd_rows = [
+                                {"Condition": "Heating needed (< 18°C)", "Hours": f"{heating_hours:,}", "% of Year": f"{heating_hours / total_h * 100:.1f}%"},
+                                {"Condition": "Neutral (= 18°C)", "Hours": f"{neutral_hours:,}", "% of Year": f"{neutral_hours / total_h * 100:.1f}%"},
+                                {"Condition": "Cooling needed (> 18°C)", "Hours": f"{cooling_hours:,}", "% of Year": f"{cooling_hours / total_h * 100:.1f}%"},
+                            ]
+                            dd_rows_df = pd.DataFrame(dd_rows)
+                except Exception:
+                    pass
+            else:
+                st.info("Degree days metrics are not available.")
+
+            fig_dd = _degree_day_dashboard_fig(cdf)
+            _st_plotly_chart(fig_dd, use_container_width=True, key="comfort_loads_degree_days")
+            _add_manual_pdf_figure("Heating and Cooling Degree Days (Comfort)", fig_dd)
+            if loads_latest is not None:
                 l1, l2 = st.columns(2)
                 l1.metric(
                     "Heating degree days",
@@ -10222,12 +10665,8 @@ def render_dashboard_page():
                     _fmt_value(loads_latest.get("cooling_degree_days", np.nan)),
                     delta=_fmt_value(loads_latest.get("cooling_degree_hours", np.nan), " h")
                 )
-            else:
-                st.info("Degree days metrics are not available.")
-
-            fig_dd = _degree_day_dashboard_fig(cdf)
-            _st_plotly_chart(fig_dd, use_container_width=True, key="comfort_loads_degree_days")
-            _add_manual_pdf_figure("Heating and Cooling Degree Days (Comfort)", fig_dd)
+            if dd_rows_df is not None:
+                st.dataframe(dd_rows_df, use_container_width=True, hide_index=True, key="dd_hour_breakdown")
 
         with advanced_tab:
             df_cwec = _prepare_advanced_figure_df(cdf)
@@ -10238,9 +10677,11 @@ def render_dashboard_page():
                 ("Full Hourly Time Series - Relative Humidity", "hourly_timeseries_rh", build_fig_f_hourly_timeseries_rh),
             ]:
                 fig_adv, cap_adv = builder(df_cwec, station_name)
-                _st_plotly_chart(fig_adv, use_container_width=True)
                 if cap_adv:
-                    st.caption(cap_adv)
+                    fig_adv = _embed_advanced_figure_caption(fig_adv, cap_adv)
+                    _add_manual_pdf_caption(key, cap_adv)
+                with st.container(border=True):
+                    _st_plotly_chart(fig_adv, use_container_width=True)
                 _add_manual_pdf_figure(key, fig_adv)
 
         with di_tab:
@@ -10993,11 +11434,26 @@ _DI_BANDS = [
     (29.0, 100, "Medical Emergency (> 29)", "#bd0026"),
 ]
 
+def _render_band_hour_breakdown(series: pd.Series, bands: list, key_prefix: str):
+    """Display a compact table showing hours and % of year for each category band."""
+    total = int(series.notna().sum())
+    if total == 0:
+        return
+    rows = []
+    for lower, upper, label, color in bands:
+        mask = (series > lower) & (series <= upper)
+        count = int(mask.sum())
+        pct = (count / total) * 100 if total > 0 else 0.0
+        # Clean label: strip the range info in parentheses for brevity
+        short_label = label.split("(")[0].strip() if "(" in label else label
+        rows.append({"Category": short_label, "Hours": f"{count:,}", "% of Year": f"{pct:.1f}%"})
+    breakdown_df = pd.DataFrame(rows)
+    st.dataframe(breakdown_df, use_container_width=True, hide_index=True, key=f"breakdown_{key_prefix}")
+
+
 def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
     import plotly.graph_objects as go
     import numpy as np
-    st.markdown("---")
-    st.markdown(f"**{title_suffix}**")
     tmp = pd.DataFrame({"doy": cdf.index.dayofyear, "hour": cdf.index.hour, "val": cdf[col]}).dropna()
     if tmp.empty:
         st.info(f"No data for {title_suffix}.")
@@ -11163,12 +11619,14 @@ def render_utci_page():
     if utci_df is None or utci_df.empty:
         st.info("UTCI index could not be computed. Ensure dry-bulb temperature, relative humidity, and wind speed are present.")
         return
-        
+    
+    st.caption("**UTCI (Universal Thermal Climate Index)** is an equivalent temperature (°C) that combines air temperature, radiation, humidity, and wind speed to estimate outdoor thermal stress on the human body.")
+    
     temp_df = cdf.copy()
     temp_df["utci_index"] = utci_df
     
-    
     _render_categorical_heatmap(temp_df, "utci_index", "UTCI Annual Heatmap", _UTCI_BANDS, "utci")
+    _render_band_hour_breakdown(temp_df["utci_index"], _UTCI_BANDS, "utci")
 
     st.markdown("---")
     extra = _get_extra_figures()
@@ -11221,12 +11679,14 @@ def render_pmv_page():
                 return
         if pmv_df is None or (hasattr(pmv_df, 'empty') and pmv_df.empty):
             return
-        
+    
+    st.caption("**PMV (Predicted Mean Vote)** is an ISO 7730 thermal comfort index on a 7-point scale from cold (−3) to hot (+3), where 0 is thermally neutral.")
+    
     temp_df = cdf.copy()
     temp_df["pmv_index"] = pmv_df
     
-    
     _render_categorical_heatmap(temp_df, "pmv_index", "PMV Annual Heatmap", _PMV_BANDS, "pmv")
+    _render_band_hour_breakdown(temp_df["pmv_index"], _PMV_BANDS, "pmv")
 
 def render_di_page():
     cdf = st.session_state.get("cdf")
@@ -11237,10 +11697,14 @@ def render_di_page():
     if di_df is None or di_df.empty:
         st.info("DI index could not be computed. Ensure dry-bulb temperature and relative humidity are present.")
         return
-        
+    
+    st.caption("**DI (Discomfort Index)** is a heat-stress indicator that combines dry-bulb temperature and humidity to estimate how uncomfortable outdoor conditions feel.")
+    
     temp_df = cdf.copy()
     temp_df["di_index"] = di_df
     
+    _render_categorical_heatmap(temp_df, "di_index", "DI Annual Heatmap", _DI_BANDS, "di")
+    _render_band_hour_breakdown(temp_df["di_index"], _DI_BANDS, "di")
     
     # Initialize slider state
     if "di_discomfort_band" not in st.session_state:
@@ -11276,8 +11740,6 @@ def render_di_page():
         
     st.metric(f"Hours within Discomfort Band ({format_temperature(low_bound)} to {format_temperature(high_bound)})", f"{discomfort_hours} h", f"{pct:.1f}% of year", delta_color="off")
     
-    _render_categorical_heatmap(temp_df, "di_index", "DI Annual Heatmap", _DI_BANDS, "di")
-
 # ---------------------- SUN & CLOUDS ----------------------
 
 
@@ -11850,13 +12312,13 @@ def render_solar_page():
         shapes = []
 
         # Rim
-        shapes.append(dict(type="circle", xref="x", yref="y", x0=-1, y0=-1, x1=1, y1=1, line=dict(width=1.2, color="rgba(255,255,255,0.4)"), fillcolor="rgba(30, 41, 59, 0.4)"))
+        shapes.append(dict(type="circle", xref="x", yref="y", x0=-1, y0=-1, x1=1, y1=1, line=dict(width=1.2, color="rgba(61,46,34,0.3)"), fillcolor="rgba(245,237,228,0.4)"))
 
         # Altitude concentric rings (10..80)
         for alt in range(10, 90, 10):
             x0, y0 = project_angular(np.array([0.0]), np.array([alt]), projection)
             r = float(np.hypot(x0[0], y0[0]))
-            shapes.append(dict(type="circle", xref="x", yref="y", x0=-r, y0=-r, x1=r, y1=r, line=dict(width=0.7, color="rgba(255,255,255,0.25)", dash="dot")))
+            shapes.append(dict(type="circle", xref="x", yref="y", x0=-r, y0=-r, x1=r, y1=r, line=dict(width=0.7, color="rgba(61,46,34,0.2)", dash="dot")))
 
         # Azimuth ticks (every 10°; major every 90°)
         for az in range(0, 360, 10):
@@ -11864,13 +12326,13 @@ def render_solar_page():
             inner = 0.98
             outer = 1.03 if az % 90 == 0 else 1.01
             lw = 2 if az % 90 == 0 else 1
-            shapes.append(dict(type="line", x0=ux * inner, y0=uy * inner, x1=ux * outer, y1=uy * outer, line=dict(width=lw, color="rgba(255,255,255,0.5)")))
+            shapes.append(dict(type="line", x0=ux * inner, y0=uy * inner, x1=ux * outer, y1=uy * outer, line=dict(width=lw, color="rgba(61,46,34,0.35)")))
 
         # Hour radial lines (6..18), light dash
         for h in range(6, 19):
             az = (h - 12) * 15 + 180
             ux, uy = az_unit(az)
-            shapes.append(dict(type="line", xref="x", yref="y", x0=0, y0=0, x1=ux * 1.0, y1=uy * 1.0, line=dict(width=1, color="rgba(255,255,255,0.25)", dash="dot")))
+            shapes.append(dict(type="line", xref="x", yref="y", x0=0, y0=0, x1=ux * 1.0, y1=uy * 1.0, line=dict(width=1, color="rgba(61,46,34,0.2)", dash="dot")))
 
         fig.update_layout(shapes=shapes)
 
@@ -12101,10 +12563,10 @@ def render_solar_page():
             xs_hr, ys_hr = project_angular(df_sel["azimuth"].values, df_sel["elevation"].values, projection)
             
             # Plot the selected day path (line behind points)
-            fig.add_trace(go.Scatter(x=xs_hr, y=ys_hr, mode="lines", line=dict(color="rgba(255,255,255,0.4)", width=2, dash="dot"), name=f"{date:%b %d} Path", showlegend=False, hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=xs_hr, y=ys_hr, mode="lines", line=dict(color="rgba(61,46,34,0.3)", width=2, dash="dot"), name=f"{date:%b %d} Path", showlegend=False, hoverinfo="skip"))
             if len(xs_hr) > 0:
                 idx_mid = len(xs_hr) // 2
-                fig.add_annotation(x=xs_hr[idx_mid], y=ys_hr[idx_mid], text=f"{date:%b %d}", showarrow=False, font=dict(color="rgba(255,255,255,0.8)", size=10), yshift=12)
+                fig.add_annotation(x=xs_hr[idx_mid], y=ys_hr[idx_mid], text=f"{date:%b %d}", showarrow=False, font=dict(color="rgba(61,46,34,0.7)", size=10), yshift=12)
                 
             show_cb_sel = (colors is not None) and not colorbar_added
             if show_cb_sel: colorbar_added = True
@@ -12114,14 +12576,14 @@ def render_solar_page():
                 mode="markers+text" if show_labels else "markers",
                 text=[t.strftime("%H:%M") for t in pd.to_datetime(df_sel["solar_time"]).dt.tz_convert(site.tz)] if show_labels else None,
                 textposition="top center",
-                textfont=dict(size=11, color="rgba(240,240,240,0.92)"),
+                textfont=dict(size=11, color="rgba(61,46,34,0.85)"),
                 marker=dict(
                     size=10,
                     color=colors if colors is not None else "#fbbf24",
                     colorscale=colorscale, cmin=cmin, cmax=cmax,
                     showscale=show_cb_sel,
                     colorbar=(dict(title=color_title or "Value", thickness=12, len=0.55, y=0.5, x=1.03) if show_cb_sel else None),
-                    line=dict(width=1, color="rgba(255,255,255,0.8)")
+                    line=dict(width=1, color="rgba(61,46,34,0.4)")
                 ),
                 name="Hourly markers",
                 showlegend=False,
@@ -12336,14 +12798,14 @@ def render_solar_page():
             # Ground spoke
             fig.add_trace(go.Scatter3d(
                 x=[0, x[0]], y=[0, y[0]], z=[0, 0], mode="lines",
-                line=dict(color="rgba(255,255,255,0.15)" if is_cardinal else "rgba(255,255,255,0.06)", 
+                line=dict(color="rgba(61,46,34,0.15)" if is_cardinal else "rgba(61,46,34,0.06)", 
                           width=1.5 if is_cardinal else 1),
                 showlegend=False, hoverinfo="skip",
             ))
             # Sky Vault arc
             fig.add_trace(go.Scatter3d(
                 x=x, y=y, z=z, mode="lines",
-                line=dict(color="rgba(255,255,255,0.12)" if is_cardinal else "rgba(255,255,255,0.05)", 
+                line=dict(color="rgba(61,46,34,0.12)" if is_cardinal else "rgba(61,46,34,0.05)", 
                           width=1.5 if is_cardinal else 1),
                 showlegend=False, hoverinfo="skip",
             ))
@@ -13471,11 +13933,11 @@ def render_solar_page():
             font=dict(color=CHART_LIGHT_TEXT),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        fig_solar.update_xaxes(showgrid=False, linecolor="rgba(255,255,255,0.2)",
+        fig_solar.update_xaxes(showgrid=False, linecolor="rgba(192,130,90,0.2)",
                                tickmode="array",
                                tickvals=[1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335],
                                ticktext=['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
-        fig_solar.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
+        fig_solar.update_yaxes(showgrid=True, gridcolor="rgba(192,130,90,0.14)")
         _st_plotly_chart(fig_solar, use_container_width=True)
         _add_manual_pdf_figure("Monthly Solar Insolation", fig_solar)
         _irr_shared_max = 0.0
@@ -13905,11 +14367,11 @@ def render_psychrometrics_interactive_section(
         <style>
         /* Card background panel styling */
         div[data-testid="stVerticalBlockBorder"] {
-            background-color: #111827 !important;
-            border: 1px solid rgba(255, 255, 255, 0.05) !important;
+            background-color: rgba(250, 246, 241, 0.98) !important;
+            border: 1px solid rgba(139, 90, 43, 0.10) !important;
             border-radius: 12px !important;
             padding: 1.25rem !important;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3) !important;
+            box-shadow: 0 4px 16px rgba(100, 60, 20, 0.06) !important;
         }
 
         /* Checkbox labeling & alignment */
@@ -13917,7 +14379,7 @@ def render_psychrometrics_interactive_section(
             margin-bottom: 2px !important;
         }
         .stCheckbox:hover {
-            background-color: rgba(255, 255, 255, 0.02);
+            background-color: rgba(192, 130, 90, 0.06);
             border-radius: 6px;
         }
         .stCheckbox > label {
@@ -13925,7 +14387,7 @@ def render_psychrometrics_interactive_section(
             padding-bottom: 0px !important;
         }
         .stCheckbox > label p {
-            color: #ffffff !important;
+            color: #3d2e22 !important;
             font-size: 0.85rem !important;
             font-weight: 500 !important;
         }
@@ -13933,9 +14395,9 @@ def render_psychrometrics_interactive_section(
         /* Tabs selector button styling */
         div[data-testid="column"] button {
             border-radius: 8px !important;
-            border: 1px solid rgba(255, 255, 255, 0.08) !important;
-            background-color: rgba(30, 41, 59, 0.4) !important;
-            color: #94a3b8 !important;
+            border: 1px solid rgba(139, 90, 43, 0.10) !important;
+            background-color: rgba(245, 237, 228, 0.6) !important;
+            color: #7a6555 !important;
             font-size: 0.82rem !important;
             font-weight: 600 !important;
             padding: 0.5rem 1rem !important;
@@ -13943,21 +14405,21 @@ def render_psychrometrics_interactive_section(
         }
 
         div[data-testid="column"] button:hover {
-            color: #ffffff !important;
-            background-color: rgba(59, 130, 246, 0.08) !important;
-            border-color: rgba(59, 130, 246, 0.4) !important;
+            color: #3d2e22 !important;
+            background-color: rgba(192, 130, 90, 0.10) !important;
+            border-color: rgba(192, 130, 90, 0.35) !important;
         }
 
         div[data-testid="column"] button[kind="primary"] {
-            background: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%) !important;
-            color: #0f172a !important;
+            background: linear-gradient(135deg, #c0825a, #b5945e) !important;
+            color: #ffffff !important;
             border: none !important;
             font-weight: 700 !important;
-            box-shadow: 0 4px 14px rgba(6, 182, 212, 0.3) !important;
+            box-shadow: 0 4px 14px rgba(192, 130, 90, 0.25) !important;
         }
 
         div[data-testid="column"] button[kind="primary"]:hover {
-            background: linear-gradient(135deg, #2563eb 0%, #0891b2 100%) !important;
+            background: linear-gradient(135deg, #b07548, #a88552) !important;
             color: #ffffff !important;
         }
         </style>
@@ -13973,10 +14435,10 @@ def render_psychrometrics_interactive_section(
         with st.container(border=True):
             st.markdown(
                 """
-                <h4 style="margin: 0 0 0.15rem 0; font-size: 0.95rem; font-weight: 700; color: #ffffff; letter-spacing: -0.01em;">
+                <h4 style="margin: 0 0 0.15rem 0; font-size: 0.95rem; font-weight: 700; color: #3d2e22; letter-spacing: -0.01em;">
                     Comfort Zones & Strategies
                 </h4>
-                <p style="margin: 0 0 1rem 0; font-size: 0.72rem; color: #94a3b8; line-height: 1.3;">
+                <p style="margin: 0 0 1rem 0; font-size: 0.72rem; color: #7a6555; line-height: 1.3;">
                     Toggle checkboxes to filter chart layers instantly.
                 </p>
                 """,
@@ -14035,7 +14497,7 @@ def render_psychrometrics_interactive_section(
                         fig_psy.add_annotation(
                             x=cx, y=cy, text=f"<b>{target_id}</b>", showarrow=False,
                             font=dict(family="Arial, Helvetica, sans-serif", size=13, color=all_zones[target_id]["color"]),
-                            bgcolor="rgba(17, 24, 39, 0.85)", bordercolor=all_zones[target_id]["color"], borderwidth=1.5, borderpad=6,
+                            bgcolor="rgba(250, 246, 241, 0.92)", bordercolor=all_zones[target_id]["color"], borderwidth=1.5, borderpad=6,
                         )
                 # No additional checkbox handling needed – legend already controls visibility
 
@@ -14227,7 +14689,7 @@ def render_psychrometrics_interactive_section(
                     x=cx, y=cy, text="<b>1</b>", showarrow=False,
                     font=dict(family="Arial, Helvetica, sans-serif", size=13, color="#2ca02c"),
                     align="center",
-                    bgcolor="rgba(17, 24, 39, 0.85)", bordercolor="#2ca02c",
+                    bgcolor="rgba(250, 246, 241, 0.92)", bordercolor="#2ca02c",
                     borderwidth=1.5, borderpad=6,
                 )
             # Render all design strategy zones concurrently
@@ -14259,7 +14721,7 @@ def render_psychrometrics_interactive_section(
                     x=cx, y=cy, text=f"<b>{strategy_num}</b>", showarrow=False,
                     font=dict(family="Arial, Helvetica, sans-serif", size=13, color=zcolor),
                     align="center",
-                    bgcolor="rgba(17, 24, 39, 0.85)", bordercolor=zcolor,
+                    bgcolor="rgba(250, 246, 241, 0.92)", bordercolor=zcolor,
                     borderwidth=1.5, borderpad=6,
             )
     else:
@@ -14549,6 +15011,7 @@ def render_psychrometrics_page():
     cdf = st.session_state.get("cdf")
     if cdf is None:
         return
+    location_label = _safe_location_label(st.session_state.get("header") or {})
     needed = ["drybulb", "relhum"]
     if not all(k in cdf.columns for k in needed):
         st.info("This EPW is missing required fields for the psychrometric plot.")
