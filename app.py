@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import calendar
 from pathlib import Path
-import io, zipfile, csv, math, argparse, datetime, base64, hashlib
+import io, zipfile, csv, math, argparse, datetime, base64, hashlib, json
 from contextlib import nullcontext
 import requests
 from dataclasses import dataclass
@@ -319,6 +319,31 @@ def format_threshold_label(temp_c: float, direction: str = ">", digits: int = 0)
 
 def convert_threshold_for_display(temp_c: float) -> float:
     return _c_to_f(temp_c) if _temp_unit() == "F" else temp_c
+
+
+def temperature_unit_label() -> str:
+    return "°F" if _temp_unit() == "F" else "°C"
+
+
+def convert_temperature_series_for_display(values: object) -> object:
+    numeric = pd.to_numeric(values, errors="coerce")
+    return numeric.apply(_c_to_f) if _temp_unit() == "F" else numeric
+
+
+def convert_temperature_delta_for_display(value: float) -> float:
+    return float(value) * 9.0 / 5.0 if _temp_unit() == "F" else float(value)
+
+
+def is_temperature_display_metric(*values: object) -> bool:
+    text = " ".join(str(v or "").lower() for v in values)
+    return any(token in text for token in ["drybulb", "dry-bulb", "dewpoint", "dew-point", "temperature", "temp"])
+
+
+def temperature_axis_label(label: object) -> str:
+    text = str(label)
+    for old in ("(°C)", "(Â°C)", "(deg C)", "(deg c)"):
+        text = text.replace(old, f"({temperature_unit_label()})")
+    return text
 
 
 # ========== UI COMPONENTS ==========
@@ -1068,6 +1093,8 @@ def _st_plotly_chart(fig_obj: object, *args, **kwargs):
 STATION_SOURCE = "https://raw.githubusercontent.com/CenterForTheBuiltEnvironment/clima/main/assets/data/epw_location.json"
 STATION_INDEX_TIMEOUT = (4, 10)
 EPW_FETCH_TIMEOUT = (5, 20)
+OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+OPEN_METEO_PRECIP_TIMEOUT = (4, 15)
 MAX_EPW_BYTES = 100_000_000
 
 
@@ -1249,7 +1276,7 @@ def _capture_plotly_figure(fig_obj: Any) -> Any:
     fingerprints = st.session_state.get("pdf_figure_fingerprints", set())
 
     try:
-        fig_json = fig.to_json()
+        fig_json = f"{_temp_unit()}::{fig.to_json()}"
     except Exception:
         fig_json = ""
 
@@ -3955,6 +3982,13 @@ def render_sidebar_filters(epw_loaded: bool) -> None:
             format_func=lambda u: "Celsius (°C)" if u == "C" else "Fahrenheit (°F)",
             key="temperature_unit",
         )
+        current_unit = _temp_unit()
+        previous_unit = st.session_state.get("_pdf_capture_temperature_unit")
+        if previous_unit is None:
+            st.session_state["_pdf_capture_temperature_unit"] = current_unit
+        elif previous_unit != current_unit:
+            _clear_pdf_capture_state()
+            st.session_state["_pdf_capture_temperature_unit"] = current_unit
 
     base_cdf = st.session_state.get("cdf_raw")
     if base_cdf is not None:
@@ -5590,6 +5624,16 @@ def _add_manual_pdf_figure(key: str, fig: object) -> None:
     st.session_state["pdf_figures"] = store
 
 
+def _clear_pdf_capture_state() -> None:
+    st.session_state["pdf_figures"] = {}
+    st.session_state["pdf_figures_auto"] = {}
+    st.session_state["pdf_captions"] = {}
+    st.session_state["pdf_figure_fingerprints"] = set()
+    st.session_state["pdf_download_bytes"] = None
+    st.session_state["pdf_download_name"] = None
+    st.session_state["pdf_download_error"] = None
+
+
 def _add_manual_pdf_caption(key: str, caption: str) -> None:
     if not caption:
         return
@@ -5694,10 +5738,7 @@ def _request_dashboard_pdf_build() -> None:
     st.session_state["pdf_capture_origin_page"] = st.session_state.get("nav_page", DEFAULT_PAGE)
 
     # Fresh capture per export click.
-    st.session_state["pdf_figures"] = {}
-    st.session_state["pdf_figures_auto"] = {}
-    st.session_state["pdf_captions"] = {}
-    st.session_state["pdf_figure_fingerprints"] = set()
+    _clear_pdf_capture_state()
 
 
 def _finalize_dashboard_pdf_if_pending(effective_page: str) -> None:
@@ -6175,7 +6216,7 @@ def _figure_interpretation_text(title: str, cdf: Optional[pd.DataFrame]) -> str:
         if t_col and wants_temp:
             t = _metric_series_from_hourly(cdf, t_col, "temp")
             if not t.empty:
-                bits.append(f"Annual dry-bulb spans {t.min():.1f} to {t.max():.1f} deg C with mean {t.mean():.1f} deg C")
+                bits.append(f"Annual dry-bulb spans {format_temperature(t.min())} to {format_temperature(t.max())} with mean {format_temperature(t.mean())}")
 
         if rh_col and wants_rh:
             rh = _metric_series_from_hourly(cdf, rh_col, "rh")
@@ -6241,14 +6282,14 @@ def _climate_summary_lines(cdf: Optional[pd.DataFrame]) -> List[str]:
             t = pd.to_numeric(cdf[t_col], errors="coerce")
             t_valid = t.dropna()
             if not t_valid.empty:
-                lines.append(f"Annual dry-bulb ranges from {t_valid.min():.1f} to {t_valid.max():.1f} deg C, with annual mean {t_valid.mean():.1f} deg C.")
+                lines.append(f"Annual dry-bulb ranges from {format_temperature(t_valid.min())} to {format_temperature(t_valid.max())}, with annual mean {format_temperature(t_valid.mean())}.")
 
                 if month_series is not None:
                     by_month = t.groupby(month_series).mean().dropna()
                     if not by_month.empty:
                         cold_m = int(by_month.idxmin())
                         hot_m = int(by_month.idxmax())
-                        lines.append(f"Monthly pattern: coldest mean month is {calendar.month_abbr[cold_m]} ({by_month.loc[cold_m]:.1f} deg C), warmest is {calendar.month_abbr[hot_m]} ({by_month.loc[hot_m]:.1f} deg C).")
+                        lines.append(f"Monthly pattern: coldest mean month is {calendar.month_abbr[cold_m]} ({format_temperature(by_month.loc[cold_m])}), warmest is {calendar.month_abbr[hot_m]} ({format_temperature(by_month.loc[hot_m])}).")
 
                 if hour_series is not None:
                     by_hour = t.groupby(hour_series).mean().dropna()
@@ -6265,7 +6306,7 @@ def _climate_summary_lines(cdf: Optional[pd.DataFrame]) -> List[str]:
         if dp_col:
             dp = pd.to_numeric(cdf[dp_col], errors="coerce").dropna()
             if not dp.empty:
-                lines.append(f"Dew-point behavior spans {dp.min():.1f} to {dp.max():.1f} deg C, which is useful for condensation and latent load checks.")
+                lines.append(f"Dew-point behavior spans {format_temperature(dp.min())} to {format_temperature(dp.max())}, which is useful for condensation and latent load checks.")
 
         if w_col:
             w = _metric_series_from_hourly(cdf, w_col, "wind")
@@ -6382,6 +6423,11 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
         def _clean_col(col: Optional[str], kind: str = "") -> pd.Series:
             return _metric_series_from_hourly(df, col, kind)
 
+        temp_unit = temperature_unit_label()
+
+        def _display_temp_values(values: object) -> object:
+            return convert_temperature_series_for_display(values)
+
         def _month_group(col: Optional[str], kind: str = "", agg: str = "mean") -> pd.DataFrame:
             if not col:
                 return pd.DataFrame(columns=["month", "label", "value"])
@@ -6491,13 +6537,16 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                 extra["diurnal_wind_roses"] = _placeholder_fig("Diurnal Wind Roses", msg)
                 extra["directional_wind_power"] = _placeholder_fig("Annual Directional Wind Power", msg)
 
-        def _annual_day_hour_heatmap(col: Optional[str], kind: str, title: str, colorscale: str, unit: str, store_key: Optional[str] = None) -> None:
+        def _annual_day_hour_heatmap(col: Optional[str], kind: str, title: str, colorscale: str, unit: str, store_key: Optional[str] = None, value_transform=None) -> None:
             if not col:
                 return
+            values = _clean_col(col, kind)
+            if value_transform is not None:
+                values = value_transform(values)
             local = pd.DataFrame({
                 "hour": pd.to_numeric(df["__hour"], errors="coerce"),
                 "doy": pd.to_numeric(df["__doy"], errors="coerce"),
-                "value": _clean_col(col, kind),
+                "value": values,
             }).dropna()
             if local.empty:
                 return
@@ -6515,13 +6564,16 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
             fig.update_layout(title=title, xaxis_title="Day of year", yaxis_title="Hour of day", height=620)
             extra[store_key or title] = fig
 
-        def _hourly_distribution(col: Optional[str], kind: str, title: str, y_title: str, color: str, store_key: Optional[str] = None) -> None:
+        def _hourly_distribution(col: Optional[str], kind: str, title: str, y_title: str, color: str, store_key: Optional[str] = None, value_transform=None) -> None:
             if not col:
                 return
+            values = _clean_col(col, kind)
+            if value_transform is not None:
+                values = value_transform(values)
             local = pd.DataFrame({
                 "month": pd.to_numeric(df["__month"], errors="coerce"),
                 "hour": pd.to_numeric(df["__hour"], errors="coerce"),
-                "value": _clean_col(col, kind),
+                "value": values,
             }).dropna()
             if local.empty:
                 return
@@ -6546,7 +6598,8 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
         if not temp.empty or not rh.empty:
             stat_rows = []
             if not temp.empty:
-                stat_rows.append(("Dry-bulb temperature (deg C)", float(temp.min()), float(temp.mean()), float(temp.max())))
+                temp_display = _display_temp_values(temp)
+                stat_rows.append((f"Dry-bulb temperature ({temp_unit})", float(temp_display.min()), float(temp_display.mean()), float(temp_display.max())))
             if not rh.empty:
                 stat_rows.append(("Relative humidity (%)", float(rh.min()), float(rh.mean()), float(rh.max())))
             if stat_rows:
@@ -6586,12 +6639,13 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
         if not temp.empty and t_col:
             m_temp = _month_group(t_col, "temp", "mean")
             if not m_temp.empty:
-                fig = px.bar(m_temp, x="label", y="value", title="Monthly Dry-Bulb Temperature", labels={"label": "Month", "value": "Mean dry-bulb (deg C)"})
+                m_temp["value"] = _display_temp_values(m_temp["value"])
+                fig = px.bar(m_temp, x="label", y="value", title="Monthly Dry-Bulb Temperature", labels={"label": "Month", "value": f"Mean dry-bulb ({temp_unit})"})
                 fig.update_traces(marker_color="#f97316")
                 fig.update_layout(height=460)
                 extra["drybulb Monthly Bar"] = fig
-            _hourly_distribution(t_col, "temp", "Hourly Dry-Bulb Temperature Distribution", "Dry-bulb (deg C)", "#fb923c", "drybulb Hourly Dot Plot")
-            _annual_day_hour_heatmap(t_col, "temp", "Dry-Bulb Temperature by Hour and Day", "RdYlBu_r", "deg C", "drybulb Annual Heatmap")
+            _hourly_distribution(t_col, "temp", "Hourly Dry-Bulb Temperature Distribution", f"Dry-bulb ({temp_unit})", "#fb923c", "drybulb Hourly Dot Plot", value_transform=_display_temp_values)
+            _annual_day_hour_heatmap(t_col, "temp", "Dry-Bulb Temperature by Hour and Day", "RdYlBu_r", temp_unit, "drybulb Annual Heatmap", value_transform=_display_temp_values)
 
         if not rh.empty and rh_col:
             m_rh = _month_group(rh_col, "rh", "mean")
@@ -6620,6 +6674,10 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                 sat_kpa = 0.61078 * np.exp((17.2694 * ps["temp"]) / (ps["temp"] + 237.3))
                 vapor_kpa = (ps["rh"].clip(0, 100) / 100.0) * sat_kpa
                 ps["humidity_ratio"] = (0.621945 * vapor_kpa / (pressure_kpa - vapor_kpa)).clip(lower=0, upper=0.035) * 1000.0
+                ps["temp_display"] = _display_temp_values(ps["temp"])
+
+                def _display_temp_list(values: List[float]) -> List[float]:
+                    return [convert_threshold_for_display(v) for v in values]
 
                 fig_psy = go.Figure()
                 overlays = [
@@ -6630,9 +6688,10 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                     ("ASHRAE comfort zone", [20, 27, 27, 20], [4, 4, 12, 12], "#f8fafc"),
                 ]
                 for name, xs, ys, color in overlays:
+                    xs_display = _display_temp_list(xs)
                     fig_psy.add_trace(
                         go.Scatter(
-                            x=xs + [xs[0]],
+                            x=xs_display + [xs_display[0]],
                             y=ys + [ys[0]],
                             mode="lines",
                             fill="toself",
@@ -6644,7 +6703,7 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                     )
                 fig_psy.add_trace(
                     go.Scatter(
-                        x=ps["temp"],
+                        x=ps["temp_display"],
                         y=ps["humidity_ratio"],
                         mode="markers",
                         name="Hourly outdoor state",
@@ -6659,7 +6718,7 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                 )
                 fig_psy.update_layout(
                     title="Psychrometric Chart",
-                    xaxis_title="Dry-bulb temperature (deg C)",
+                    xaxis_title=f"Dry-bulb temperature ({temp_unit})",
                     yaxis_title="Humidity ratio (g/kg dry air)",
                     height=720,
                     legend=dict(orientation="h", y=-0.18),
@@ -6762,8 +6821,42 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                     dict(station=station_name, total_mm=total_annual_mm, wettest=wettest_month, driest=driest_month))
                 _add_manual_pdf_caption("Monthly Precipitation", cap_precip)
         else:
+            precip_info = _overview_precipitation_summary(df, st.session_state.get("header") or {})
+            precip_monthly = precip_info.get("monthly")
             precip_wtr = _clean_col(precip_wtr_col, "precip")
-            if precip_wtr_col and not precip_wtr.empty and float(precip_wtr.max()) > 0:
+            if bool(precip_info.get("depth_available")) and isinstance(precip_monthly, pd.Series):
+                months = list(range(1, 13))
+                labels = [calendar.month_abbr[m] for m in months]
+                grouped = precip_monthly.reindex(months, fill_value=0).astype(float)
+                title = "Monthly Precipitation"
+                if bool(precip_info.get("external_precipitation")):
+                    title = "Monthly Precipitation (Open-Meteo)"
+                fig = px.bar(x=labels, y=grouped.values, title=title, labels={"x": "Month", "y": "Precipitation depth (mm)"})
+                fig.update_traces(marker_color="#38bdf8")
+                fig.update_layout(height=460, margin=dict(t=90))
+                if bool(precip_info.get("external_precipitation")):
+                    fig.add_annotation(
+                        text="<i>Rainfall depth fetched from Open-Meteo because the EPW rainfall field is empty.</i>",
+                        x=0.5,
+                        y=1.08,
+                        xref="paper",
+                        yref="paper",
+                        showarrow=False,
+                        font=dict(size=10, color="#64748b"),
+                    )
+                extra["Monthly Precipitation"] = fig
+                total_annual_mm = float(grouped.sum())
+                wettest_month = calendar.month_abbr[int(grouped.idxmax())] if not grouped.empty else "[unavailable]"
+                positive = grouped[grouped > 0]
+                driest_month = calendar.month_abbr[int(positive.idxmin())] if not positive.empty else "[unavailable]"
+                source_kind = str(precip_info.get("source_kind") or "rainfall source")
+                cap_precip = safe_format_caption(
+                    "Monthly bars sum liquid precipitation depth from {source}. For {station}, total annual precipitation is "
+                    "{total_mm:.0f} mm, peaking in {wettest} and lowest in {driest}. Use this screening distribution "
+                    "with observed gauges, site drainage capacity, soil/infiltration data, and forecast rainfall for flood and drought assessment.",
+                    dict(station=station_name, source=source_kind, total_mm=total_annual_mm, wettest=wettest_month, driest=driest_month))
+                _add_manual_pdf_caption("Monthly Precipitation", cap_precip)
+            elif precip_wtr_col and not precip_wtr.empty and float(precip_wtr.max()) > 0:
                 m_wtr = _month_group(precip_wtr_col, "precip", "mean")
                 fig = px.bar(
                     m_wtr,
@@ -6790,6 +6883,8 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                     if precip_col
                     else "Precipitation data not available in source file."
                 )
+                if precip_info.get("fetch_error"):
+                    msg = f"{msg} External precipitation lookup failed: {precip_info.get('fetch_error')}"
                 extra["Monthly Precipitation"] = _placeholder_fig("Monthly Precipitation", msg)
 
         snow = _clean_col(snow_col, "snow")
@@ -6828,17 +6923,27 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                 annual_hdd = float(bym["HDD18"].sum())
                 annual_cdd = float(bym["CDD18"].sum())
                 annual_gdd = float(bym["GDD5"].sum())
+                degree_day_factor = 9.0 / 5.0 if _temp_unit() == "F" else 1.0
+                degree_day_unit = "°F-days" if _temp_unit() == "F" else "°C-days"
+                hdd_base_label = format_temperature(18.0, digits=0)
+                gdd_base_label = format_temperature(5.0, digits=0)
+                hdd_display = bym["HDD18"] * degree_day_factor
+                cdd_display = bym["CDD18"] * degree_day_factor
+                gdd_display = bym["GDD5"] * degree_day_factor
+                annual_hdd_display = annual_hdd * degree_day_factor
+                annual_cdd_display = annual_cdd * degree_day_factor
+                annual_gdd_display = annual_gdd * degree_day_factor
                 
                 fig_dd = make_subplots(
                     rows=1,
                     cols=2,
-                    subplot_titles=("Heating and Cooling Degree Days (Base 18°C)", "Growing Degree Days (Base 5°C)"),
+                    subplot_titles=(f"Heating and Cooling Degree Days (Base {hdd_base_label})", f"Growing Degree Days (Base {gdd_base_label})"),
                 )
-                fig_dd.add_trace(go.Bar(x=bym["Month"], y=bym["HDD18"], name="HDD18", marker_color="#60a5fa"), row=1, col=1)
-                fig_dd.add_trace(go.Bar(x=bym["Month"], y=bym["CDD18"], name="CDD18", marker_color="#fb923c"), row=1, col=1)
-                fig_dd.add_trace(go.Bar(x=bym["Month"], y=bym["GDD5"], name="GDD5", marker_color="#437a22"), row=1, col=2)
+                fig_dd.add_trace(go.Bar(x=bym["Month"], y=hdd_display, name="HDD18", marker_color="#60a5fa"), row=1, col=1)
+                fig_dd.add_trace(go.Bar(x=bym["Month"], y=cdd_display, name="CDD18", marker_color="#fb923c"), row=1, col=1)
+                fig_dd.add_trace(go.Bar(x=bym["Month"], y=gdd_display, name="GDD5", marker_color="#437a22"), row=1, col=2)
                 fig_dd.add_annotation(
-                    text=f"Annual GDD: {annual_gdd:.0f} °C·days",
+                    text=f"Annual GDD: {annual_gdd_display:.0f} {degree_day_unit}",
                     x=0.98,
                     y=0.95,
                     xref="paper",
@@ -6850,18 +6955,18 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                     bordercolor="gray",
                 )
                 fig_dd.update_layout(title="Heating and Cooling Degree Days", barmode="group", height=520)
-                fig_dd.update_yaxes(title_text="Degree days", row=1, col=1)
-                fig_dd.update_yaxes(title_text="Degree days", row=1, col=2)
+                fig_dd.update_yaxes(title_text=degree_day_unit, row=1, col=1)
+                fig_dd.update_yaxes(title_text=degree_day_unit, row=1, col=2)
                 extra["Heating and Cooling Degree Days"] = fig_dd
                 # BUG 6: Computed caption with actual HDD, CDD, GDD values
                 climate_zone = "heating-dominated" if annual_hdd > 3 * annual_cdd else ("cooling-dominated" if annual_cdd > 3 * annual_hdd else "mixed-load")
                 cap_dd = safe_format_caption(
-                    "Degree days aggregate hourly departures from an 18 deg C base into monthly heating and cooling "
-                    "demand indicators, with growing degree days (GDD base 5 deg C) added for agricultural and "
+                    "Degree days aggregate hourly departures from an {hdd_base} base into monthly heating and cooling "
+                    "demand indicators, with growing degree days (GDD base {gdd_base}) added for agricultural and "
                     "phenological context. For {station}, annual HDD18 is {hdd:.0f}, CDD18 is {cdd:.0f}, and "
-                    "GDD5 is {gdd:.0f} deg C-days - placing this climate in the {zone} "
+                    "GDD5 is {gdd:.0f} {dd_unit} - placing this climate in the {zone} "
                     "zone for early-stage mechanical system sizing.",
-                    dict(station=station_name, hdd=annual_hdd, cdd=annual_cdd, gdd=annual_gdd, zone=climate_zone))
+                    dict(station=station_name, hdd_base=hdd_base_label, gdd_base=gdd_base_label, hdd=annual_hdd_display, cdd=annual_cdd_display, gdd=annual_gdd_display, dd_unit=degree_day_unit, zone=climate_zone))
                 _add_manual_pdf_caption("Heating and Cooling Degree Days", cap_dd)
 
         def _add_month_hour_heatmap(value_col: Optional[str], title: str, colorscale: str = "Viridis"):
@@ -6869,6 +6974,9 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                 return
             local = df[["__month", "__hour", value_col]].copy()
             local[value_col] = pd.to_numeric(local[value_col], errors="coerce")
+            temp_like = any(token in title.lower() for token in ["dry bulb", "dew point", "mrt", "utci"])
+            if temp_like:
+                local[value_col] = _display_temp_values(local[value_col])
             local = local.dropna(subset=["__month", "__hour", value_col])
             if local.empty:
                 return
@@ -6886,7 +6994,7 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                     x=[calendar.month_abbr[int(m)] for m in piv.columns],
                     y=[int(h) for h in piv.index],
                     colorscale=colorscale,
-                    colorbar=dict(title=value_col),
+                    colorbar=dict(title=temp_unit if temp_like else value_col),
                     **heatmap_kwargs,
                 )
             )
@@ -6912,15 +7020,18 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                 utci_daily_max = utci_ts.groupby("date")["utci"].max()
                 utci_daily_min = utci_ts.groupby("date")["utci"].min()
                 temp_daily = utci_ts.groupby("date")["temp"].mean()
+                utci_daily_max_display = _display_temp_values(utci_daily_max)
+                utci_daily_min_display = _display_temp_values(utci_daily_min)
+                temp_daily_display = _display_temp_values(temp_daily)
                 
                 fig_utci_ts = go.Figure()
-                fig_utci_ts.add_trace(go.Scatter(x=temp_daily.index, y=temp_daily.values, mode="lines", name="Mean Dry Bulb", line=dict(color="#fb923c", width=1)))
-                fig_utci_ts.add_trace(go.Scatter(x=utci_daily_max.index, y=utci_daily_max.values, mode="lines", name="Max UTCI", line=dict(color="#ef4444", width=2)))
-                fig_utci_ts.add_trace(go.Scatter(x=utci_daily_min.index, y=utci_daily_min.values, mode="lines", name="Min UTCI", line=dict(color="#3b82f6", width=2)))
+                fig_utci_ts.add_trace(go.Scatter(x=temp_daily.index, y=temp_daily_display.values, mode="lines", name="Mean Dry Bulb", line=dict(color="#fb923c", width=1)))
+                fig_utci_ts.add_trace(go.Scatter(x=utci_daily_max.index, y=utci_daily_max_display.values, mode="lines", name="Max UTCI", line=dict(color="#ef4444", width=2)))
+                fig_utci_ts.add_trace(go.Scatter(x=utci_daily_min.index, y=utci_daily_min_display.values, mode="lines", name="Min UTCI", line=dict(color="#3b82f6", width=2)))
                 
                 fig_utci_ts.update_layout(
                     title="UTCI Annual Time Series",
-                    yaxis_title="Temperature (°C)",
+                    yaxis_title=f"Temperature ({temp_unit})",
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                 )
                 extra["UTCI Annual Time Series"] = fig_utci_ts
@@ -7031,11 +7142,15 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                 dtmp["hdd18"] = (18.0 - dtmp["t"]).clip(lower=0)
                 dtmp["cdd18"] = (dtmp["t"] - 18.0).clip(lower=0)
                 bym = dtmp.groupby("m")[["hdd18", "cdd18"]].sum().reset_index()
+                degree_hour_factor = 9.0 / 5.0 if _temp_unit() == "F" else 1.0
+                degree_hour_unit = "°F-hours" if _temp_unit() == "F" else "°C-hours"
+                bym["hdd18_display"] = bym["hdd18"] * degree_hour_factor
+                bym["cdd18_display"] = bym["cdd18"] * degree_hour_factor
                 bym["month"] = bym["m"].astype(int).apply(lambda m: calendar.month_abbr[m])
                 fig_dd = go.Figure()
-                fig_dd.add_trace(go.Bar(x=bym["month"], y=bym["hdd18"], name="HDD18"))
-                fig_dd.add_trace(go.Bar(x=bym["month"], y=bym["cdd18"], name="CDD18"))
-                fig_dd.update_layout(title="Degree Day Summary", barmode="group", yaxis_title="Degree-hours")
+                fig_dd.add_trace(go.Bar(x=bym["month"], y=bym["hdd18_display"], name="HDD18"))
+                fig_dd.add_trace(go.Bar(x=bym["month"], y=bym["cdd18_display"], name="CDD18"))
+                fig_dd.update_layout(title="Degree Day Summary", barmode="group", yaxis_title=degree_hour_unit)
                 extra["Degree Day Summary"] = fig_dd
 
         # Psychrometric annual/seasonal/monthly and hourly paths
@@ -7045,21 +7160,22 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
             ps[rh_col] = pd.to_numeric(ps[rh_col], errors="coerce")
             ps = ps.dropna(subset=[t_col, rh_col])
             if not ps.empty:
+                ps["__temp_display"] = _display_temp_values(ps[t_col])
                 sampled = ps.sample(n=min(len(ps), 4000), random_state=7) if len(ps) > 4000 else ps
-                fig_pa = px.scatter(sampled, x=t_col, y=rh_col, opacity=0.35, title="Annual Psychrometric Analysis")
-                fig_pa.update_layout(xaxis_title="Dry Bulb (deg C)", yaxis_title="Relative Humidity (%)")
+                fig_pa = px.scatter(sampled, x="__temp_display", y=rh_col, opacity=0.35, title="Annual Psychrometric Analysis")
+                fig_pa.update_layout(xaxis_title=f"Dry Bulb ({temp_unit})", yaxis_title="Relative Humidity (%)")
                 extra["Annual Psychrometric Analysis"] = fig_pa
 
                 if sampled["__season"].notna().any():
-                    fig_ps = px.scatter(sampled, x=t_col, y=rh_col, color="__season", opacity=0.35, title="Seasonal Psychrometric Analysis")
-                    fig_ps.update_layout(xaxis_title="Dry Bulb (deg C)", yaxis_title="Relative Humidity (%)", legend_title="Season")
+                    fig_ps = px.scatter(sampled, x="__temp_display", y=rh_col, color="__season", opacity=0.35, title="Seasonal Psychrometric Analysis")
+                    fig_ps.update_layout(xaxis_title=f"Dry Bulb ({temp_unit})", yaxis_title="Relative Humidity (%)", legend_title="Season")
                     extra["Seasonal Psychrometric Analysis"] = fig_ps
 
                 if sampled["__month"].notna().any():
                     sampled = sampled.copy()
                     sampled["__month_name"] = sampled["__month"].astype(int).map(lambda m: calendar.month_abbr[m])
-                    fig_pm = px.scatter(sampled, x=t_col, y=rh_col, color="__month_name", opacity=0.28, title="Monthly Psychrometric Analysis")
-                    fig_pm.update_layout(xaxis_title="Dry Bulb (deg C)", yaxis_title="Relative Humidity (%)", legend_title="Month")
+                    fig_pm = px.scatter(sampled, x="__temp_display", y=rh_col, color="__month_name", opacity=0.28, title="Monthly Psychrometric Analysis")
+                    fig_pm.update_layout(xaxis_title=f"Dry Bulb ({temp_unit})", yaxis_title="Relative Humidity (%)", legend_title="Month")
                     extra["Monthly Psychrometric Analysis"] = fig_pm
 
                 # 12-month lines for Hourly Psychrometric Paths
@@ -7067,16 +7183,19 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                 if not hp.empty:
                     fig_hp = go.Figure()
                     
-                    # Add simple Comfort Zone polygon (T: 20-26°C, RH: 20-80%)
-                    fig_hp.add_shape(type="rect", x0=20, y0=20, x1=26, y1=80, line=dict(color="rgba(16, 185, 129, 0.5)", width=2), fillcolor="rgba(16, 185, 129, 0.1)")
-                    fig_hp.add_annotation(x=23, y=82, text="Comfort Zone", showarrow=False, font=dict(color="#10b981"))
+                    # Add simple Comfort Zone polygon (T: 20-26 C, RH: 20-80%).
+                    comfort_x0 = convert_threshold_for_display(20.0)
+                    comfort_x1 = convert_threshold_for_display(26.0)
+                    comfort_x_mid = convert_threshold_for_display(23.0)
+                    fig_hp.add_shape(type="rect", x0=comfort_x0, y0=20, x1=comfort_x1, y1=80, line=dict(color="rgba(16, 185, 129, 0.5)", width=2), fillcolor="rgba(16, 185, 129, 0.1)")
+                    fig_hp.add_annotation(x=comfort_x_mid, y=82, text="Comfort Zone", showarrow=False, font=dict(color="#10b981"))
                     
                     for month in range(1, 13):
                         m_data = hp[hp["__month"] == month].sort_values("__hour")
                         if not m_data.empty:
                             m_data = pd.concat([m_data, m_data.iloc[[0]]]) # Close the path
                             fig_hp.add_trace(go.Scatter(
-                                x=m_data[t_col], 
+                                x=_display_temp_values(m_data[t_col]), 
                                 y=m_data[rh_col], 
                                 mode="lines+markers", 
                                 name=calendar.month_abbr[month],
@@ -7086,7 +7205,7 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                             
                     fig_hp.update_layout(
                         title="Hourly Psychrometric Paths", 
-                        xaxis_title="Dry Bulb (°C)", 
+                        xaxis_title=f"Dry Bulb ({temp_unit})", 
                         yaxis_title="Relative Humidity (%)",
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
@@ -7573,6 +7692,32 @@ def _monthly_precipitation_dashboard_fig(cdf: Optional[pd.DataFrame]) -> go.Figu
     grouped_agg = "sum"
 
     if precip.empty or float(precip.max()) <= 0:
+        precip_info = _overview_precipitation_summary(cdf, st.session_state.get("header") or {})
+        if bool(precip_info.get("depth_available")):
+            monthly = precip_info.get("monthly")
+            if isinstance(monthly, pd.Series):
+                grouped = monthly.reindex(range(1, 13), fill_value=0).astype(float)
+                labels = [calendar.month_abbr[m] for m in range(1, 13)]
+                plot_title = "Monthly Precipitation"
+                if bool(precip_info.get("external_precipitation")):
+                    plot_title = "Monthly Precipitation (Open-Meteo)"
+                fig = px.bar(x=labels, y=grouped.values, labels={"x": "Month", "y": y_title}, title=plot_title)
+                fig.update_traces(marker_color="#38bdf8")
+                fig.update_layout(height=420, margin=dict(t=90))
+                if bool(precip_info.get("external_precipitation")):
+                    fig.add_annotation(
+                        text="<i>Rainfall depth fetched from Open-Meteo because the EPW rainfall field is empty.</i>",
+                        x=0,
+                        y=1.08,
+                        xref="paper",
+                        yref="paper",
+                        xanchor="left",
+                        showarrow=False,
+                        align="left",
+                        font=dict(size=10, color="#64748b"),
+                    )
+                return fig
+
         fallback_col = _precipitable_water_column(cdf)
         fallback = _metric_series_from_hourly(cdf, fallback_col, "precip")
         if fallback.empty or float(fallback.max()) <= 0:
@@ -7701,19 +7846,276 @@ def _wind_speed_frequency_dashboard_fig(cdf: Optional[pd.DataFrame]) -> go.Figur
     return fig
 
 
+def _download_slug(label: object, fallback: str = "site") -> str:
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", str(label or fallback)).strip("_")
+    return slug or fallback
+
+
+def _json_ready(value: object) -> object:
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.isoformat()
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return None if pd.isna(value) else float(value)
+    if pd.isna(value):
+        return None
+    return value
+
+
+def _point_feature_collection(df: pd.DataFrame, header: Optional[dict], *, source_label: str) -> str:
+    coords = _site_coordinates_from_header(header or {})
+    if coords is None or df is None or df.empty:
+        return json.dumps({"type": "FeatureCollection", "features": []}, indent=2)
+    lat, lon = coords
+    features = []
+    for _, row in df.iterrows():
+        props = {str(k): _json_ready(v) for k, v in row.to_dict().items()}
+        props.setdefault("source", source_label)
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [float(lon), float(lat)]},
+            "properties": props,
+        })
+    return json.dumps({"type": "FeatureCollection", "features": features}, indent=2, ensure_ascii=True)
+
+
+def _monthly_precipitation_indicator_table(precip_info: Dict[str, object], header: Optional[dict] = None) -> pd.DataFrame:
+    months = list(range(1, 13))
+    monthly = precip_info.get("monthly")
+    water_balance = precip_info.get("water_balance")
+    wet_days = precip_info.get("wet_days_by_month")
+    heavy_days = precip_info.get("heavy_days_by_month")
+    dry_days = precip_info.get("dry_days_by_month")
+    monthly = monthly if isinstance(monthly, pd.Series) else pd.Series(0.0, index=months)
+    water_balance = water_balance if isinstance(water_balance, pd.Series) else pd.Series(0.0, index=months)
+    wet_days = wet_days if isinstance(wet_days, pd.Series) else pd.Series(0.0, index=months)
+    heavy_days = heavy_days if isinstance(heavy_days, pd.Series) else pd.Series(0.0, index=months)
+    dry_days = dry_days if isinstance(dry_days, pd.Series) else pd.Series(0.0, index=months)
+
+    signal = pd.Series("Balanced", index=months, dtype=object)
+    signal.loc[water_balance.reindex(months, fill_value=0) > 30] = "Flood-watch"
+    signal.loc[water_balance.reindex(months, fill_value=0) < -30] = "Drought-watch"
+    coords = _site_coordinates_from_header(header or {})
+    lat, lon = coords if coords else (np.nan, np.nan)
+    station = _safe_location_label(header or {})
+    source_kind = str(precip_info.get("source_kind") or "Rainfall data")
+    date_range = str(precip_info.get("date_range") or "")
+    frame = pd.DataFrame({
+        "station": station,
+        "latitude": lat,
+        "longitude": lon,
+        "source": source_kind,
+        "date_range": date_range,
+        "month": months,
+        "month_name": [calendar.month_name[m] for m in months],
+        "rain_mm": monthly.reindex(months, fill_value=0).round(2).values,
+        "rain_in": (monthly.reindex(months, fill_value=0) / 25.4).round(3).values,
+        "wet_days_ge_1mm": wet_days.reindex(months, fill_value=0).astype(int).values,
+        "heavy_rain_days_ge_25mm": heavy_days.reindex(months, fill_value=0).astype(int).values,
+        "dry_days_lt_1mm": dry_days.reindex(months, fill_value=0).astype(int).values,
+        "water_signal_score": water_balance.reindex(months, fill_value=0).round(1).values,
+        "screening_signal": signal.values,
+    })
+    return frame
+
+
+def _daily_precipitation_indicator_table(precip_info: Dict[str, object], header: Optional[dict] = None) -> pd.DataFrame:
+    daily = precip_info.get("daily")
+    if not isinstance(daily, pd.Series) or daily.empty:
+        return pd.DataFrame()
+    daily = pd.to_numeric(daily, errors="coerce").dropna().clip(lower=0).sort_index()
+    if not isinstance(daily.index, pd.DatetimeIndex):
+        daily.index = pd.to_datetime(daily.index, errors="coerce")
+        daily = daily.loc[~pd.isna(daily.index)]
+    if daily.empty:
+        return pd.DataFrame()
+    coords = _site_coordinates_from_header(header or {})
+    lat, lon = coords if coords else (np.nan, np.nan)
+    station = _safe_location_label(header or {})
+    source_kind = str(precip_info.get("source_kind") or "Rainfall data")
+    frame = pd.DataFrame({
+        "station": station,
+        "latitude": lat,
+        "longitude": lon,
+        "source": source_kind,
+        "date": daily.index.date.astype(str),
+        "year": daily.index.year,
+        "month": daily.index.month,
+        "day": daily.index.day,
+        "rain_mm": daily.round(2).values,
+        "rain_in": (daily / 25.4).round(3).values,
+        "wet_day_ge_1mm": (daily >= 1.0).astype(int).values,
+        "heavy_rain_day_ge_25mm": (daily >= 25.0).astype(int).values,
+        "dry_day_lt_1mm": (daily < 1.0).astype(int).values,
+        "rolling_3day_rain_mm": daily.rolling(3, min_periods=1).sum().round(2).values,
+        "rolling_5day_rain_mm": daily.rolling(5, min_periods=1).sum().round(2).values,
+    })
+    return frame
+
+
+def _forecast_precipitation_indicator_table(daily_df: Optional[pd.DataFrame], header: Optional[dict] = None) -> pd.DataFrame:
+    if daily_df is None or daily_df.empty or "precip_sum" not in daily_df.columns:
+        return pd.DataFrame()
+    work = daily_df.copy()
+    work["date"] = pd.to_datetime(work.get("date"), errors="coerce")
+    work["rain_mm"] = pd.to_numeric(work.get("precip_sum"), errors="coerce").fillna(0).clip(lower=0)
+    work["rain_in"] = (work["rain_mm"] / 25.4).round(3)
+    work["precip_probability_pct"] = pd.to_numeric(work.get("precip_prob"), errors="coerce")
+    work["rolling_3day_rain_mm"] = work["rain_mm"].rolling(3, min_periods=1).sum().round(2)
+    work["rolling_7day_rain_mm"] = work["rain_mm"].rolling(7, min_periods=1).sum().round(2)
+    work["forecast_signal"] = "Balanced"
+    work.loc[work["rain_mm"] >= 25.0, "forecast_signal"] = "Flood-watch"
+    work.loc[(work["rain_mm"] < 1.0) & (work["rolling_7day_rain_mm"] <= 5.0), "forecast_signal"] = "Drought-watch"
+    coords = _site_coordinates_from_header(header or {})
+    lat, lon = coords if coords else (np.nan, np.nan)
+    station = _safe_location_label(header or {})
+    out = pd.DataFrame({
+        "station": station,
+        "latitude": lat,
+        "longitude": lon,
+        "source": "Open-Meteo 10-day forecast",
+        "date": work["date"].dt.date.astype(str),
+        "rain_mm": work["rain_mm"].round(2),
+        "rain_in": work["rain_in"],
+        "precip_probability_pct": work["precip_probability_pct"],
+        "rolling_3day_rain_mm": work["rolling_3day_rain_mm"],
+        "rolling_7day_rain_mm": work["rolling_7day_rain_mm"],
+        "forecast_signal": work["forecast_signal"],
+    })
+    return out
+
+
+def _render_precipitation_gis_exports(precip_info: Dict[str, object], header: Optional[dict]) -> None:
+    if not bool(precip_info.get("depth_available")):
+        return
+    monthly_table = _monthly_precipitation_indicator_table(precip_info, header)
+    daily_table = _daily_precipitation_indicator_table(precip_info, header)
+    station_slug = _download_slug(_safe_location_label(header or {}), "site")
+    source_kind = str(precip_info.get("source_kind") or "Rainfall data")
+
+    st.markdown("#### GIS-ready rainfall data")
+    st.caption(
+        "These exports are rainfall hazard inputs for GIS screening. Use terrain, drainage, soil, stream gauge, and forecast layers before making final flood or drought predictions."
+    )
+    st.dataframe(monthly_table, use_container_width=True, hide_index=True)
+
+    monthly_csv = monthly_table.to_csv(index=False).encode("utf-8")
+    daily_csv = daily_table.to_csv(index=False).encode("utf-8") if not daily_table.empty else b""
+    monthly_geojson = _point_feature_collection(monthly_table, header, source_label=source_kind).encode("utf-8")
+    daily_geojson = _point_feature_collection(daily_table, header, source_label=source_kind).encode("utf-8") if not daily_table.empty else b""
+
+    d1, d2, d3, d4 = st.columns(4)
+    d1.download_button("Download monthly CSV", monthly_csv, f"{station_slug}_rainfall_monthly_indicators.csv", "text/csv", use_container_width=True)
+    d2.download_button("Download monthly GeoJSON", monthly_geojson, f"{station_slug}_rainfall_monthly_indicators.geojson", "application/geo+json", use_container_width=True)
+    d3.download_button("Download daily CSV", daily_csv, f"{station_slug}_rainfall_daily_series.csv", "text/csv", use_container_width=True, disabled=daily_table.empty)
+    d4.download_button("Download daily GeoJSON", daily_geojson, f"{station_slug}_rainfall_daily_series.geojson", "application/geo+json", use_container_width=True, disabled=daily_table.empty)
+
+
+def _daily_precipitation_screening_fig(precip_info: Dict[str, object]) -> Optional[go.Figure]:
+    daily = precip_info.get("daily")
+    if not isinstance(daily, pd.Series) or daily.empty:
+        return None
+    daily = pd.to_numeric(daily, errors="coerce").dropna().clip(lower=0).sort_index()
+    if not isinstance(daily.index, pd.DatetimeIndex) or daily.empty:
+        return None
+    fig = go.Figure()
+    fig.add_bar(x=daily.index, y=daily.values, name="Daily rain", marker_color="#38bdf8")
+    fig.add_trace(go.Scatter(x=daily.index, y=daily.rolling(5, min_periods=1).sum(), mode="lines", name="5-day total", line=dict(color="#0f766e", width=2)))
+    fig.add_hline(y=25, line_dash="dash", line_color="#ef4444", annotation_text="Heavy-rain screen")
+    title_source = str(precip_info.get("monthly_label") or "Rainfall")
+    fig.update_layout(
+        title=f"Daily Rainfall Screening - {title_source}",
+        height=380,
+        yaxis_title="Rainfall (mm)",
+        xaxis_title="Date",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(t=78, b=60),
+    )
+    return fig
+
+
+def _render_future_precipitation_forecast_exports(header: Optional[dict]) -> None:
+    coords = _site_coordinates_from_header(header or {})
+    station_slug = _download_slug(_safe_location_label(header or {}), "site")
+    st.markdown("#### Near-term future rainfall for GIS")
+    st.caption("Fetches a 10-day Open-Meteo forecast. Flood-watch is based on daily rain >= 25 mm; drought-watch is a short-term dry-spell screen, not a full hydrologic drought model.")
+    if coords is None:
+        st.info("Latitude and longitude are required for the forecast rainfall lookup.")
+        return
+    lat, lon = coords
+    if st.button("Fetch 10-day rainfall forecast", key="precip_fetch_10day_forecast", use_container_width=True):
+        try:
+            import models.forecasting as fc
+            with st.spinner(f"Fetching 10-day rainfall forecast for {lat:.3f}, {lon:.3f}..."):
+                _, daily_df = fc.fetch_openmeteo_10day_forecast(float(lat), float(lon))
+            st.session_state["precip_forecast_daily"] = daily_df
+            st.session_state["precip_forecast_loaded_for"] = (round(float(lat), 5), round(float(lon), 5))
+            st.success("Forecast rainfall loaded.")
+        except Exception as exc:
+            st.error(f"Forecast rainfall lookup failed: {exc}")
+
+    daily_df = st.session_state.get("precip_forecast_daily")
+    if daily_df is None or daily_df.empty:
+        return
+    forecast_table = _forecast_precipitation_indicator_table(daily_df, header)
+    if forecast_table.empty:
+        st.info("Forecast loaded, but no precipitation values were returned.")
+        return
+
+    total_mm = float(forecast_table["rain_mm"].sum())
+    peak_mm = float(forecast_table["rain_mm"].max())
+    heavy_days = int((forecast_table["rain_mm"] >= 25.0).sum())
+    dry_watch_days = int((forecast_table["forecast_signal"] == "Drought-watch").sum())
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("10-day rain", f"{total_mm:.0f} mm", f"{total_mm / 25.4:.1f} in")
+    m2.metric("Peak daily rain", f"{peak_mm:.0f} mm", f"{peak_mm / 25.4:.1f} in")
+    m3.metric("Flood-watch days", f"{heavy_days} d", ">= 25 mm/day")
+    m4.metric("Drought-watch days", f"{dry_watch_days} d", "short dry screen")
+
+    fig = go.Figure()
+    fig.add_bar(x=forecast_table["date"], y=forecast_table["rain_mm"], name="Forecast rain", marker_color="#38bdf8")
+    fig.add_hline(y=25, line_dash="dash", line_color="#ef4444", annotation_text="Heavy rain screen")
+    fig.update_layout(height=360, title="10-day forecast precipitation", yaxis_title="Rainfall (mm)", xaxis_title="Date", margin=dict(t=70, b=60))
+    _st_plotly_chart(fig, use_container_width=True, key="precip_10day_forecast_chart")
+    st.dataframe(forecast_table, use_container_width=True, hide_index=True)
+
+    forecast_csv = forecast_table.to_csv(index=False).encode("utf-8")
+    forecast_geojson = _point_feature_collection(forecast_table, header, source_label="Open-Meteo 10-day forecast").encode("utf-8")
+    d1, d2 = st.columns(2)
+    d1.download_button("Download forecast CSV", forecast_csv, f"{station_slug}_forecast_rainfall_10day.csv", "text/csv", use_container_width=True)
+    d2.download_button("Download forecast GeoJSON", forecast_geojson, f"{station_slug}_forecast_rainfall_10day.geojson", "application/geo+json", use_container_width=True)
+
+
 def render_precipitation_thermal_load_page() -> None:
     cdf = st.session_state.get("cdf")
+    header = st.session_state.get("header") or {}
     fig_precip = _monthly_precipitation_dashboard_fig(cdf)
     _st_plotly_chart(fig_precip, use_container_width=True, key="precip_context_monthly_precip")
     _add_manual_pdf_figure("Monthly Precipitation", fig_precip)
+    if cdf is None or cdf.empty:
+        return
+    precip_info = _overview_precipitation_summary(cdf, header)
+    _render_overview_precipitation_tracker(precip_info)
+    daily_precip_fig = _daily_precipitation_screening_fig(precip_info)
+    if daily_precip_fig is not None:
+        _st_plotly_chart(daily_precip_fig, use_container_width=True, key="precip_daily_screening")
+    _render_precipitation_gis_exports(precip_info, header)
+    _render_future_precipitation_forecast_exports(header)
+
     fig_snow = _snowfall_profile_dashboard_fig(cdf)
     _st_plotly_chart(fig_snow, use_container_width=True, key="precip_context_snowfall")
     _add_manual_pdf_figure("Snowfall Profile", fig_snow)
 
     # Precipitation Heatmap
     precip_col = _precip_depth_column(cdf)
-    if precip_col:
+    native_precip = _metric_series_from_hourly(cdf, precip_col, "precip")
+    if precip_col and not native_precip.empty and float(native_precip.max()) > 0:
         _render_heatmap(cdf, precip_col, "Precipitation Annual Heatmap (Hour x Day)", "mm", "Blues")
+    elif bool(precip_info.get("external_precipitation")):
+        st.caption("Hourly precipitation heatmap is skipped because rainfall came from daily external data, not an hourly EPW precipitation column.")
 
 def _koppen_classification(cdf: Optional[pd.DataFrame], header: Optional[dict] = None) -> Dict[str, str]:
     header = header or {}
@@ -7922,6 +8324,42 @@ def _pdf_safe_text(t: str) -> str:
     return s.encode("latin-1", "replace").decode("latin-1")
 
 
+def _pdf_coordinate_label(value: object, positive_suffix: str, negative_suffix: str) -> str:
+    try:
+        numeric = float(str(value).replace("deg", "").strip())
+    except Exception:
+        return "--"
+    suffix = positive_suffix if numeric >= 0 else negative_suffix
+    return f"{abs(numeric):.3f} deg {suffix}"
+
+
+def _pdf_wrap_value_lines(pdf: FPDF, text: object, max_width: float) -> List[str]:
+    words = _pdf_safe_text(text).split()
+    if not words:
+        return ["--"]
+    lines: List[str] = []
+    current = ""
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if pdf.get_string_width(candidate) <= max_width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+            current = ""
+        piece = word
+        while pdf.get_string_width(piece) > max_width and len(piece) > 4:
+            cut = len(piece)
+            while cut > 4 and pdf.get_string_width(piece[:cut] + "-") > max_width:
+                cut -= 1
+            lines.append(piece[:cut] + "-")
+            piece = piece[cut:]
+        current = piece
+    if current:
+        lines.append(current)
+    return lines or ["--"]
+
+
 def _pdf_section_label(section_name: str) -> str:
     label = str(section_name or "").strip()
     if label.lower() in {"undefined", "none", "null"}:
@@ -7948,9 +8386,9 @@ def build_cover_page(pdf: ClimateReportPDF, location_label: str, source: str, lo
         location_y = 108
         meta_y = 55
         note_y = pdf.h - 28
-        content_w = min(pdf.w * 0.52, 150)
+        content_w = min(pdf.w * 0.44, 128)
         meta_x = x0 + content_w + 18
-        meta_w = max(86, pdf.w - meta_x - x0)
+        meta_w = max(100, pdf.w - meta_x - x0)
     else:
         x0 = 42 if large_page else 28
         accent_x = 26 if large_page else 18
@@ -8010,30 +8448,45 @@ def build_cover_page(pdf: ClimateReportPDF, location_label: str, source: str, lo
     pdf.multi_cell(content_w, 10 if large_page else 8, _pdf_safe_text(location_label))
 
     y_pos = meta_y
+    lat_text = _pdf_coordinate_label(loc_meta.get("lat", "--"), "N", "S")
+    lon_text = _pdf_coordinate_label(loc_meta.get("lon", "--"), "E", "W")
     meta_items = [
         ("Station", f"{loc_meta.get('city', '--')}, {loc_meta.get('country', '--')}"),
-        ("Weather Source", source[:88]),
+        ("Weather Source", source),
         ("WMO Station", loc_meta.get("wmo", "--")),
-        ("Coordinates", f"{loc_meta.get('lat', '--')} deg N, {loc_meta.get('lon', '--')} deg E"),
+        ("Coordinates", f"{lat_text}, {lon_text}"),
         ("Elevation", loc_meta.get("elev", "--")),
         ("Timezone", loc_meta.get("tz", "--")),
         ("Generated", generated_on),
     ]
 
+    label_w = 44 if large_page else 31
+    line_h = 5.2 if large_page else 4.6
+    row_gap = 2.1 if large_page else 1.6
+    value_w = max(32, meta_w - label_w - 18)
+    pdf.set_font("Helvetica", "", 10 if large_page else 8.2)
+    prepared_meta: List[Tuple[str, List[str], float]] = []
+    for label, val in meta_items:
+        value_lines = _pdf_wrap_value_lines(pdf, val, value_w)
+        row_h = max(line_h, len(value_lines) * line_h) + row_gap
+        prepared_meta.append((label, value_lines, row_h))
+
     pdf.set_fill_color(*PDF_SOFT_BG)
-    meta_h = 78 if large_page else 67
+    meta_h = max(78 if large_page else 67, sum(row_h for _, _, row_h in prepared_meta) + 11)
     pdf.rect(meta_x, y_pos - 7, meta_w, meta_h, "F")
     pdf.set_draw_color(*PDF_FAINT)
     pdf.rect(meta_x, y_pos - 7, meta_w, meta_h)
-    for label, val in meta_items:
+    for label, value_lines, row_h in prepared_meta:
         pdf.set_xy(meta_x + 8, y_pos)
         pdf.set_font("Helvetica", "B", 9 if large_page else 8)
         pdf.set_text_color(*PDF_MUTED)
-        pdf.cell(54 if large_page else 39, 6, _pdf_safe_text(label.upper()), ln=0)
-        pdf.set_font("Helvetica", "", 12.5 if large_page else 11)
+        pdf.cell(label_w, line_h, _pdf_safe_text(label.upper()), ln=0)
+        pdf.set_font("Helvetica", "", 10 if large_page else 8.2)
         pdf.set_text_color(*PDF_INK)
-        pdf.cell(meta_w - (76 if large_page else 56), 6, _pdf_safe_text(str(val)), ln=1)
-        y_pos += 9.6 if large_page else 8.5
+        value_x = meta_x + 8 + label_w
+        pdf.set_xy(value_x, y_pos)
+        pdf.multi_cell(value_w, line_h, "\n".join(value_lines))
+        y_pos += row_h
 
     pdf.set_font("Helvetica", "", 10 if large_page else 8.5)
     pdf.set_text_color(*PDF_MUTED)
@@ -8568,13 +9021,172 @@ def _overview_dewpoint_series(cdf: pd.DataFrame) -> pd.Series:
     return pd.Series(dew_calc, index=aligned.index, name="dewpoint")
 
 
-def _overview_precipitation_summary(cdf: pd.DataFrame) -> Dict[str, object]:
+def _site_coordinates_from_header(header: Optional[dict]) -> Optional[Tuple[float, float]]:
+    if not isinstance(header, dict):
+        return None
+    lat_raw = _meta_lookup(header, "latitude", "lat")
+    lon_raw = _meta_lookup(header, "longitude", "lon")
+    try:
+        lat = float(lat_raw)
+        lon = float(lon_raw)
+    except Exception:
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None
+    return lat, lon
+
+
+def _precipitation_lookup_date_range(cdf: Optional[pd.DataFrame]) -> Optional[Tuple[str, str]]:
+    if cdf is None or cdf.empty or not isinstance(cdf.index, pd.DatetimeIndex):
+        return None
+    idx = cdf.index
+    idx = idx[~pd.isna(idx)]
+    if len(idx) == 0:
+        return None
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_convert(None)
+    start = idx.min().date()
+    end = idx.max().date()
+    archive_start = datetime.date(1940, 1, 1)
+    latest_archive_day = datetime.date.today() - datetime.timedelta(days=5)
+    start = max(start, archive_start)
+    end = min(end, latest_archive_day)
+    if start > end:
+        return None
+    return start.isoformat(), end.isoformat()
+
+
+@CACHE(ttl=60 * 60, show_spinner=False)
+def _fetch_open_meteo_daily_precipitation(lat: float, lon: float, start_date: str, end_date: str) -> Dict[str, object]:
+    try:
+        params = {
+            "latitude": round(float(lat), 5),
+            "longitude": round(float(lon), 5),
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "daily": "precipitation_sum",
+            "precipitation_unit": "mm",
+            "timezone": "auto",
+        }
+        resp = requests.get(OPEN_METEO_ARCHIVE_URL, params=params, timeout=OPEN_METEO_PRECIP_TIMEOUT)
+        resp.raise_for_status()
+        payload = resp.json()
+        if payload.get("error"):
+            return {"error": str(payload.get("reason") or "Open-Meteo returned an error.")}
+
+        daily = payload.get("daily") or {}
+        times = list(daily.get("time") or [])
+        values = list(daily.get("precipitation_sum") or [])
+        if not times or len(times) != len(values):
+            return {"error": "Open-Meteo response did not include a complete daily precipitation series."}
+
+        frame = pd.DataFrame({
+            "date": pd.to_datetime(pd.Series(times, dtype="object"), errors="coerce"),
+            "precip_mm": pd.to_numeric(pd.Series(values, dtype="object"), errors="coerce"),
+        }).dropna(subset=["date"])
+        if frame.empty:
+            return {"error": "Open-Meteo returned no dated precipitation values."}
+        series = frame.set_index("date")["precip_mm"].dropna().clip(lower=0).sort_index()
+        series.name = "precipitation_sum"
+        if series.empty:
+            return {"error": "Open-Meteo precipitation values were empty after cleaning."}
+
+        return {
+            "series": series,
+            "source": "Open-Meteo Historical Weather API",
+            "timezone": payload.get("timezone") or "auto",
+            "url": OPEN_METEO_ARCHIVE_URL,
+        }
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def _apply_daily_precipitation_to_summary(
+    summary: Dict[str, object],
+    daily_precip_mm: pd.Series,
+    *,
+    source_col: str,
+    source_kind: str,
+    source_note: str = "",
+    source_url: str = "",
+    date_range: Optional[str] = None,
+    external: bool = False,
+) -> bool:
+    month_index = pd.Index(range(1, 13), name="month")
+    if daily_precip_mm is None or daily_precip_mm.empty:
+        return False
+    daily = pd.to_numeric(daily_precip_mm, errors="coerce")
+    if not isinstance(daily.index, pd.DatetimeIndex):
+        daily.index = pd.to_datetime(daily.index, errors="coerce")
+    daily = daily.loc[~pd.isna(daily.index)].dropna().clip(lower=0).sort_index()
+    if getattr(daily.index, "tz", None) is not None:
+        daily.index = daily.index.tz_convert(None)
+    if daily.empty:
+        return False
+
+    monthly = daily.groupby(daily.index.month).sum().reindex(month_index, fill_value=0.0).astype(float)
+    wet_mask = daily >= 1.0
+    heavy_mask = daily >= 25.0
+    dry_mask = daily < 1.0
+    wet_by_month = wet_mask.groupby(daily.index.month).sum().reindex(month_index, fill_value=0).astype(float)
+    heavy_by_month = heavy_mask.groupby(daily.index.month).sum().reindex(month_index, fill_value=0).astype(float)
+    dry_by_month = dry_mask.groupby(daily.index.month).sum().reindex(month_index, fill_value=0).astype(float)
+    observed_days = daily.groupby(daily.index.month).size().reindex(month_index, fill_value=0).astype(float)
+    default_days = pd.Series([calendar.monthrange(2021, int(m))[1] for m in month_index], index=month_index, dtype=float)
+    days_in_month = observed_days.where(observed_days > 0, default_days)
+    mean_monthly = max(float(monthly.mean()), 0.1)
+    flood_score = ((monthly / max(float(monthly.max()), 0.1)) * 72.0 + (heavy_by_month / max(float(heavy_by_month.max()), 1.0)) * 28.0).clip(0, 100)
+    rain_deficit = (1.0 - (monthly / mean_monthly)).clip(0, 1)
+    drought_score = ((dry_by_month / days_in_month) * 64.0 + rain_deficit * 36.0).clip(0, 100)
+    water_balance = (flood_score - drought_score).clip(-100, 100)
+    positive_months = monthly[monthly > 0]
+    if date_range is None:
+        date_range = f"{daily.index.min().date().isoformat()} to {daily.index.max().date().isoformat()}"
+
+    summary.update({
+        "available": True,
+        "depth_available": True,
+        "source_col": source_col,
+        "source_kind": source_kind,
+        "source_note": source_note,
+        "source_url": source_url,
+        "date_range": date_range,
+        "external_precipitation": bool(external),
+        "daily": daily,
+        "monthly": monthly,
+        "wet_days_by_month": wet_by_month,
+        "heavy_days_by_month": heavy_by_month,
+        "dry_days_by_month": dry_by_month,
+        "water_balance": water_balance,
+        "annual_total_mm": float(monthly.sum()),
+        "wet_days": int(wet_mask.sum()),
+        "heavy_days": int(heavy_mask.sum()),
+        "max_1d_mm": float(daily.max()),
+        "max_3d_mm": float(daily.rolling(3, min_periods=1).sum().max()),
+        "max_5d_mm": float(daily.rolling(5, min_periods=1).sum().max()),
+        "longest_dry_spell": _longest_true_run(dry_mask.tolist()),
+        "wettest_month": int(monthly.idxmax()) if not monthly.empty else None,
+        "driest_month": int(positive_months.idxmin()) if not positive_months.empty else None,
+        "monthly_label": "Rainfall (Open-Meteo)" if external else "Rainfall",
+        "monthly_unit": "mm",
+    })
+    return True
+
+
+def _overview_precipitation_summary(cdf: pd.DataFrame, header: Optional[dict] = None) -> Dict[str, object]:
     month_index = pd.Index(range(1, 13), name="month")
     empty_months = pd.Series(0.0, index=month_index)
     summary: Dict[str, object] = {
         "available": False,
         "depth_available": False,
         "source_col": None,
+        "source_kind": None,
+        "source_note": "",
+        "source_url": "",
+        "date_range": None,
+        "external_precipitation": False,
+        "fetch_error": None,
+        "daily": pd.Series(dtype=float),
         "monthly": empty_months.copy(),
         "wet_days_by_month": empty_months.copy(),
         "heavy_days_by_month": empty_months.copy(),
@@ -8596,48 +9208,62 @@ def _overview_precipitation_summary(cdf: pd.DataFrame) -> Dict[str, object]:
     precip_col = _precip_depth_column(cdf)
     precip = _metric_series_from_hourly(cdf, precip_col, "precip")
     if precip_col and not precip.empty and float(precip.max()) > 0:
-        monthly = _monthly_grouped_series(cdf, precip, "sum", 0.0)
-        summary.update({
-            "available": True,
-            "depth_available": True,
-            "source_col": precip_col,
-            "monthly": monthly,
-            "annual_total_mm": float(monthly.sum()),
-        })
-
         if isinstance(precip.index, pd.DatetimeIndex):
             daily = precip.resample("D").sum().dropna()
-            if not daily.empty:
-                wet_mask = daily >= 1.0
-                heavy_mask = daily >= 25.0
-                dry_mask = daily < 1.0
-                wet_by_month = wet_mask.groupby(daily.index.month).sum().reindex(month_index, fill_value=0).astype(float)
-                heavy_by_month = heavy_mask.groupby(daily.index.month).sum().reindex(month_index, fill_value=0).astype(float)
-                dry_by_month = dry_mask.groupby(daily.index.month).sum().reindex(month_index, fill_value=0).astype(float)
-                mean_monthly = max(float(monthly.mean()), 0.1)
-                flood_score = ((monthly / max(float(monthly.max()), 0.1)) * 72.0 + (heavy_by_month / max(float(heavy_by_month.max()), 1.0)) * 28.0).clip(0, 100)
-                days_in_month = pd.Series([calendar.monthrange(2021, m)[1] for m in month_index], index=month_index, dtype=float)
-                rain_deficit = (1.0 - (monthly / mean_monthly)).clip(0, 1)
-                drought_score = ((dry_by_month / days_in_month) * 64.0 + rain_deficit * 36.0).clip(0, 100)
-                water_balance = (flood_score - drought_score).clip(-100, 100)
-
-                summary.update({
-                    "wet_days_by_month": wet_by_month,
-                    "heavy_days_by_month": heavy_by_month,
-                    "dry_days_by_month": dry_by_month,
-                    "water_balance": water_balance,
-                    "wet_days": int(wet_mask.sum()),
-                    "heavy_days": int(heavy_mask.sum()),
-                    "max_1d_mm": float(daily.max()),
-                    "max_3d_mm": float(daily.rolling(3, min_periods=1).sum().max()),
-                    "max_5d_mm": float(daily.rolling(5, min_periods=1).sum().max()),
-                    "longest_dry_spell": _longest_true_run(dry_mask.tolist()),
-                })
-
-        positive_months = monthly[monthly > 0]
-        summary["wettest_month"] = int(monthly.idxmax()) if not monthly.empty else None
-        summary["driest_month"] = int(positive_months.idxmin()) if not positive_months.empty else None
+            _apply_daily_precipitation_to_summary(
+                summary,
+                daily,
+                source_col=precip_col,
+                source_kind="EPW liquid precipitation depth",
+            )
+        else:
+            monthly = _monthly_grouped_series(cdf, precip, "sum", 0.0)
+            summary.update({
+                "available": True,
+                "depth_available": True,
+                "source_col": precip_col,
+                "source_kind": "EPW liquid precipitation depth",
+                "monthly": monthly,
+                "annual_total_mm": float(monthly.sum()),
+                "wettest_month": int(monthly.idxmax()) if not monthly.empty else None,
+                "driest_month": int(monthly[monthly > 0].idxmin()) if not monthly[monthly > 0].empty else None,
+            })
         return summary
+
+    coords = _site_coordinates_from_header(header or st.session_state.get("header") or {})
+    lookup_range = _precipitation_lookup_date_range(cdf)
+    if coords and lookup_range:
+        lat, lon = coords
+        start_date, end_date = lookup_range
+        try:
+            fetched = _fetch_open_meteo_daily_precipitation(lat, lon, start_date, end_date)
+            if fetched.get("error"):
+                summary["fetch_error"] = str(fetched.get("error"))
+            else:
+                daily = fetched.get("series")
+                range_label = f"{start_date} to {end_date}"
+                source_note = (
+                    f"Rainfall depth is fetched from Open-Meteo historical reanalysis for {range_label} "
+                    f"at {lat:.3f}, {lon:.3f}. This replaces the empty EPW rainfall field for screening only."
+                )
+                if isinstance(daily, pd.Series) and _apply_daily_precipitation_to_summary(
+                    summary,
+                    daily,
+                    source_col="Open-Meteo precipitation_sum",
+                    source_kind=str(fetched.get("source") or "Open-Meteo Historical Weather API"),
+                    source_note=source_note,
+                    source_url=str(fetched.get("url") or OPEN_METEO_ARCHIVE_URL),
+                    date_range=range_label,
+                    external=True,
+                ):
+                    return summary
+                summary["fetch_error"] = "Open-Meteo returned no usable precipitation values."
+        except Exception as exc:
+            summary["fetch_error"] = f"{type(exc).__name__}: {exc}"
+    elif not coords:
+        summary["fetch_error"] = "EPW location is missing latitude/longitude coordinates."
+    elif not lookup_range:
+        summary["fetch_error"] = "EPW date range is outside the external precipitation archive window."
 
     fallback_col = _precipitable_water_column(cdf)
     fallback = _metric_series_from_hourly(cdf, fallback_col, "precip")
@@ -8646,6 +9272,7 @@ def _overview_precipitation_summary(cdf: pd.DataFrame) -> Dict[str, object]:
             "available": True,
             "depth_available": False,
             "source_col": fallback_col,
+            "source_kind": "EPW precipitable water",
             "monthly": _monthly_grouped_series(cdf, fallback, "mean", 0.0),
             "monthly_label": "Precipitable water",
             "monthly_unit": "mm",
@@ -8750,16 +9377,16 @@ def _build_overview_weather_by_month_figure(cdf: pd.DataFrame, location_label: s
     temp_col = get_metric_column(cdf, ["drybulb", "dry_bulb", "temp", "temperature"])
     temp = _metric_series_from_hourly(cdf, temp_col, "temp")
     if not temp.empty:
-        t_mean = _monthly_grouped_series(cdf, temp, "mean", np.nan)
-        t_min = _monthly_grouped_series(cdf, temp, "min", np.nan)
-        t_max = _monthly_grouped_series(cdf, temp, "max", np.nan)
+        t_mean = convert_temperature_series_for_display(_monthly_grouped_series(cdf, temp, "mean", np.nan))
+        t_min = convert_temperature_series_for_display(_monthly_grouped_series(cdf, temp, "min", np.nan))
+        t_max = convert_temperature_series_for_display(_monthly_grouped_series(cdf, temp, "max", np.nan))
         for y0, y1, color in [
-            (-60, 0, "#6da7bd"),
-            (0, 10, "#75a36c"),
-            (10, 18, "#9abc74"),
-            (18, 26, "#e9cc68"),
-            (26, 32, "#cf795b"),
-            (32, 60, "#b85f4f"),
+            (convert_threshold_for_display(-60), convert_threshold_for_display(0), "#6da7bd"),
+            (convert_threshold_for_display(0), convert_threshold_for_display(10), "#75a36c"),
+            (convert_threshold_for_display(10), convert_threshold_for_display(18), "#9abc74"),
+            (convert_threshold_for_display(18), convert_threshold_for_display(26), "#e9cc68"),
+            (convert_threshold_for_display(26), convert_threshold_for_display(32), "#cf795b"),
+            (convert_threshold_for_display(32), convert_threshold_for_display(60), "#b85f4f"),
         ]:
             fig.add_hrect(y0=y0, y1=y1, fillcolor=color, opacity=0.20, line_width=0, row=4, col=1)
         fig.add_trace(
@@ -8783,7 +9410,7 @@ def _build_overview_weather_by_month_figure(cdf: pd.DataFrame, location_label: s
                 name="mean dry bulb",
                 line=dict(color="#3d2e22", width=2),
                 marker=dict(size=7),
-                hovertemplate="Mean dry bulb: %{y:.1f} C<extra></extra>",
+                hovertemplate=f"Mean dry bulb: %{{y:.1f}} {temperature_unit_label()}<extra></extra>",
             ),
             row=4,
             col=1,
@@ -8827,24 +9454,38 @@ def _build_overview_weather_by_month_figure(cdf: pd.DataFrame, location_label: s
     fig.update_yaxes(title_text="Sky", ticksuffix="%", range=[0, 100], row=1, col=1)
     fig.update_yaxes(title_text=precip_unit, rangemode="tozero", row=2, col=1)
     fig.update_yaxes(title_text="Muggy", ticksuffix="%", range=[0, 100], row=3, col=1)
-    fig.update_yaxes(title_text="Temp C", row=4, col=1)
+    fig.update_yaxes(title_text=f"Temp {temperature_unit_label()}", row=4, col=1)
     fig.update_yaxes(title_text="Water", range=[-105, 105], row=5, col=1)
     return fig
 
 
 def _render_overview_precipitation_tracker(precip_info: Dict[str, object]) -> None:
     if not bool(precip_info.get("available")):
-        st.warning(
-            "Rainfall depth is not populated in this EPW file, so flood and drought indicators cannot be computed from the weather file alone."
+        fetch_error = precip_info.get("fetch_error")
+        message = (
+            "Rainfall depth is not populated in this EPW file, and no external rainfall series could be loaded for the same displayed period."
         )
+        if fetch_error:
+            message += f" External lookup detail: {fetch_error}"
+        st.warning(message)
         return
 
     if not bool(precip_info.get("depth_available")):
         source_col = precip_info.get("source_col") or "precipitable water"
+        fetch_error = precip_info.get("fetch_error")
+        extra = f" External rainfall lookup detail: {fetch_error}" if fetch_error else ""
         st.warning(
-            f"Liquid rainfall depth is missing or all zero. Showing `{source_col}` as atmospheric moisture only; use observed rain gauges, design storms, or forecast rainfall for flood/drought analysis."
+            f"Liquid rainfall depth is missing or all zero. Showing `{source_col}` as atmospheric moisture only; use observed rain gauges, design storms, or forecast rainfall for flood/drought analysis.{extra}"
         )
         return
+
+    source_note = str(precip_info.get("source_note") or "").strip()
+    source_kind = str(precip_info.get("source_kind") or "Rainfall data").strip()
+    date_range = precip_info.get("date_range")
+    if bool(precip_info.get("external_precipitation")) and source_note:
+        st.info(source_note)
+    elif source_kind:
+        st.caption(f"Rainfall source: {source_kind}" + (f" ({date_range})" if date_range else ""))
 
     monthly = precip_info.get("monthly")
     water_balance = precip_info.get("water_balance")
@@ -8889,7 +9530,7 @@ def _render_overview_precipitation_tracker(precip_info: Dict[str, object]) -> No
     with st.expander("Monthly rainfall indicators for flood and drought screening", expanded=False):
         st.dataframe(monthly_table, use_container_width=True, hide_index=True)
         st.caption(
-            "Flood-watch is a screening flag for wetter months and heavy-rain days; drought-watch is a screening flag for long dry spells and below-average monthly rain. EPW/TMY rainfall is climate-normal data, so pair it with observed gauges, soil/infiltration data, drainage capacity, stream gauges, and forecast rainfall before making flood or drought predictions."
+            f"Rainfall source: {source_kind}. Flood-watch is a screening flag for wetter months and heavy-rain days; drought-watch is a screening flag for long dry spells and below-average monthly rain. Pair it with observed gauges, soil/infiltration data, drainage capacity, stream gauges, and forecast rainfall before making flood or drought predictions."
         )
 
 
@@ -9028,7 +9669,7 @@ def render_overview_page():
     st.markdown("<div class='section-gap-lg'></div>", unsafe_allow_html=True)
     st.markdown("### Weather By Month")
     st.caption("A compact month-by-month view of sky cover, rainfall, humidity, temperature, and water stress signals.")
-    precip_info = _overview_precipitation_summary(cdf)
+    precip_info = _overview_precipitation_summary(cdf, header)
     fig_weather_month = _build_overview_weather_by_month_figure(cdf, location_label, precip_info)
     _st_plotly_chart(
         fig_weather_month,
@@ -9047,13 +9688,14 @@ def render_overview_page():
     if "drybulb" in cdf:
         temp_s = pd.to_numeric(cdf["drybulb"], errors="coerce")
         monthly_temp = temp_s.groupby(temp_s.index.month).agg(["mean", "min", "max"])
+        monthly_temp_display = monthly_temp.apply(convert_temperature_series_for_display)
         months_labels = [calendar.month_abbr[m] for m in monthly_temp.index]
 
         fig_monthly = go.Figure()
         # Min-max range band
         fig_monthly.add_trace(go.Scatter(
             x=months_labels + months_labels[::-1],
-            y=list(monthly_temp["max"]) + list(monthly_temp["min"][::-1]),
+            y=list(monthly_temp_display["max"]) + list(monthly_temp_display["min"][::-1]),
             fill="toself",
             fillcolor="rgba(59, 130, 246, 0.12)",
             line=dict(color="rgba(0,0,0,0)"),
@@ -9064,15 +9706,15 @@ def render_overview_page():
         # Mean temperature line
         fig_monthly.add_trace(go.Scatter(
             x=months_labels,
-            y=monthly_temp["mean"],
+            y=monthly_temp_display["mean"],
             mode="lines+markers",
             name="Avg Temperature",
             line=dict(color="#3b82f6", width=3),
             marker=dict(size=8, color="#3b82f6"),
         ))
 
-        # Comfort band shading (18-26°C)
-        fig_monthly.add_hrect(y0=18, y1=26, fillcolor="rgba(34, 197, 94, 0.08)",
+        # Comfort band shading (18-26 C)
+        fig_monthly.add_hrect(y0=convert_threshold_for_display(18), y1=convert_threshold_for_display(26), fillcolor="rgba(34, 197, 94, 0.08)",
                               line_width=0, annotation_text="Comfort zone",
                               annotation_position="top right",
                               annotation=dict(font=dict(size=10, color="rgba(34, 197, 94, 0.6)")))
@@ -9080,7 +9722,7 @@ def render_overview_page():
         fig_monthly.update_layout(
             title="Monthly Average Temperature",
             height=380,
-            yaxis_title="Temperature (°C)",
+            yaxis_title=f"Temperature ({temperature_unit_label()})",
             xaxis_title="Month",
             showlegend=True,
             legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
@@ -9340,7 +9982,7 @@ def _embed_advanced_figure_caption(fig: go.Figure, caption: str) -> go.Figure:
     wrapped_caption = "<br>".join(
         textwrap.wrap(
             _ui_escape(clean_caption),
-            width=165,
+            width=150,
             break_long_words=False,
             break_on_hyphens=False,
         )
@@ -9349,7 +9991,11 @@ def _embed_advanced_figure_caption(fig: go.Figure, caption: str) -> go.Figure:
     layout_json = fig.layout.to_plotly_json()
     margin = dict(layout_json.get("margin") or {})
     current_bottom = int(margin.get("b") or 0)
-    bottom_margin = max(current_bottom, 88 + (line_count * 18))
+    legend = getattr(fig.layout, "legend", None)
+    legend_y = getattr(legend, "y", None) if legend is not None else None
+    has_bottom_legend = isinstance(legend_y, (int, float)) and legend_y < 0
+    caption_y = -0.46 if has_bottom_legend else -0.30
+    bottom_margin = max(current_bottom, (150 if has_bottom_legend else 122) + (line_count * 17))
     margin["b"] = bottom_margin
 
     current_height = layout_json.get("height")
@@ -9359,10 +10005,6 @@ def _embed_advanced_figure_caption(fig: go.Figure, caption: str) -> go.Figure:
             height_update["height"] = int(current_height) + max(0, bottom_margin - current_bottom)
         except Exception:
             pass
-
-    legend = getattr(fig.layout, "legend", None)
-    legend_y = getattr(legend, "y", None) if legend is not None else None
-    caption_y = -0.31 if isinstance(legend_y, (int, float)) and legend_y < 0 else -0.18
 
     fig.update_layout(margin=margin, **height_update)
     fig.add_annotation(
@@ -9390,7 +10032,8 @@ def build_fig_d_mrt_heatmap(df, station_name):
     drybulb = pd.to_numeric(df['drybulb_C'], errors="coerce")
     ghi = pd.to_numeric(df['ghi_Wm2'], errors="coerce").clip(lower=0).fillna(0)
     mrt = (drybulb + 273.15 + 0.25 * (ghi / sigma).clip(lower=0) ** 0.25) - 273.15
-    mat = _advanced_day_hour_matrix(df, mrt)
+    mrt_display = convert_temperature_series_for_display(mrt)
+    mat = _advanced_day_hour_matrix(df, mrt_display)
     if mat.empty:
         return placeholder_figure("Not enough hourly data to build MRT heatmap."), ""
     fig = go.Figure(data=go.Heatmap(
@@ -9398,7 +10041,7 @@ def build_fig_d_mrt_heatmap(df, station_name):
         x=mat.columns,
         y=mat.index,
         colorscale='RdBu_r',
-        colorbar=dict(title='°C')
+        colorbar=dict(title=temperature_unit_label())
     ))
     fig.update_layout(
         title="Mean Radiant Temperature by Hour and Day",
@@ -9420,14 +10063,15 @@ def build_fig_d_mrt_heatmap(df, station_name):
     peak_mrt_hour_end = peak_mrt_hour_start + 2
     
     mrt_delta = round((mrt.max() - drybulb.max()), 1)
+    mrt_delta_label = format_temperature_delta(mrt_delta, show_sign=False)
     
-    caption_template = "Mean radiant temperature is mapped by day and hour assuming full outdoor unshaded exposure to sun and wind, combining air temperature and incoming solar radiation into a single radiant environment index. For {station}, peak MRT in {peak_mrt_month} between {peak_mrt_hour_start}:00–{peak_mrt_hour_end}:00 exceeds air temperature by up to {mrt_delta}°C, meaning outdoor UTCI heat stress is significantly understated by dry-bulb temperature alone during afternoon hours."
+    caption_template = "Mean radiant temperature is mapped by day and hour assuming full outdoor unshaded exposure to sun and wind, combining air temperature and incoming solar radiation into a single radiant environment index. For {station}, peak MRT in {peak_mrt_month} between {peak_mrt_hour_start}:00–{peak_mrt_hour_end}:00 exceeds air temperature by up to {mrt_delta}, meaning outdoor UTCI heat stress is significantly understated by dry-bulb temperature alone during afternoon hours."
     caption = safe_format_caption(caption_template, {
         "station": station_name,
         "peak_mrt_month": peak_mrt_month,
         "peak_mrt_hour_start": peak_mrt_hour_start,
         "peak_mrt_hour_end": peak_mrt_hour_end,
-        "mrt_delta": mrt_delta
+        "mrt_delta": mrt_delta_label
     })
     return fig, caption
     
@@ -9438,14 +10082,17 @@ def build_fig_e_hourly_timeseries_temperature(df, station_name):
         return placeholder_figure("Dry-bulb and dew-point data are required for temperature time-series analysis."), ""
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df['drybulb_C'], name="Dry-Bulb Temperature", line=dict(color='blue', width=0.8), opacity=0.85))
-    fig.add_trace(go.Scatter(x=df.index, y=df['dewpoint_C'], name="Dew-Point Temperature", line=dict(color='green', width=0.8), opacity=0.7))
+    drybulb_display = convert_temperature_series_for_display(df['drybulb_C'])
+    dewpoint_display = convert_temperature_series_for_display(df['dewpoint_C'])
+    base_display = convert_threshold_for_display(18.0)
+    fig.add_trace(go.Scatter(x=df.index, y=drybulb_display, name="Dry-Bulb Temperature", line=dict(color='blue', width=0.8), opacity=0.85))
+    fig.add_trace(go.Scatter(x=df.index, y=dewpoint_display, name="Dew-Point Temperature", line=dict(color='green', width=0.8), opacity=0.7))
     if not df.empty:
-        fig.add_trace(go.Scatter(x=[df.index[0], df.index[-1]], y=[18.0, 18.0], name="Heating Base (18°C)", line=dict(color='gray', dash='dot', width=1.5), mode='lines'))
+        fig.add_trace(go.Scatter(x=[df.index[0], df.index[-1]], y=[base_display, base_display], name=f"Heating Base ({format_temperature(18.0, digits=0)})", line=dict(color='gray', dash='dot', width=1.5), mode='lines'))
     
     fig.update_layout(
         title="Full Hourly Time Series — Dry-Bulb and Dew-Point Temperature",
-        yaxis_title="Temperature (°C)",
+        yaxis_title=f"Temperature ({temperature_unit_label()})",
         height=400,
         margin=dict(l=40, r=40, t=40, b=60),
         showlegend=True,
@@ -9457,15 +10104,15 @@ def build_fig_e_hourly_timeseries_temperature(df, station_name):
     )
     
     months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    tdb_min = df['drybulb_C'].min().round(1)
-    tdb_max = df['drybulb_C'].max().round(1)
-    tdp_min = df['dewpoint_C'].min().round(1)
-    tdp_max = df['dewpoint_C'].max().round(1)
+    tdb_min = format_temperature(df['drybulb_C'].min())
+    tdb_max = format_temperature(df['drybulb_C'].max())
+    tdp_min = format_temperature(df['dewpoint_C'].min())
+    tdp_max = format_temperature(df['dewpoint_C'].max())
     spread = df['drybulb_C'] - df['dewpoint_C']
     driest_month_idx = spread.groupby(df.index.month).mean().idxmax() if isinstance(df.index, pd.DatetimeIndex) else np.nan
     driest_month = months[driest_month_idx - 1] if pd.notna(driest_month_idx) else "[data unavailable]"
     
-    caption_template = "The full hourly time series of dry-bulb (blue) and dew-point (green) temperature plots every hour of the typical meteorological year in sequence, making persistent cold and warm spells visible as continuous bands. For {station}, dry-bulb spans {tdb_min}–{tdb_max}°C and dew-point spans {tdp_min}–{tdp_max}°C, with the widest separation in {driest_month} — the strongest evaporative cooling opportunity window of the year."
+    caption_template = "The full hourly time series of dry-bulb (blue) and dew-point (green) temperature plots every hour of the typical meteorological year in sequence, making persistent cold and warm spells visible as continuous bands. For {station}, dry-bulb spans {tdb_min}–{tdb_max} and dew-point spans {tdp_min}–{tdp_max}, with the widest separation in {driest_month} — the strongest evaporative cooling opportunity window of the year."
     caption = safe_format_caption(caption_template, {
         "station": station_name,
         "tdb_min": tdb_min, "tdb_max": tdb_max,
@@ -11311,6 +11958,9 @@ def _render_bar_chart(cdf, col, title_suffix, y_label, color, key_suffix):
     if df_col.empty:
         st.info(f"No data for {title_suffix}.")
         return
+    if is_temperature_display_metric(col, y_label, title_suffix):
+        df_col[col] = convert_temperature_series_for_display(df_col[col])
+        y_label = temperature_axis_label(y_label)
     df_col["month"] = df_col.index.month
     monthly = df_col.groupby("month")[col]
     y = monthly.mean() if stat == "Mean" else monthly.median()
@@ -11353,6 +12003,9 @@ def _render_daily_scatter(cdf, col, title_suffix, y_label, line_color, key_suffi
     if scat.empty:
         st.info(f"No data for {title_suffix}.")
         return
+    if is_temperature_display_metric(col, y_label, title_suffix):
+        scat[col] = convert_temperature_series_for_display(scat[col])
+        y_label = temperature_axis_label(y_label)
     scat["month"] = scat.index.month
     scat["hour"]  = scat.index.hour
     ordered_months = list(range(1, 13))
@@ -11458,6 +12111,9 @@ def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
     if tmp.empty:
         st.info(f"No data for {title_suffix}.")
         return
+    if is_temperature_display_metric(col, y_label, title_suffix):
+        tmp["val"] = convert_temperature_series_for_display(tmp["val"])
+        y_label = temperature_axis_label(y_label)
     mat_df = tmp.pivot_table(index="doy", columns="hour", values="val", aggfunc="mean")
     #mat_df = mat_df.reindex(index=range(1, 366), columns=range(24))
     mat_df = mat_df.reindex(index=range(1, 367), columns=range(24))
