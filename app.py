@@ -6799,7 +6799,7 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
 
         # Required precipitation, snow, and degree-day figures.
         precip = _clean_col(precip_col, "precip")
-        precip_has_data = precip_col and not precip.empty and float(precip.max()) > 0
+        precip_has_data = precip_col and not precip.empty and float(precip.max()) > 0 and _precip_depth_has_usable_monthly_coverage(df, precip)
         if precip_has_data:
             m_precip = _month_group(precip_col, "precip", "sum")
             fig = px.bar(m_precip, x="label", y="value", title="Monthly Precipitation", labels={"label": "Month", "value": "Precipitation depth (mm)"})
@@ -7691,8 +7691,29 @@ def _monthly_precipitation_dashboard_fig(cdf: Optional[pd.DataFrame]) -> go.Figu
     y_title = "Precipitation depth (mm)"
     grouped_agg = "sum"
 
+    precip_info = _overview_precipitation_summary(cdf, st.session_state.get("header") or {})
+    if bool(precip_info.get("depth_available")) and bool(precip_info.get("external_precipitation")):
+        monthly = precip_info.get("monthly")
+        if isinstance(monthly, pd.Series):
+            grouped = monthly.reindex(range(1, 13), fill_value=0).astype(float)
+            labels = [calendar.month_abbr[m] for m in range(1, 13)]
+            fig = px.bar(x=labels, y=grouped.values, labels={"x": "Month", "y": y_title}, title="Monthly Precipitation (Open-Meteo)")
+            fig.update_traces(marker_color="#38bdf8")
+            fig.update_layout(height=420, margin=dict(t=90))
+            fig.add_annotation(
+                text="<i>Rainfall depth fetched from Open-Meteo because the EPW rainfall field is empty or too sparse.</i>",
+                x=0,
+                y=1.08,
+                xref="paper",
+                yref="paper",
+                xanchor="left",
+                showarrow=False,
+                align="left",
+                font=dict(size=10, color="#64748b"),
+            )
+            return fig
+
     if precip.empty or float(precip.max()) <= 0:
-        precip_info = _overview_precipitation_summary(cdf, st.session_state.get("header") or {})
         if bool(precip_info.get("depth_available")):
             monthly = precip_info.get("monthly")
             if isinstance(monthly, pd.Series):
@@ -8090,7 +8111,8 @@ def _render_future_precipitation_forecast_exports(header: Optional[dict]) -> Non
 
 
 def render_precipitation_thermal_load_page() -> None:
-    cdf = st.session_state.get("cdf")
+    cdf_full = st.session_state.get("cdf_raw")
+    cdf = cdf_full if isinstance(cdf_full, pd.DataFrame) and not cdf_full.empty else st.session_state.get("cdf")
     header = st.session_state.get("header") or {}
     fig_precip = _monthly_precipitation_dashboard_fig(cdf)
     _st_plotly_chart(fig_precip, use_container_width=True, key="precip_context_monthly_precip")
@@ -8112,7 +8134,7 @@ def render_precipitation_thermal_load_page() -> None:
     # Precipitation Heatmap
     precip_col = _precip_depth_column(cdf)
     native_precip = _metric_series_from_hourly(cdf, precip_col, "precip")
-    if precip_col and not native_precip.empty and float(native_precip.max()) > 0:
+    if precip_col and _precip_depth_has_usable_monthly_coverage(cdf, native_precip):
         _render_heatmap(cdf, precip_col, "Precipitation Annual Heatmap (Hour x Day)", "mm", "Blues")
     elif bool(precip_info.get("external_precipitation")):
         st.caption("Hourly precipitation heatmap is skipped because rainfall came from daily external data, not an hourly EPW precipitation column.")
@@ -9021,6 +9043,19 @@ def _overview_dewpoint_series(cdf: pd.DataFrame) -> pd.Series:
     return pd.Series(dew_calc, index=aligned.index, name="dewpoint")
 
 
+def _precip_depth_has_usable_monthly_coverage(cdf: pd.DataFrame, precip: pd.Series) -> bool:
+    if precip is None or precip.empty:
+        return False
+    precip = pd.to_numeric(precip, errors="coerce").dropna().clip(lower=0)
+    if precip.empty or float(precip.max()) <= 0:
+        return False
+    monthly = _monthly_grouped_series(cdf, precip, "sum", 0.0)
+    wet_months = int((monthly > 0.1).sum())
+    if wet_months >= 3:
+        return True
+    return False
+
+
 def _site_coordinates_from_header(header: Optional[dict]) -> Optional[Tuple[float, float]]:
     if not isinstance(header, dict):
         return None
@@ -9152,6 +9187,7 @@ def _apply_daily_precipitation_to_summary(
         "source_url": source_url,
         "date_range": date_range,
         "external_precipitation": bool(external),
+        "fetch_error": None,
         "daily": daily,
         "monthly": monthly,
         "wet_days_by_month": wet_by_month,
@@ -9207,7 +9243,8 @@ def _overview_precipitation_summary(cdf: pd.DataFrame, header: Optional[dict] = 
 
     precip_col = _precip_depth_column(cdf)
     precip = _metric_series_from_hourly(cdf, precip_col, "precip")
-    if precip_col and not precip.empty and float(precip.max()) > 0:
+    native_precip_has_coverage = _precip_depth_has_usable_monthly_coverage(cdf, precip)
+    if precip_col and not precip.empty and float(precip.max()) > 0 and native_precip_has_coverage:
         if isinstance(precip.index, pd.DatetimeIndex):
             daily = precip.resample("D").sum().dropna()
             _apply_daily_precipitation_to_summary(
@@ -9229,6 +9266,11 @@ def _overview_precipitation_summary(cdf: pd.DataFrame, header: Optional[dict] = 
                 "driest_month": int(monthly[monthly > 0].idxmin()) if not monthly[monthly > 0].empty else None,
             })
         return summary
+    if precip_col and not precip.empty and float(precip.max()) > 0 and not native_precip_has_coverage:
+        sparse_months = int((_monthly_grouped_series(cdf, precip, "sum", 0.0) > 0.1).sum())
+        summary["fetch_error"] = (
+            f"EPW rainfall column has measurable rain in only {sparse_months} month(s), so it is treated as incomplete for annual flood/drought screening."
+        )
 
     coords = _site_coordinates_from_header(header or st.session_state.get("header") or {})
     lookup_range = _precipitation_lookup_date_range(cdf)
