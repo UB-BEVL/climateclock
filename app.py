@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 # standard libs next
 import os
 import calendar
@@ -3816,7 +3816,58 @@ div[role="radiogroup"][aria-label="Detail view"] label:has(input:checked) {
     position: absolute;
     left: 0;
     top: 6px;
+}
+
+.cc-guide-card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(242,247,250,0.96));
+    border: 1px solid rgba(18, 46, 68, 0.08);
+    border-radius: 14px;
+    padding: 1rem 1.1rem;
+    margin: 0 0 1rem 0;
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
+}
+.cc-guide-card h4 {
+    margin: 0 0 0.6rem;
     font-size: 1rem;
+    color: var(--ci-text, #243b53);
+}
+.cc-guide-card p,
+.cc-guide-card li {
+    color: var(--ci-muted, #52606d);
+    font-size: 0.9rem;
+    line-height: 1.55;
+}
+.cc-guide-card ul {
+    padding-left: 1.2rem;
+    margin: 0;
+}
+.cc-guide-card strong {
+    color: var(--ci-text, #243b53);
+}
+.cc-hero-tag-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.8rem;
+}
+.cc-hero-tag {
+    display: inline-flex;
+    align-items: center;
+    background: rgba(74, 144, 164, 0.08);
+    border: 1px solid rgba(74, 144, 164, 0.18);
+    color: #2d4f5e;
+    border-radius: 999px;
+    padding: 0.38rem 0.7rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+.cc-hero-tag em {
+    color: #52606d;
+    font-style: normal;
+    font-weight: 500;
+}
+.cc-hero-tag strong {
+    font-weight: 700;
 }
 
 /* Metric Descriptor Subtitle */
@@ -3828,9 +3879,384 @@ div[role="radiogroup"][aria-label="Detail view"] label:has(input:checked) {
     margin-top: 2px;
     letter-spacing: 0.01em;
 }
+
+/* ── Guided Tour Overlay ─────────────────────────────────── */
+.cc-tour-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    z-index: 99990;
+    pointer-events: auto;
+    animation: cc-tour-fade-in 0.3s ease;
+}
+@keyframes cc-tour-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+/* Tour tooltip card */
+.cc-tour-tooltip {
+    position: relative;
+    background: rgba(255, 255, 255, 0.98);
+    border: 1px solid rgba(74, 144, 164, 0.22);
+    border-radius: 16px;
+    padding: 22px 26px 18px;
+    max-width: 380px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(74, 144, 164, 0.08);
+    z-index: 99999;
+    animation: cc-tour-slide-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    margin: 12px auto;
+}
+@keyframes cc-tour-slide-in {
+    from { opacity: 0; transform: translateY(12px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.cc-tour-tooltip::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    left: 28px;
+    width: 16px;
+    height: 16px;
+    background: rgba(255, 255, 255, 0.98);
+    border-left: 1px solid rgba(74, 144, 164, 0.22);
+    border-top: 1px solid rgba(74, 144, 164, 0.22);
+    transform: rotate(45deg);
+}
+.cc-tour-step-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #4a90a4, #3b82f6);
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 999px;
+    margin-bottom: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.cc-tour-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #1a202c;
+    margin: 0 0 6px;
+    line-height: 1.3;
+}
+.cc-tour-body {
+    font-size: 0.88rem;
+    color: #4a5568;
+    line-height: 1.55;
+    margin: 0 0 16px;
+}
+.cc-tour-body strong {
+    color: #2d3748;
+}
+
+/* Tour progress dots */
+.cc-tour-dots {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 14px;
+}
+.cc-tour-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #e2e8f0;
+    transition: all 0.25s ease;
+}
+.cc-tour-dot.active {
+    background: linear-gradient(135deg, #4a90a4, #3b82f6);
+    transform: scale(1.25);
+    box-shadow: 0 0 8px rgba(74, 144, 164, 0.4);
+}
+.cc-tour-dot.done {
+    background: #22c55e;
+}
+
+/* Tour icon decoration */
+.cc-tour-icon {
+    font-size: 2rem;
+    margin-bottom: 8px;
+    display: block;
+}
+
+/* Tour wrapper — makes Streamlit buttons appear inside the tooltip */
+.cc-tour-wrapper {
+    max-width: 380px;
+    margin: 12px auto;
+    background: rgba(255, 255, 255, 0.98);
+    border: 1px solid rgba(74, 144, 164, 0.22);
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(74, 144, 164, 0.08);
+    overflow: hidden;
+    animation: cc-tour-slide-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    position: relative;
+    z-index: 99999;
+}
+.cc-tour-wrapper .cc-tour-tooltip {
+    border: none;
+    box-shadow: none;
+    margin: 0;
+    border-radius: 0;
+    animation: none;
+    padding-bottom: 6px;
+}
+.cc-tour-wrapper .cc-tour-tooltip::before {
+    display: none;
+}
+/* Style Streamlit buttons inside the wrapper */
+.cc-tour-btn-row {
+    padding: 0 20px 16px;
+    background: rgba(255, 255, 255, 0.98);
+}
+.cc-tour-btn-row .stColumns {
+    gap: 6px !important;
+}
+.cc-tour-btn-row button {
+    font-size: 0.78rem !important;
+    padding: 6px 12px !important;
+    border-radius: 8px !important;
+    min-height: 34px !important;
+    height: 34px !important;
+}
+
+/* Collapse toggle */
+.cc-tour-collapse-btn {
+    position: absolute;
+    top: 12px;
+    right: 14px;
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+    background: rgba(248, 250, 252, 0.9);
+    color: #718096;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    z-index: 100000;
+}
+.cc-tour-collapse-btn:hover {
+    background: #edf2f7;
+    color: #2d3748;
+    transform: scale(1.08);
+}
+
+/* Collapsed pill state */
+.cc-tour-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: linear-gradient(135deg, rgba(74, 144, 164, 0.08), rgba(59, 130, 246, 0.06));
+    border: 1px solid rgba(74, 144, 164, 0.2);
+    border-radius: 999px;
+    padding: 8px 18px;
+    margin: 8px auto;
+    max-width: 380px;
+    animation: cc-tour-slide-in 0.25s ease;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+.cc-tour-pill-icon {
+    font-size: 1.15rem;
+}
+.cc-tour-pill-label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #2d3748;
+}
+.cc-tour-pill-step {
+    font-size: 0.72rem;
+    color: #718096;
+    font-weight: 500;
+}
+
+/* Spotlight pulse ring on targeted section */
+.cc-tour-spotlight {
+    border: 2px solid rgba(74, 144, 164, 0.5);
+    border-radius: 12px;
+    box-shadow: 0 0 0 4px rgba(74, 144, 164, 0.12), 0 0 20px rgba(74, 144, 164, 0.15);
+    animation: cc-spotlight-pulse 2s ease-in-out infinite;
+    padding: 8px;
+    margin: -8px;
+    position: relative;
+    z-index: 99991;
+    background: rgba(255, 255, 255, 0.6);
+}
+@keyframes cc-spotlight-pulse {
+    0%, 100% { box-shadow: 0 0 0 4px rgba(74, 144, 164, 0.12), 0 0 20px rgba(74, 144, 164, 0.15); }
+    50%      { box-shadow: 0 0 0 8px rgba(74, 144, 164, 0.18), 0 0 30px rgba(74, 144, 164, 0.22); }
+}
+
 </style>
 '''
 st.markdown(CLIMATE_INTELLIGENCE_CSS, unsafe_allow_html=True)
+
+
+# ── Guided Tour Engine ──────────────────────────────────────────────
+
+def _tour_steps(page: str) -> list:
+    """Return the ordered list of tour steps for a given page."""
+    if page == "Overview":
+        return [
+            {
+                "icon": "📊",
+                "title": "Climate Vitals",
+                "body": "These cards show your site's key numbers — <strong>mean temperature</strong>, hot hours, humidity, wind, solar, and comfort share — all at a glance.",
+            },
+            {
+                "icon": "💡",
+                "title": "Key Takeaways",
+                "body": "Auto-generated insights highlight what matters most — the warmest and coldest months, comfort percentage, and notable weather patterns.",
+            },
+            {
+                "icon": "📅",
+                "title": "Monthly Profile",
+                "body": "This chart breaks down <strong>temperature, humidity, and wind</strong> month by month so you can spot seasonal patterns instantly.",
+            },
+            {
+                "icon": "🌡️",
+                "title": "Seasonal Comfort",
+                "body": "Each season shows its <strong>comfortable vs. hot vs. cold</strong> hours — useful for deciding when passive strategies work.",
+            },
+            {
+                "icon": "🧭",
+                "title": "Wind Rose",
+                "body": "Prevailing wind direction helps you <strong>orient openings, breezeways, and shading</strong> for natural ventilation.",
+            },
+            {
+                "icon": "🧭",
+                "title": "Explore Deeper",
+                "body": "Use the <strong>sidebar</strong> to navigate to Climate, Comfort, Solar, Psychrometrics, and Wind pages for detailed analysis.",
+            },
+        ]
+    elif page == "Climate":
+        return [
+            {
+                "icon": "📈",
+                "title": "Analysis Tabs",
+                "body": "Switch between <strong>Trends, Temperature, Heatmaps, and Humidity</strong> views to explore different aspects of the climate data.",
+            },
+        ]
+    elif page == "Comfort":
+        return [
+            {
+                "icon": "🌡️",
+                "title": "Comfort Metrics",
+                "body": "Explore <strong>Discomfort Index, UTCI, and PMV</strong> — three different ways to measure how the climate feels on the human body.",
+            },
+        ]
+    return []
+
+
+def _render_tour_step(page: str) -> None:
+    """Render the current tour step tooltip for the active page."""
+    tour_key = f"tour_step_{page}"
+    completed_key = f"tour_completed_{page}"
+    collapsed_key = f"tour_collapsed_{page}"
+
+    # Don't show if already completed (unless re-triggered)
+    if st.session_state.get(completed_key, False):
+        return
+
+    steps = _tour_steps(page)
+    if not steps:
+        return
+
+    # Initialize tour on first visit
+    if tour_key not in st.session_state:
+        st.session_state[tour_key] = 0
+
+    current = st.session_state[tour_key]
+    if current >= len(steps):
+        st.session_state[completed_key] = True
+        return
+
+    step = steps[current]
+    total = len(steps)
+    is_collapsed = st.session_state.get(collapsed_key, False)
+
+    # ── Collapsed pill view ──────────────────────────────────────
+    if is_collapsed:
+        st.markdown(
+            f"""
+            <div class="cc-tour-pill">
+                <span class="cc-tour-pill-icon">{step['icon']}</span>
+                <span class="cc-tour-pill-label">{step['title']}</span>
+                <span class="cc-tour-pill-step">Step {current + 1}/{total}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("▶ Expand tour", key=f"tour_expand_{page}_{current}"):
+            st.session_state[collapsed_key] = False
+            _rerun()
+        return
+
+    # ── Expanded tooltip view ────────────────────────────────────
+    # Build progress dots
+    dots_html = []
+    for i in range(total):
+        if i < current:
+            dots_html.append('<span class="cc-tour-dot done"></span>')
+        elif i == current:
+            dots_html.append('<span class="cc-tour-dot active"></span>')
+        else:
+            dots_html.append('<span class="cc-tour-dot"></span>')
+    dots_str = "\n".join(dots_html)
+
+    # Tooltip content + buttons all inside one visual card
+    st.markdown('<div class="cc-tour-wrapper">', unsafe_allow_html=True)
+
+    st.markdown(
+        f"""
+        <div class="cc-tour-tooltip">
+            <span class="cc-tour-icon">{step['icon']}</span>
+            <span class="cc-tour-step-badge">Step {current + 1} of {total}</span>
+            <div class="cc-tour-title">{step['title']}</div>
+            <div class="cc-tour-body">{step['body']}</div>
+            <div class="cc-tour-dots">
+                {dots_str}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Navigation buttons — rendered inside the wrapper card
+    st.markdown('<div class="cc-tour-btn-row">', unsafe_allow_html=True)
+    btn_cols = st.columns([1, 1, 1, 0.6])
+    with btn_cols[0]:
+        if current > 0:
+            if st.button("← Back", key=f"tour_back_{page}_{current}", use_container_width=True):
+                st.session_state[tour_key] = current - 1
+                _rerun()
+    with btn_cols[1]:
+        if current < total - 1:
+            if st.button("Next →", key=f"tour_next_{page}_{current}", type="primary", use_container_width=True):
+                st.session_state[tour_key] = current + 1
+                _rerun()
+        else:
+            if st.button("✓ Done", key=f"tour_done_{page}", type="primary", use_container_width=True):
+                st.session_state[completed_key] = True
+                _rerun()
+    with btn_cols[2]:
+        if st.button("Skip", key=f"tour_skip_{page}_{current}", use_container_width=True):
+            st.session_state[completed_key] = True
+            _rerun()
+    with btn_cols[3]:
+        if st.button("▼", key=f"tour_collapse_{page}_{current}", use_container_width=True, help="Minimize tour"):
+            st.session_state[collapsed_key] = True
+            _rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 def _encode_image_to_base64(path: Union[str, Path]) -> str:
@@ -4083,6 +4509,15 @@ def render_sidebar():
         st.session_state["active_page"] = "select_station" if current_page == DEFAULT_PAGE else "dashboard"
 
         render_sidebar_filters(epw_loaded)
+
+        if epw_loaded:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🎓 Take Tour", use_container_width=True, help="Restart the interactive guided tour"):
+                # Reset all tour completion flags so tour replays
+                for k in list(st.session_state.keys()):
+                    if k.startswith("tour_completed_") or k.startswith("tour_step_") or k.startswith("tour_collapsed_"):
+                        del st.session_state[k]
+                _rerun()
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -5589,6 +6024,23 @@ def _location_meta(header: dict) -> Dict[str, str]:
         "elev": elev,
         "wmo": wmo,
     }
+
+
+def _location_crs_label(header: dict) -> str:
+    """Return a user-friendly CRS label for overview/site context."""
+    loc = header.get("location", {}) if isinstance(header, dict) else {}
+    if not isinstance(loc, dict):
+        return "Local project coordinates"
+
+    explicit_crs = loc.get("crs") or loc.get("coordinate_reference_system") or loc.get("epsg")
+    if explicit_crs:
+        return str(explicit_crs)
+
+    lat = loc.get("latitude")
+    lon = loc.get("longitude")
+    if lat is not None and lon is not None:
+        return "WGS84 / EPSG:4326"
+    return "Local project coordinates"
 
 
 def _normalized_pdf_figures(figs: dict) -> Dict[str, object]:
@@ -9587,6 +10039,12 @@ def render_overview_page():
     location_label = _safe_location_label(header)
     source_label = st.session_state.get("source_label") or "EPW weather file"
     focus_threshold = float(st.session_state.get("custom_overheat_threshold", 30))
+    koppen = _koppen_classification(cdf, header)
+    loc_meta = _location_meta(header)
+    lat_value = loc_meta.get("lat", "--")
+    lon_value = loc_meta.get("lon", "--")
+    elev_value = loc_meta.get("elev", "--")
+    crs_label = _location_crs_label(header)
 
     rows = len(cdf)
     coverage = float(cdf.notna().mean().mean() * 100) if rows else 0.0
@@ -9599,18 +10057,26 @@ def render_overview_page():
                 <p class="cc-eyebrow">Climate intelligence workspace</p>
                 <h1>{_ui_escape(location_label)}</h1>
                 <p class="cc-hero-copy">
-                    A guided EPW analysis flow for climate-responsive design, comfort analytics,
-                    solar strategy, wind assessment, and presentation-ready reporting.
+                    Your climate workspace is ready. Explore the sections below.
                 </p>
+                <div class="cc-hero-tag-row">
+                    <span class="cc-hero-tag"><strong>Climate zone:</strong> <em>{_ui_escape(koppen['code'])} · {_ui_escape(koppen['name'])}</em></span>
+                    <span class="cc-hero-tag"><strong>CRS:</strong> <em>{_ui_escape(crs_label)}</em></span>
+                    <span class="cc-hero-tag"><strong>Site:</strong> <em>{_ui_escape(lat_value)}N, {_ui_escape(lon_value)}E · {_ui_escape(elev_value)}</em></span>
+                </div>
             </div>
             <div class="cc-hero-meta">
                 <span>{_ui_escape(source_label)}</span>
                 <span>{rows:,} hourly records</span>
+                <span>Climate class: {_ui_escape(koppen['code'])} · {_ui_escape(koppen['name'])}</span>
             </div>
         </section>
         """,
         unsafe_allow_html=True,
     )
+
+    # Interactive guided tour (replaces old text-heavy guide card)
+    _render_tour_step("Overview")
 
     metric_cols = st.columns(6)
 
@@ -9997,12 +10463,11 @@ def render_climate_page():
         <section class="cc-page-intro">
             <p class="cc-eyebrow">Climate</p>
             <h1>Temperature, Humidity, And Diurnal Patterns</h1>
-            <p>Use the trend views for seasonal behavior, then move into full-width heatmaps
-            when you need the annual hourly fingerprint.</p>
         </section>
         """,
         unsafe_allow_html=True,
     )
+    _render_tour_step("Climate")
     trend_tab, temperature_tab, heatmap_tab, humidity_tab = st.tabs(
         ["Trends", "Temperature", "Heatmaps", "Humidity"]
     )
@@ -10219,6 +10684,7 @@ def render_comfort_page():
         """,
         unsafe_allow_html=True,
     )
+    _render_tour_step("Comfort")
     di_tab, utci_tab, pmv_tab = st.tabs(["Discomfort Index", "UTCI", "PMV"])
     with di_tab:
         render_di_page()
@@ -10260,7 +10726,6 @@ def render_raw_data_workspace_page():
         <section class="cc-page-intro">
             <p class="cc-eyebrow">Data</p>
             <h1>Raw EPW Data And Quality</h1>
-            <p>Confirm coverage, inspect source values, and export filtered records behind the charts.</p>
         </section>
         """,
         unsafe_allow_html=True,
@@ -10304,8 +10769,6 @@ def render_export_page():
         <section class="cc-page-intro">
             <p class="cc-eyebrow">Report</p>
             <h1>Reporting Center</h1>
-            <p>Generate a complete PDF report, review captured figures, and keep chart-level SVG,
-            HTML, and CSV exports tied to the analysis sections where they belong.</p>
         </section>
         """,
         unsafe_allow_html=True,
@@ -12146,7 +12609,7 @@ def _render_band_hour_breakdown(series: pd.Series, bands: list, key_prefix: str)
     st.dataframe(breakdown_df, use_container_width=True, hide_index=True, key=f"breakdown_{key_prefix}")
 
 
-def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix):
+def _render_categorical_heatmap(cdf, col, title_suffix, bands, key_suffix, y_label=""):
     import plotly.graph_objects as go
     import numpy as np
     tmp = pd.DataFrame({"doy": cdf.index.dayofyear, "hour": cdf.index.hour, "val": cdf[col]}).dropna()
@@ -12322,8 +12785,8 @@ def render_utci_page():
     
     temp_df = cdf.copy()
     temp_df["utci_index"] = utci_df
-    
-    _render_categorical_heatmap(temp_df, "utci_index", "UTCI Annual Heatmap", _UTCI_BANDS, "utci")
+
+    _render_categorical_heatmap(temp_df, "utci_index", "UTCI Annual Heatmap", _UTCI_BANDS, "utci", "UTCI (°C)")
     _render_band_hour_breakdown(temp_df["utci_index"], _UTCI_BANDS, "utci")
 
     st.markdown("---")
@@ -12382,8 +12845,8 @@ def render_pmv_page():
     
     temp_df = cdf.copy()
     temp_df["pmv_index"] = pmv_df
-    
-    _render_categorical_heatmap(temp_df, "pmv_index", "PMV Annual Heatmap", _PMV_BANDS, "pmv")
+
+    _render_categorical_heatmap(temp_df, "pmv_index", "PMV Annual Heatmap", _PMV_BANDS, "pmv", "PMV")
     _render_band_hour_breakdown(temp_df["pmv_index"], _PMV_BANDS, "pmv")
 
 def render_di_page():
@@ -12400,8 +12863,8 @@ def render_di_page():
     
     temp_df = cdf.copy()
     temp_df["di_index"] = di_df
-    
-    _render_categorical_heatmap(temp_df, "di_index", "DI Annual Heatmap", _DI_BANDS, "di")
+
+    _render_categorical_heatmap(temp_df, "di_index", "DI Annual Heatmap", _DI_BANDS, "di", "Discomfort Index (°C)")
     _render_band_hour_breakdown(temp_df["di_index"], _DI_BANDS, "di")
     
     # Initialize slider state
@@ -15063,255 +15526,66 @@ def render_psychrometrics_interactive_section(
     st.markdown(
         """
         <style>
-        /* Card background panel styling */
+        /* Professional, minimal styling - Climate Consultant inspired */
         div[data-testid="stVerticalBlockBorder"] {
-            background-color: rgba(250, 246, 241, 0.98) !important;
-            border: 1px solid rgba(139, 90, 43, 0.10) !important;
-            border-radius: 12px !important;
-            padding: 1.25rem !important;
-            box-shadow: 0 4px 16px rgba(100, 60, 20, 0.06) !important;
+            background: #ffffff !important;
+            border: 1px solid #d1d5db !important;
+            border-radius: 6px !important;
+            padding: 1rem !important;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
         }
 
-        /* Checkbox labeling & alignment */
-        .stCheckbox {
-            margin-bottom: 2px !important;
+        .cc-psy-panel-head {
+            margin: 0 0 1rem 0;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid #d1d5db;
         }
-        .stCheckbox:hover {
-            background-color: rgba(192, 130, 90, 0.06);
-            border-radius: 6px;
+
+        .cc-psy-panel-head h4 {
+            margin: 0;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #1f2937 !important;
+        }
+
+        .cc-psy-panel-head p {
+            margin: 0.5rem 0 0;
+            font-size: 0.8rem;
+            color: #6b7280 !important;
+            line-height: 1.4;
+        }
+
+        /* Checkbox styling */
+        .stCheckbox {
+            margin: 0.15rem 0 !important;
         }
         .stCheckbox > label {
             padding-top: 0px !important;
             padding-bottom: 0px !important;
         }
         .stCheckbox > label p {
-            color: #3d2e22 !important;
-            font-size: 0.85rem !important;
+            color: #374151 !important;
+            font-size: 0.8rem !important;
+            font-size: 0.8rem !important;
             font-weight: 500 !important;
         }
 
-        /* Tabs selector button styling */
-        div[data-testid="column"] button {
-            border-radius: 8px !important;
-            border: 1px solid rgba(139, 90, 43, 0.10) !important;
-            background-color: rgba(245, 237, 228, 0.6) !important;
-            color: #7a6555 !important;
-            font-size: 0.82rem !important;
-            font-weight: 600 !important;
-            padding: 0.5rem 1rem !important;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
-        }
-
-        div[data-testid="column"] button:hover {
-            color: #3d2e22 !important;
-            background-color: rgba(192, 130, 90, 0.10) !important;
-            border-color: rgba(192, 130, 90, 0.35) !important;
-        }
-
-        div[data-testid="column"] button[kind="primary"] {
-            background: linear-gradient(135deg, #c0825a, #b5945e) !important;
-            color: #ffffff !important;
-            border: none !important;
-            font-weight: 700 !important;
-            box-shadow: 0 4px 14px rgba(192, 130, 90, 0.25) !important;
-        }
-
-        div[data-testid="column"] button[kind="primary"]:hover {
-            background: linear-gradient(135deg, #b07548, #a88552) !important;
-            color: #ffffff !important;
+        /* Summary cards */
+        .cc-psy-summary-card {
+            background: #f3f4f6;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 0.75rem;
+            margin: 0.5rem 0;
         }
         </style>
         """,
         unsafe_allow_html=True
     )
 
-    # Main dashboard columns layout (3.5 to 1.2 ratio as requested)
-    chart_col, legend_col = st.columns([3.5, 1.2])
-
+    # Full-width psychrometric chart layout: no left legend panel
+    chart_col = st.columns([1])[0]
     checked_strategies = {}
-    with legend_col:
-        with st.container(border=True):
-            st.markdown(
-                """
-                <h4 style="margin: 0 0 0.15rem 0; font-size: 0.95rem; font-weight: 700; color: #3d2e22; letter-spacing: -0.01em;">
-                    Comfort Zones & Strategies
-                </h4>
-                <p style="margin: 0 0 1rem 0; font-size: 0.72rem; color: #7a6555; line-height: 1.3;">
-                    Toggle checkboxes to filter chart layers instantly.
-                </p>
-                """,
-                unsafe_allow_html=True
-            )
-
-            # Render checklist toggles based on mode
-            if overlay_mode == "Givoni Bioclimatic Chart":
-                for label, color, zone_key in legend_items:
-                    c_box, c_lbl = st.columns([1, 9], gap="small")
-                    c_box.markdown(
-                        f"""
-                        <div style="
-                            width: 12px;
-                            height: 12px;
-                            background-color: {color};
-                            border-radius: 3px;
-                            margin-top: 6px;
-                            box-shadow: 0 0 4px {color}80;
-                        "></div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-                    checked = c_lbl.checkbox(
-                        label,
-                        value=st.session_state.get(f"ds_show_{label}", True),
-                        key=f"ds_show_{label}"
-                    )
-                    checked_strategies[label] = checked
-            elif overlay_mode == "Single Strategy":
-                # Legacy Single Strategy mode retained for compatibility (uses unified zones)
-                if active_ds != "None / Comfort Zones":
-                    # Find the matching zone ID by name
-                    target_id = None
-                    for zid, info in all_zones.items():
-                        if info["name"] == active_ds:
-                            target_id = zid
-                            break
-                    if target_id:
-                        # Show polygon for this single strategy
-                        verts = all_zones[target_id]["polygon"]
-                        xs = [v[0] for v in verts] + [verts[0][0]]
-                        ys = [v[1] for v in verts] + [verts[0][1]]
-                        _zone_color = all_zones[target_id]["color"]
-                        _zr = int(_zone_color[1:3], 16)
-                        _zg = int(_zone_color[3:5], 16)
-                        _zb = int(_zone_color[5:7], 16)
-                        fig_psy.add_trace(go.Scatter(
-                            x=xs, y=ys, mode="lines",
-                            line=dict(width=2, color=_zone_color),
-                            fill="toself", fillcolor=f"rgba({_zr},{_zg},{_zb},0.12)",
-                            name=active_ds, showlegend=False, hoverinfo="name",
-                        ))
-                        # Annotation
-                        cx, cy = centroids[target_id]
-                        fig_psy.add_annotation(
-                            x=cx, y=cy, text=f"<b>{target_id}</b>", showarrow=False,
-                            font=dict(family="Arial, Helvetica, sans-serif", size=13, color=all_zones[target_id]["color"]),
-                            bgcolor="rgba(250, 246, 241, 0.92)", bordercolor=all_zones[target_id]["color"], borderwidth=1.5, borderpad=6,
-                        )
-                # No additional checkbox handling needed – legend already controls visibility
-
-                c_box_un, c_lbl_un = st.columns([1, 9], gap="small")
-                c_box_un.markdown(
-                    f"""
-                    <div style="
-                        width: 12px;
-                        height: 12px;
-                        background-color: #94a3b8;
-                        border-radius: 3px;
-                        margin-top: 6px;
-                        box-shadow: 0 0 4px #94a3b880;
-                    "></div>
-                    """,
-                    unsafe_allow_html=True
-                )
-                checked_un = c_lbl_un.checkbox(
-                    "Unclassified",
-                    value=st.session_state.get(f"ds_show_unclassified", True),
-                    key=f"ds_show_unclassified"
-                )
-                checked_strategies["Unclassified"] = checked_un
-            else:
-                # Fallback (None / Comfort Zones) mode - show Comfort Zone checkbox
-                c_box, c_lbl = st.columns([1, 9], gap="small")
-                c_box.markdown(
-                    """
-                    <div style="
-                        width: 12px;
-                        height: 12px;
-                        background-color: #3b82f6;
-                        border-radius: 3px;
-                        margin-top: 6px;
-                        box-shadow: 0 0 4px #3b82f680;
-                    "></div>
-                    """,
-                    unsafe_allow_html=True
-                )
-                checked = c_lbl.checkbox(
-                    "Comfort Zone",
-                    value=st.session_state.get(f"ds_show_comfort", True),
-                    key=f"ds_show_comfort"
-                )
-                checked_strategies["Comfort Zone"] = checked
-
-            # Divider
-            st.markdown("<hr style='margin: 1.20rem 0 1rem 0; border: 0; border-top: 1px solid rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
-
-            # Metric Card Integration inside Legend Card
-            if overlay_mode == "Single Strategy" and active_ds != "None / Comfort Zones":
-                verts = strategy_polygons[active_ds]
-                poly_path = Path(verts + [verts[0]])
-                inside_mask = poly_path.contains_points(pts)
-
-                hrs_inside = int(inside_mask.sum())
-                pct_inside = (hrs_inside / total_hrs * 100.0) if total_hrs > 0 else 0.0
-
-                metric_label = f"{active_ds}"
-                metric_val_str = f"{pct_inside:.1f}%"
-                metric_sub = f"{hrs_inside} / {total_hrs} hours accommodated"
-                metric_color = "#10b981"  # neon green
-            elif overlay_mode == "Single Strategy" and active_ds == "None / Comfort Zones":
-                cz_verts = psh._comfort_zone(mean_outdoor_t)
-                poly_path = Path(cz_verts + [cz_verts[0]])
-                inside_mask = poly_path.contains_points(pts)
-
-                hrs_inside = int(inside_mask.sum())
-                pct_inside = (hrs_inside / total_hrs * 100.0) if total_hrs > 0 else 0.0
-
-                metric_label = "Core Comfort Zone"
-                metric_val_str = f"{pct_inside:.1f}%"
-                metric_sub = f"{hrs_inside} / {total_hrs} comfortable hours"
-                metric_color = "#3b82f6"  # blue
-            else:
-                # Givoni Bioclimatic Chart cumulative passive strategies suitability
-                zones = psh.givoni_zones(P_kPa, mean_outdoor_t)
-                passive_zones = ["COMFORT ZONE", "NATURAL\nVENTILATION", "EVAPORATIVE\nCOOLING", "MASS\nCOOLING", "NIGHT VENT\n& MASS COOL", "PASSIVE SOLAR\nHEATING", "INTERNAL\nGAINS"]
-                cumulative_mask = np.zeros(total_hrs, dtype=bool)
-                for name in passive_zones:
-                    if name in zones:
-                        v = zones[name]
-                        p_path = Path(v + [v[0]])
-                        inside = p_path.contains_points(pts)
-                        cumulative_mask |= inside
-
-                hrs_inside = int(cumulative_mask.sum())
-                pct_inside = (hrs_inside / total_hrs * 100.0) if total_hrs > 0 else 0.0
-
-                metric_label = "Overall Passive Suitability"
-                metric_val_str = f"{pct_inside:.1f}%"
-                metric_sub = f"{hrs_inside} / {total_hrs} hours comfortable"
-                metric_color = "#3b82f6"
-
-            st.markdown(
-                f"""
-                <div style="
-                    background-color: rgba(15, 23, 42, 0.4);
-                    border: 1px solid rgba(255, 255, 255, 0.04);
-                    border-radius: 8px;
-                    padding: 0.75rem 0.9rem;
-                    box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
-                ">
-                    <div style="font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600; line-height: 1.2;">
-                        {metric_label}
-                    </div>
-                    <div style="font-size: 1.6rem; font-weight: 800; color: {metric_color}; margin: 0.2rem 0; line-height: 1.1;">
-                        {metric_val_str}
-                    </div>
-                    <div style="font-size: 0.68rem; color: #64748b; line-height: 1.2;">
-                        {metric_sub}
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
 
     # Axis ranges
     if auto_zoom:
@@ -15479,6 +15753,11 @@ def render_psychrometrics_interactive_section(
         is_visible = checked_strategies.get("active_ds", True)
         is_unclass_visible = checked_strategies.get("Unclassified", True)
 
+        verts = strategy_polygons[active_ds]
+        poly_path = Path(verts + [verts[0]])
+        inside_mask = poly_path.contains_points(pts)
+        hrs_inside = int(inside_mask.sum())
+
         if hrs_inside > 0 and is_visible:
             fig_psy.add_trace(go.Scatter(
                 x=T_pts[inside_mask], y=Y_gpkg[inside_mask], mode="markers",
@@ -15600,95 +15879,97 @@ def render_psychrometrics_interactive_section(
     fig_psy.update_xaxes(
         range=[x_min, x_max], dtick=5,
         title="Dry Bulb Temperature (°C)",
-        showgrid=True, gridcolor="rgba(200,200,200,0.3)",
-        zeroline=False, showline=True, linecolor="#aaaaaa",
+        title_font=dict(size=13, color="#1f2937"),
+        tickfont=dict(size=11, color="#374151"),
+        showgrid=True, gridcolor="rgba(150,150,150,0.22)",
+        zeroline=False, showline=True, linecolor="#8a8a8a",
         ticks="outside", ticklen=5,
     )
     fig_psy.update_yaxes(
         range=[y_min, y_max], dtick=5,
         title="Humidity Ratio (g/kg dry air)",
-        showgrid=True, gridcolor="rgba(200,200,200,0.3)",
-        zeroline=False, showline=True, linecolor="#aaaaaa",
+        title_font=dict(size=13, color="#1f2937"),
+        tickfont=dict(size=11, color="#374151"),
+        showgrid=True, gridcolor="rgba(150,150,150,0.22)",
+        zeroline=False, showline=True, linecolor="#8a8a8a",
         ticks="outside", ticklen=5,
     )
     fig_psy.update_layout(
-        height=720, margin=dict(l=50, r=40, t=40, b=50),
+        height=700,
+        margin=dict(l=60, r=55, t=10, b=55),
         showlegend=False,
         hovermode="closest",
         paper_bgcolor="rgba(0,0,0,0)",
-        title=dict(text="Psychrometric Chart – ASHRAE Style", x=0.01, xanchor="left", yanchor="top", font=dict(size=18, color=CHART_LIGHT_TEXT)),
+        plot_bgcolor="rgba(255,255,255,0.0)",
+        font=dict(family="Arial, Helvetica, sans-serif", color="#1f2937"),
+        title=dict(text="", x=0.01, xanchor="left", yanchor="top"),
     )
 
     clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
 
-    # ── Render interactive Psychrometric Chart inside the Wide Left Column ──
+    # ── Render Chart Column with minimal Climate Consultant style header ──
     with chart_col:
+        header = st.session_state.get("header", {})
+        lat = header.get("Latitude", "—")
+        lon = header.get("Longitude", "—")
+        elevation = header.get("Elevation", "—")
+        wmo = header.get("WMO Station ID", "—")
+
+        st.markdown(
+            f"""
+            <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 0.8rem; padding: 0.25rem 0 0.65rem 0; border-bottom: 1px solid #e5e7eb; margin-bottom: 0.8rem;">
+                <div style="font-size: 0.8rem; font-weight: 800; letter-spacing: 0.12em; color: #1f2937; text-transform: uppercase;">Psychrometric Chart</div>
+                <div style="text-align: right; font-size: 0.7rem; line-height: 1.35; color: #374151;">
+                    <div style="font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: #1f2937;">Location:</div>
+                    <div style="font-weight: 700; color: #1f2937; margin-top: 0.08rem;">{location_label}</div>
+                    <div style="margin-top: 0.08rem;">Latitude/Longitude: {lat}°, {lon}°</div>
+                    <div>Data Source: WMO {wmo} | Elevation {elevation}m</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
         _st_plotly_chart(fig_psy, use_container_width=True, config={"displaylogo": False, "modeBarButtonsToRemove": ["select2d","lasso2d"], "toImageButtonOptions": {"filename": f"{clean_loc}_psychrometric_chart", "format": "png", "scale": 2}})
 
-        # Move selector buttons under the Plotly chart canvas
-        if overlay_mode == "Single Strategy":
-            st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-            btn_cols = st.columns(5)
-            strategy_options = [
-                "Natural Ventilation",
-                "Direct Evaporative Cooling",
-                "Heating",
-                "Dehumidification",
-                "None / Comfort Zones"
-            ]
-            for idx, opt in enumerate(strategy_options):
-                is_active = active_ds == opt
-                btn_type = "primary" if is_active else "secondary"
-                if btn_cols[idx].button(opt, key=f"ds_btn_{idx}", type=btn_type, use_container_width=True):
-                    st.session_state["active_design_strategy"] = opt
-                    st.rerun()
-        else:
-            st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-            st.info("💡 Givoni Mode: All bioclimatic zones are displayed. Use the checkboxed legend in the right panel to show/hide individual strategies and weather dots instantly.")
+        # Design Strategies Summary (overlaid-style after chart like Climate Consultant)
+        if overlay_mode == "Single Strategy" and active_ds != "None / Comfort Zones":
+            start_month = pd.to_datetime(dfp.index[0]).strftime('%B').upper() if len(dfp) > 0 else "JAN"
+            end_month = pd.to_datetime(dfp.index[-1]).strftime('%B').upper() if len(dfp) > 0 else "DEC"
+            
+            total = len(T_pts)
+            rows = []
+            for name, verts in strategy_polygons.items():
+                poly_path = Path(verts + [verts[0]])
+                inside = poly_path.contains_points(np.column_stack([T_pts, Y_gpkg]))
+                hrs = int(inside.sum())
+                pct = (hrs / total * 100) if total > 0 else 0
+                rows.append({"name": name, "hrs": hrs, "pct": pct})
+            
+            rows_sorted = sorted(rows, key=lambda x: -x["pct"])
+            
+            # Strategy list as a compact box
+            strategies_html = f"<div style='font-size: 0.85rem; font-weight: 700; color: #1e293b; margin: 0.5rem 0 0.8rem 0;'>DESIGN STRATEGIES: {start_month} through {end_month}</div>"
+            for idx, row in enumerate(rows_sorted, 1):
+                color_map = {
+                    "Natural Ventilation": "#17becf",
+                    "Direct Evaporative Cooling": "#ff7f0e",
+                    "Heating": "#7f7f7f",
+                    "Dehumidification": "#9467bd",
+                }
+                zone_color = color_map.get(row["name"], "#cccccc")
+                strategies_html += f"<div style='font-size: 0.75rem; margin: 0.25rem 0; color: #475569;'><span style='color: {zone_color}; font-weight: 700;'>{row['pct']:.1f}%</span> <span style='margin: 0 0.3rem;'>{idx}</span> <strong>{row['name']}</strong>({row['hrs']} hrs)</div>"
+            
+            strategies_html += f"<div style='font-size: 0.75rem; color: #64748b; margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid #e5e7eb;'><strong>100.0%</strong> Comfortable hours using selected strategies ({total} out of {total} hrs)</div>"
+            
+            st.markdown(strategies_html, unsafe_allow_html=True)
 
-        # Low profile outline export expander
-        st.markdown("<div style='height: 8px;' class='low-profile-btn'></div>", unsafe_allow_html=True)
-        with st.expander("Export psychrometric chart", expanded=False):
-            st.caption("Preparing SVG uses Kaleido and can take a moment, so downloads are generated only when requested.")
-            if st.button("Prepare psychrometric downloads", key="prepare_psy_downloads"):
-                try:
-                    st.session_state["psy_svg_bytes"] = fig_psy.to_image(format="svg", width=1200, height=900, scale=2)
-                    st.session_state["psy_svg_error"] = ""
-                except Exception as e:
-                    st.session_state["psy_svg_error"] = str(e)
-                try:
-                    st.session_state["psy_html_bytes"] = fig_psy.to_html(include_plotlyjs="cdn").encode("utf-8")
-                    st.session_state["psy_html_error"] = ""
-                except Exception as e:
-                    st.session_state["psy_html_error"] = str(e)
-
-            d1, d2 = st.columns(2)
-            if st.session_state.get("psy_svg_bytes"):
-                d1.download_button("Download Chart (SVG)", st.session_state["psy_svg_bytes"], f"{clean_loc}_psychrometric_chart.svg", "image/svg+xml", key="dl_psy_svg")
-            elif st.session_state.get("psy_svg_error"):
-                d1.warning(f"SVG export failed: {st.session_state['psy_svg_error']}")
-            if st.session_state.get("psy_html_bytes"):
-                d2.download_button("Download Chart (HTML)", st.session_state["psy_html_bytes"], f"{clean_loc}_psychrometric_chart.html", "text/html", key="dl_psy_html")
-            elif st.session_state.get("psy_html_error"):
-                d2.warning(f"HTML export failed: {st.session_state['psy_html_error']}")
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
 
     _add_manual_pdf_figure("Psychrometric Chart", fig_psy)
 
-    if overlay_mode == "Single Strategy" and active_ds != "None / Comfort Zones":
-        st.markdown("### Design Strategy Suitability Summary")
-        st.caption("Percentage of hours in the selected period accommodated by each design strategy.")
-        total = len(T_pts)
-        rows = []
-        for name, verts in strategy_polygons.items():
-            poly_path = Path(verts + [verts[0]])
-            inside = poly_path.contains_points(np.column_stack([T_pts, Y_gpkg]))
-            hrs = int(inside.sum())
-            pct = (hrs / total * 100) if total > 0 else 0
-            rows.append({"Design Strategy": name, "Hours": hrs, "% of Period": f"{pct:.1f}%"})
-        # Sort by percentage descending
-        rows_sorted = sorted(rows, key=lambda x: -float(x["% of Period"].replace("%", "")))
-        st.dataframe(pd.DataFrame(rows_sorted), use_container_width=True, hide_index=True)
-    elif overlay_mode == "Givoni Bioclimatic Chart":
+    # Show detailed diagnostics below the chart (not the summary, that's now above in the header)
+    if overlay_mode == "Givoni Bioclimatic Chart":
         st.markdown("### Bioclimatic Zone Summary")
         st.caption("Hours in each Givoni strategy zone. Overlaps are resolved cleanly using prioritized spatial classification.")
         total = len(T_pts)
@@ -15723,58 +16004,54 @@ def render_psychrometrics_page():
 
 
 
-    # ── Controls wrapped inside a bordered container ──
+    # Clean minimal intro intentionally omitted to match the reference layout.
+
+    # ── Controls wrapped inside a subtle compact container ──
     st.session_state.setdefault("active_design_strategy", "Natural Ventilation")
     active_ds = st.session_state["active_design_strategy"]
     st.session_state.setdefault("psy_overlay_mode", "Single Strategy")
     overlay_mode = st.session_state["psy_overlay_mode"]
 
-    with st.container(border=True):
-        ctrl_cols = st.columns([2.5, 2.5, 2.5, 2])
-        month_range = ctrl_cols[0].slider("Month Range", 1, 12, (1, 12), key="psy_month_range")
+    ctrl_cols = st.columns([2.8, 2.8, 2.6, 1.8])
+    month_range = ctrl_cols[0].slider("Month range", 1, 12, (1, 12), key="psy_month_range", help="Filter the chart to the season or months you want to study.")
 
-        # Comfort Overlay Mode dropdown selector
-        overlay_mode = ctrl_cols[1].selectbox(
-            "Comfort Overlay Mode",
-            ["Single Strategy", "Givoni Bioclimatic Chart"],
-            index=0 if overlay_mode == "Single Strategy" else 1,
-            key="psy_overlay_mode"
-        )
+    overlay_mode = ctrl_cols[1].selectbox(
+        "Reading mode",
+        ["Focused strategy", "Givoni climate map"],
+        index=0 if overlay_mode == "Single Strategy" else 1,
+        key="psy_overlay_mode",
+        help="Use the focused mode for one design strategy, or the climate map for the full bioclimatic view."
+    )
+    if overlay_mode == "Focused strategy":
+        overlay_mode = "Single Strategy"
+    else:
+        overlay_mode = "Givoni Bioclimatic Chart"
 
-        # 1. Dynamic Mean Temp (Trm) calculation based on selected month range
-        mean_outdoor_t = 20.0
-        if "drybulb" in cdf.columns:
-            daily_mean = cdf["drybulb"].resample("1D").mean()
-            # Filter daily mean by selected month range
-            daily_mean_filtered = daily_mean[(daily_mean.index.month >= month_range[0]) & (daily_mean.index.month <= month_range[1])]
-            if not daily_mean_filtered.empty:
-                running_mean = daily_mean_filtered.rolling(30, min_periods=1).mean()
-                mean_outdoor_t = float(running_mean.median())
+    mean_outdoor_t = 20.0
+    if "drybulb" in cdf.columns:
+        daily_mean = cdf["drybulb"].resample("1D").mean()
+        daily_mean_filtered = daily_mean[(daily_mean.index.month >= month_range[0]) & (daily_mean.index.month <= month_range[1])]
+        if not daily_mean_filtered.empty:
+            running_mean = daily_mean_filtered.rolling(30, min_periods=1).mean()
+            mean_outdoor_t = float(running_mean.median())
 
-        # Compute the slider's initial value: reset when month range changes,
-        # otherwise keep the user's last interaction.
-        current_month_range = month_range
-        last_month_range = st.session_state.get("_psy_last_month_range")
-        if last_month_range != current_month_range:
-            st.session_state["_psy_last_month_range"] = current_month_range
-            _psy_trm_initial = float(round(mean_outdoor_t, 1))
-        else:
-            _psy_trm_initial = float(st.session_state.get("psy_trm", round(mean_outdoor_t, 1)))
-        # Clamp to slider bounds
-        _psy_trm_initial = max(5.0, min(35.0, _psy_trm_initial))
+    current_month_range = month_range
+    last_month_range = st.session_state.get("_psy_last_month_range")
+    if last_month_range != current_month_range:
+        st.session_state["_psy_last_month_range"] = current_month_range
+        _psy_trm_initial = float(round(mean_outdoor_t, 1))
+    else:
+        _psy_trm_initial = float(st.session_state.get("psy_trm", round(mean_outdoor_t, 1)))
+    _psy_trm_initial = max(5.0, min(35.0, _psy_trm_initial))
 
-        mean_outdoor_t = ctrl_cols[2].slider("Mean Outdoor Temp (°C)", 5.0, 35.0, value=_psy_trm_initial, step=0.5, key="psy_trm", help="Adjusts adaptive comfort zone width.")
+    mean_outdoor_t = ctrl_cols[2].slider("Comfort reference temp (°C)", 5.0, 35.0, value=_psy_trm_initial, step=0.5, key="psy_trm", help="This shifts the comfort band to reflect the site’s seasonal baseline.")
+    auto_zoom = ctrl_cols[3].toggle("Auto-fit", value=True, key="psy_autozoom")
 
-        # Modern st.toggle for Auto-Zoom
-        auto_zoom = ctrl_cols[3].toggle("Auto zoom to EPW range", value=True, key="psy_autozoom")
-
-        st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
-        with st.expander("Chart Metric Lines", expanded=False):
-            mc1, mc2, mc3, mc4 = st.columns(4)
-            show_rh = mc1.checkbox("RH Lines", True, key="psy_rh")
-            show_enthalpy = mc2.checkbox("Enthalpy", True, key="psy_enth")
-            show_volume = mc3.checkbox("Spec. Volume", False, key="psy_vol")
-            show_wetbulb = mc4.checkbox("Wet-Bulb", False, key="psy_twb")
+    rf1, rf2, rf3, rf4 = st.columns(4)
+    show_rh = rf1.checkbox("RH", True, key="psy_rh")
+    show_enthalpy = rf2.checkbox("Enthalpy", True, key="psy_enth")
+    show_volume = rf3.checkbox("Volume", False, key="psy_vol")
+    show_wetbulb = rf4.checkbox("Wet-bulb", False, key="psy_twb")
 
     # ── Data prep ──
     dfp = cdf[["drybulb", "relhum"]].dropna().copy()
@@ -15798,20 +16075,7 @@ def render_psychrometrics_page():
         show_wetbulb=show_wetbulb
     )
 
-    st.markdown("---")
-    st.markdown("### Advanced Psychrometric & Comfort Diagnostics")
-    st.caption("Publication-standard diagnostics generated by the PDF engine.")
-    extra = _get_extra_figures()
-    for title in [
-        "Seasonal Psychrometric Points",
-        "Hourly Psychrometric Paths",
-        "Diurnal Thermal Comfort Frequency - Shading Scenario",
-        "Diurnal Thermal Comfort Frequency - Wind Scenario",
-        "Diurnal Thermal Comfort Frequency - Humidity Scenario",
-    ]:
-        if title in extra:
-            _st_plotly_chart(extra[title], use_container_width=True)
-            _add_manual_pdf_figure(title, extra[title])
+    # The reference image is a single compact psychrometric panel; the extra diagnostics block is intentionally omitted here.
 
 
 
