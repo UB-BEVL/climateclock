@@ -47,10 +47,11 @@ def specific_vol(TC, w, P_kPa):
 # The comfort zone shifts with mean outdoor temperature (Trm).
 
 def _comfort_zone(Trm=20.0):
-    """Adaptive comfort zone. Trm = running mean outdoor temp °C."""
-    t_lo = max(18.0, 17.0 + 0.1 * Trm)
-    t_hi = min(29.0, 21.0 + 0.4 * Trm)
-    return [(t_lo, 4.0), (t_lo, 12.0), (t_hi, 12.0), (t_hi, 4.0)]
+    """ASHRAE 55-style adaptive comfort zone in dry-bulb/humidity-ratio space."""
+    neutral = 0.31 * float(Trm) + 17.8
+    t_lo = max(18.0, neutral - 3.5)
+    t_hi = min(30.0, neutral + 3.5)
+    return [(t_lo, 4.0), (t_lo + 0.5, 12.0), (t_hi, 12.0), (t_hi + 0.5, 4.0)]
 
 def givoni_zones(P_kPa=101.325, Trm=20.0):
     """Return dict of zone_name -> list of (T, w_gpkg) polygon vertices.
@@ -300,58 +301,111 @@ strategy_color_map = {
 }
 
 def get_all_strategy_zones(P_kPa=101.325, Trm=20.0):
-    """Return a dict mapping a numeric ID (as string) to a dict with
-    - name: human readable strategy name
-    - polygon: list of (T, w_gpkg) vertices
-    - color: hex string for Plotly outlines/fills
-    This combines the 4 design‑strategy polygons and the Givoni bioclimatic zones
-    (total 16 entries)."""
-    # 4 design‑strategy polygons from existing helper
-    design_strategies = get_design_strategy_polygons(P_kPa, Trm)
+    """Return the 16 Climate Consultant-style design strategy polygons."""
+    cz = _comfort_zone(Trm)
+    cz_tlo = cz[0][0]
+    cz_thi = cz[2][0]
 
-    # Givoni zones (already contain many of the same names; we will keep them distinct)
-    givoni = givoni_zones(P_kPa, Trm)
+    def ws(t, cap=28.0):
+        return min(float(gpkg(w_sat(np.array([t]), P_kPa))[0]), cap)
 
-    # Build a combined ordered dict. The ordering follows the IDs defined in the
-    # implementation plan (1‑16). We'll map IDs manually for clarity.
-    combined = {}
-    # Mapping of IDs to names (adjust to match the reference video order)
-    id_to_name = [
-        "Comfort Zone",
-        "Natural Ventilation",
-        "Direct Evaporative Cooling",
-        "Mass Cooling",
-        "Night Ventilation & Mass Cooling",
-        "Dehumidification",
-        "Heating",
-        "Humidification",
-        "Passive Solar Heating",
-        "Active Solar",
-        "Internal Gains",
-        "Evaporative Cooling",
-        "Unclassified",
-        "A/C & Dehumidification",
-        "Passive Solar Heating (Alt)",
-        "Active Solar (Alt)"
+    strategies = [
+        (
+            "2",
+            "Sun Shading of Windows",
+            [(cz_thi - 1.0, 12.0), (cz_thi + 5.0, 12.0), (cz_thi + 6.0, ws(cz_thi + 6.0, 24.0)), (cz_thi, ws(cz_thi, 22.0))],
+            "#ff0000",
+        ),
+        (
+            "3",
+            "High Thermal Mass",
+            [(cz_thi - 0.5, 4.0), (cz_thi - 0.5, 12.0), (35.0, 12.0), (35.0, 4.0)],
+            "#ff9900",
+        ),
+        (
+            "4",
+            "High Thermal Mass Night Flushed",
+            [(cz_thi + 1.5, 4.0), (cz_thi + 1.5, 12.0), (40.0, 12.0), (40.0, 4.0)],
+            "#ff7a00",
+        ),
+        (
+            "5",
+            "Direct Evaporative Cooling",
+            [(cz_thi, 0.0), (cz_thi, 9.0), (35.0, 10.5), (40.0, 5.0), (40.0, 0.0)],
+            "#0066ff",
+        ),
+        (
+            "6",
+            "Two-Stage Evaporative Cooling",
+            [(cz_thi, 0.0), (cz_thi, 13.0), (40.0, 13.0), (40.0, 0.0)],
+            "#0033cc",
+        ),
+        (
+            "7",
+            "Adaptive Comfort Ventilation",
+            [(cz_thi - 0.5, 7.0), (cz_thi - 0.5, 17.0), (29.0, 17.0), (29.0, 7.0)],
+            "#008000",
+        ),
+        (
+            "8",
+            "Fan-Forced Ventilation Cooling",
+            [(cz_thi, 8.0), (cz_thi, 19.0), (32.0, 19.0), (32.0, 8.0)],
+            "#00a000",
+        ),
+        (
+            "9",
+            "Internal Heat Gain",
+            [(12.0, 4.0), (12.0, 12.0), (cz_tlo, 12.0), (cz_tlo, 4.0)],
+            "#cc6600",
+        ),
+        (
+            "10",
+            "Passive Solar Direct Gain Low Mass",
+            [(5.0, 4.0), (5.0, 12.0), (12.0, 12.0), (12.0, 4.0)],
+            "#ff00ff",
+        ),
+        (
+            "11",
+            "Passive Solar Direct Gain High Mass",
+            [(0.0, 4.0), (0.0, 12.0), (12.0, 12.0), (12.0, 4.0)],
+            "#9900ff",
+        ),
+        (
+            "12",
+            "Wind Protection of Outdoor Spaces",
+            [(-10.0, 4.0), (-10.0, 12.0), (5.0, 12.0), (5.0, 4.0)],
+            "#555500",
+        ),
+        (
+            "13",
+            "Humidification Only",
+            [(-10.0, 0.0), (-10.0, 4.0), (cz_thi, 4.0), (cz_thi, 0.0)],
+            "#00cccc",
+        ),
+        (
+            "14",
+            "Dehumidification Only",
+            [(cz_tlo, 12.0), (cz_tlo, 24.0), (cz_thi + 2.0, 24.0), (cz_thi + 2.0, 12.0)],
+            "#00a6ff",
+        ),
+        (
+            "15",
+            "Cooling, add Dehumidification if needed",
+            [(cz_thi + 2.0, 12.0), (cz_thi + 2.0, 28.0), (40.0, 28.0), (40.0, 12.0)],
+            "#ff0000",
+        ),
+        (
+            "16",
+            "Heating, add Humidification if needed",
+            [(-10.0, 0.0), (-10.0, 12.0), (cz_tlo, 12.0), (cz_tlo, 0.0)],
+            "#ff0000",
+        ),
     ]
-    # Helper to fetch polygon and color
-    for idx, name in enumerate(id_to_name, start=1):
-        # Prefer Givoni definition if present, else design‑strategy definition
-        polygon = None
-        if name in givoni:
-            polygon = givoni[name]
-        elif name in design_strategies:
-            polygon = design_strategies[name]
-        else:
-            # Some names are placeholders; skip if not found
-            continue
-        color = strategy_color_map.get(name, "#ffffff")
-        combined[str(idx)] = {
-            "name": name,
-            "polygon": polygon,
-            "color": color,
-        }
-    return combined
+
+    return {
+        sid: {"name": name, "polygon": polygon, "color": color}
+        for sid, name, polygon, color in strategies
+    }
 
 def compute_centroids(zones_dict):
     """Compute simple centroid (average of vertices) for each zone.
