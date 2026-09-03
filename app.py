@@ -1815,6 +1815,71 @@ def _parse_location(line: str):
         timezone=fnum(parts[8]), elevation_m=fnum(parts[9])
     )
 
+
+def _normalize_climate_zone(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    simple = re.fullmatch(r"(?:zone\s*)?([0-9]{1,2})\s*([A-Ca-c]?)", text)
+    if simple:
+        return f"{simple.group(1)}{simple.group(2).upper()}"
+
+    patterns = [
+        r"\bclimate\s+zone(?:\s*(?:number|num|no\.?|designation))?\s*[:=,\-]?\s*([0-9]{1,2})\s*([A-Ca-c]?)\b",
+        r"\bASHRAE(?:\s+169)?[^,\n;:]{0,60}\bzone\s*[:=,\-]?\s*([0-9]{1,2})\s*([A-Ca-c]?)\b",
+        r"\bIECC[^,\n;:]{0,60}\bzone\s*[:=,\-]?\s*([0-9]{1,2})\s*([A-Ca-c]?)\b",
+        r"\bCZ\s*[:=,\-]?\s*([0-9]{1,2})\s*([A-Ca-c]?)\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return f"{match.group(1)}{match.group(2).upper()}"
+    return ""
+
+
+def _iter_text_candidates(value: object) -> Iterable[str]:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(item, (dict, list, tuple, set)):
+                yield from _iter_text_candidates(item)
+            else:
+                yield f"{key}: {item}"
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _iter_text_candidates(item)
+    elif value is not None:
+        yield str(value)
+
+
+def _extract_epw_climate_zone(*sources: object) -> str:
+    for source in sources:
+        for candidate in _iter_text_candidates(source):
+            zone = _normalize_climate_zone(candidate)
+            if zone:
+                return zone
+    return ""
+
+
+def _header_climate_zone(header: object) -> str:
+    if not isinstance(header, dict):
+        return "--"
+    loc = header.get("location", {}) if isinstance(header.get("location"), dict) else {}
+    zone = (
+        _normalize_climate_zone(header.get("climate_zone"))
+        or _normalize_climate_zone(header.get("ashrae_climate_zone"))
+        or _normalize_climate_zone(header.get("climate_zone_number"))
+        or _normalize_climate_zone(loc.get("climate_zone"))
+        or _extract_epw_climate_zone(
+            header.get("_epw_header_lines"),
+            header.get("comments1"),
+            header.get("comments2"),
+            header.get("design_conditions"),
+            header,
+        )
+    )
+    return zone or "--"
+
 def read_epw_with_schema(epw_bytes_or_path: Union[bytes, str, Path]):
     # Return (header: dict, df: DataFrame indexed by timestamp, notes: list).
     notes: List[str] = []
@@ -1840,6 +1905,8 @@ def read_epw_with_schema(epw_bytes_or_path: Union[bytes, str, Path]):
             "data_periods": header_lines[5],
             "comments1": header_lines[6] if len(header_lines) > 6 else "",
             "comments2": header_lines[7] if len(header_lines) > 7 else "",
+            "_epw_header_lines": header_lines,
+            "climate_zone": _extract_epw_climate_zone(header_lines),
         }
 
         rows = list(csv.reader(data_lines))
@@ -2128,7 +2195,7 @@ def _meta_lookup(meta: Optional[dict], *keys: str) -> Optional[object]:
     return None
 
 
-def _build_header_from_pvlib_meta(meta: Optional[dict]) -> dict:
+def _build_header_from_pvlib_meta(meta: Optional[dict], header_lines: Optional[List[str]] = None) -> dict:
     location = {
         "city": _meta_lookup(meta, "city") or "",
         "state_province": _meta_lookup(meta, "state_province", "state" , "province") or "",
@@ -2150,6 +2217,11 @@ def _build_header_from_pvlib_meta(meta: Optional[dict]) -> dict:
         "data_periods": _meta_lookup(meta, "data_periods") or location.get("period", ""),
         "comments1": _meta_lookup(meta, "comments1") or "",
         "comments2": _meta_lookup(meta, "comments2") or "",
+        "_epw_header_lines": header_lines or [],
+        "climate_zone": (
+            _normalize_climate_zone(_meta_lookup(meta, "climate_zone", "ashrae_climate_zone", "climate_zone_number"))
+            or _extract_epw_climate_zone(header_lines or [], meta or {})
+        ),
     }
     return header
 
@@ -2162,12 +2234,23 @@ def _read_epw_via_pvlib(epw_bytes_or_path: Union[bytes, str, Path]) -> Optional[
 
     source = epw_bytes_or_path
     buffer = None
+    header_lines: List[str] = []
     if isinstance(epw_bytes_or_path, (bytes, bytearray)):
         text = epw_bytes_or_path.decode("latin-1", errors="replace")
+        header_lines = text.splitlines()[:8]
         buffer = io.StringIO(text)
         source = buffer
     elif isinstance(epw_bytes_or_path, Path):
+        try:
+            header_lines = epw_bytes_or_path.read_text(encoding="latin-1", errors="replace").splitlines()[:8]
+        except Exception:
+            header_lines = []
         source = str(epw_bytes_or_path)
+    elif isinstance(epw_bytes_or_path, str):
+        try:
+            header_lines = Path(epw_bytes_or_path).read_text(encoding="latin-1", errors="replace").splitlines()[:8]
+        except Exception:
+            header_lines = []
 
     try:
         pv_df, meta = pvlib_read_epw(source)
@@ -2183,7 +2266,7 @@ def _read_epw_via_pvlib(epw_bytes_or_path: Union[bytes, str, Path]) -> Optional[
     if "datasource" not in df.columns:
         df["datasource"] = 0
 
-    header = _build_header_from_pvlib_meta(meta if isinstance(meta, dict) else {})
+    header = _build_header_from_pvlib_meta(meta if isinstance(meta, dict) else {}, header_lines)
     return header, df
 
 
@@ -4634,6 +4717,8 @@ def _render_tour_step(page: str) -> None:
     elif force_expand:
         st.session_state[collapsed_key] = False
     is_collapsed = st.session_state.get(collapsed_key, True)
+    if is_collapsed:
+        return
 
     # ── Collapsed pill view ──────────────────────────────────────
     if is_collapsed:
@@ -4969,17 +5054,15 @@ def render_sidebar():
 
         render_sidebar_filters(epw_loaded)
 
-        if epw_loaded:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Take tour", use_container_width=True, help="Restart the interactive guided tour"):
-                # Reset all tour completion flags so tour replays
-                for k in list(st.session_state.keys()):
-                    if k.startswith("tour_completed_") or k.startswith("tour_step_") or k.startswith("tour_collapsed_"):
-                        del st.session_state[k]
-                # Navigate to Overview so tour starts on a page with steps
-                st.session_state["nav_page"] = "Overview"
-                st.session_state["_tour_force_expand"] = True
-                _rerun()
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Take tour", use_container_width=True, help="Open the compact guided tour"):
+            # Reset all tour completion flags so tour replays.
+            for k in list(st.session_state.keys()):
+                if k.startswith("tour_completed_") or k.startswith("tour_step_") or k.startswith("tour_collapsed_"):
+                    del st.session_state[k]
+            st.session_state["nav_page"] = "Overview" if epw_loaded else DEFAULT_PAGE
+            st.session_state["_tour_force_expand"] = True
+            _rerun()
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -6281,6 +6364,33 @@ def _pdf_is_large_page(pdf: FPDF) -> bool:
     return float(getattr(pdf, "w", 210)) > 300
 
 
+def _pdf_logo_paths() -> Tuple[Path, Path]:
+    base = Path(__file__).parent / "assets"
+    return base / "bevl_framework.png", base / "ub_framework.png"
+
+
+def _png_dimensions(path: Path) -> Optional[Tuple[int, int]]:
+    try:
+        with path.open("rb") as fh:
+            header = fh.read(24)
+        if header[:8] == b"\x89PNG\r\n\x1a\n":
+            width = int.from_bytes(header[16:20], "big")
+            height = int.from_bytes(header[20:24], "big")
+            if width > 0 and height > 0:
+                return width, height
+    except Exception:
+        return None
+    return None
+
+
+def _pdf_image_width_for_height(path: Path, height_mm: float, max_width_mm: float) -> float:
+    dims = _png_dimensions(path)
+    if not dims:
+        return min(max_width_mm, height_mm * 3.0)
+    width_px, height_px = dims
+    return min(max_width_mm, height_mm * (width_px / height_px))
+
+
 class ClimateReportPDF(FPDF):
     """Branded PDF report with clean, minimalist aesthetics inspired by true scientific journals."""
 
@@ -6331,19 +6441,44 @@ class ClimateReportPDF(FPDF):
 
         margin = 16
         content_w = self.w - (2 * margin)
-        self.set_y(-12)
+        footer_rule_y = self.h - 13
+        footer_text_y = self.h - 10.5
         # Thin teal rule above footer
         self.set_draw_color(*PDF_ACCENT)
         self.set_line_width(0.3)
-        self.line(margin, self.h - 12, self.w - margin, self.h - 12)
+        self.line(margin, footer_rule_y, self.w - margin, footer_rule_y)
+
+        left_w = content_w * 0.30
+        center_w = content_w * 0.36
+        right_w = content_w - left_w - center_w
+        logo_drawn = False
+        if self.include_branding and not self.white_label:
+            logo_h = 5.4
+            logo_y = self.h - 11.4
+            logo_x = margin
+            logo_limit = margin + left_w - 2
+            for logo_path in _pdf_logo_paths():
+                if not logo_path.exists():
+                    continue
+                logo_w = _pdf_image_width_for_height(logo_path, logo_h, 24.0)
+                if logo_x + logo_w > logo_limit:
+                    break
+                try:
+                    self.image(str(logo_path), x=logo_x, y=logo_y, w=logo_w, h=logo_h)
+                    logo_x += logo_w + 3.0
+                    logo_drawn = True
+                except Exception:
+                    continue
 
         self.set_font("Helvetica", "", 8)
         self.set_text_color(*PDF_MUTED)
-        self.set_xy(margin, self.h - 10)
-        col_w = content_w / 3
-        self.cell(col_w, 5, _pdf_safe_text(self.location_label[:64]), ln=0, align="L")
-        self.cell(col_w, 5, f"Generated {self.generated_on}", ln=0, align="C")
-        self.cell(col_w, 5, f"Page {self.page_no()} of {{nb}}", ln=0, align="R")
+        if not logo_drawn:
+            self.set_xy(margin, footer_text_y)
+            self.cell(left_w, 5, _pdf_safe_text(self.source_label[:34]), ln=0, align="L")
+        self.set_xy(margin + left_w, footer_text_y)
+        self.cell(center_w, 5, _pdf_safe_text(self.location_label[:54]), ln=0, align="C")
+        self.set_xy(margin + left_w + center_w, footer_text_y)
+        self.cell(right_w, 5, f"Generated {self.generated_on} | Page {self.page_no()} of {{nb}}", ln=0, align="R")
 
 
 def _export_dimensions_for_figure(fig: go.Figure, width: int, height: int) -> Tuple[int, int]:
@@ -6458,6 +6593,7 @@ def _location_meta(header: dict) -> Dict[str, str]:
     tz = "--"
     elev = "--"
     wmo = "--"
+    climate_zone = _header_climate_zone(header)
 
     if isinstance(loc, dict):
         raw_city = loc.get("city") or loc.get("name")
@@ -6486,6 +6622,7 @@ def _location_meta(header: dict) -> Dict[str, str]:
         "tz": tz,
         "elev": elev,
         "wmo": wmo,
+        "climate_zone": climate_zone,
     }
 
 
@@ -7874,14 +8011,14 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                 fig_dd.update_yaxes(title_text=degree_day_unit, row=1, col=2)
                 extra["Heating and Cooling Degree Days"] = fig_dd
                 # BUG 6: Computed caption with actual HDD, CDD, GDD values
-                climate_zone = "heating-dominated" if annual_hdd > 3 * annual_cdd else ("cooling-dominated" if annual_cdd > 3 * annual_hdd else "mixed-load")
+                load_profile = "heating-dominated" if annual_hdd > 3 * annual_cdd else ("cooling-dominated" if annual_cdd > 3 * annual_hdd else "mixed-load")
                 cap_dd = safe_format_caption(
                     "Degree days aggregate hourly departures from an {hdd_base} base into monthly heating and cooling "
                     "demand indicators, with growing degree days (GDD base {gdd_base}) added for agricultural and "
                     "phenological context. For {station}, annual HDD18 is {hdd:.0f}, CDD18 is {cdd:.0f}, and "
-                    "GDD5 is {gdd:.0f} {dd_unit} - placing this climate in the {zone} "
-                    "zone for early-stage mechanical system sizing.",
-                    dict(station=station_name, hdd_base=hdd_base_label, gdd_base=gdd_base_label, hdd=annual_hdd_display, cdd=annual_cdd_display, gdd=annual_gdd_display, dd_unit=degree_day_unit, zone=climate_zone))
+                    "GDD5 is {gdd:.0f} {dd_unit} - placing this climate in a {zone} "
+                    "load profile for early-stage mechanical system sizing.",
+                    dict(station=station_name, hdd_base=hdd_base_label, gdd_base=gdd_base_label, hdd=annual_hdd_display, cdd=annual_cdd_display, gdd=annual_gdd_display, dd_unit=degree_day_unit, zone=load_profile))
                 _add_manual_pdf_caption("Heating and Cooling Degree Days", cap_dd)
 
         def _add_month_hour_heatmap(value_col: Optional[str], title: str, colorscale: str = "Viridis"):
@@ -9218,6 +9355,7 @@ def build_data_quality_notes_page(pdf: ClimateReportPDF, cdf: Optional[pd.DataFr
         ("Zero-value columns", ", ".join(zero_cols[:18]) if zero_cols else "No all-zero numeric columns detected."),
         ("Gap-fill methods", gap_fill),
         ("WMO station ID", str(loc.get("wmo", "--"))),
+        ("EPW climate zone", _header_climate_zone(header)),
         ("Coordinate accuracy note", f"Latitude {loc.get('lat', '--')}, longitude {loc.get('lon', '--')}; coordinates are inherited from the source EPW metadata/station index."),
         ("Report generation credit", f"Generated {generated_on} by Climate Analysis Pro from the Streamlit climate analysis workspace."),
     ]
@@ -9391,6 +9529,7 @@ def build_cover_page(pdf: ClimateReportPDF, location_label: str, source: str, lo
         ("Station", f"{loc_meta.get('city', '--')}, {loc_meta.get('country', '--')}"),
         ("Weather Source", source),
         ("WMO Station", loc_meta.get("wmo", "--")),
+        ("Climate Zone", loc_meta.get("climate_zone", "--")),
         ("Coordinates", f"{lat_text}, {lon_text}"),
         ("Elevation", loc_meta.get("elev", "--")),
         ("Timezone", loc_meta.get("tz", "--")),
@@ -10507,6 +10646,7 @@ def render_overview_page():
     lat_value = loc_meta.get("lat", "--")
     lon_value = loc_meta.get("lon", "--")
     elev_value = loc_meta.get("elev", "--")
+    climate_zone_value = loc_meta.get("climate_zone", "--")
     crs_label = _location_crs_label(header)
 
     rows = len(cdf)
@@ -11468,7 +11608,7 @@ def render_dashboard_page():
             )
 
         # ── Location Metadata ─────────────────────────────────────────
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
 
         def _fmt(val, f):
             try:
@@ -11484,6 +11624,7 @@ def render_dashboard_page():
         c5.metric("🏷️ WMO", str(loc.get("wmo")))
         if wmo_tip:
             c5.markdown(wmo_tip, unsafe_allow_html=True)
+        c6.metric("Climate Zone", _header_climate_zone(header))
 
         # ── Annual Climate Statistics with Human-Readable Descriptors ──
         st.markdown("### 📈 Annual Climate Statistics")
@@ -15507,7 +15648,6 @@ def render_solar_page():
     _st_plotly_chart(fig_cart, use_container_width=True, config={"displayModeBar": True, "toImageButtonOptions": {"filename": f"{cname}_sunpath_cartesian", "format": "png", "scale": 2}})
     _add_manual_pdf_figure("Sun Path Cartesian", fig_cart)
     # Solar Irradiance Components (GHI, DNI, DHI) — above cloud coverage
-    import plotly.express as px
     st.markdown("---")
     st.markdown("#### Solar Irradiance — GHI / DNI / DHI")
     st.caption("Annual overlay of Global Horizontal (GHI), Direct Normal (DNI), and Diffuse Horizontal (DHI) irradiance — identical layout to the Short-Term Prediction tab.")
@@ -15617,7 +15757,6 @@ def render_solar_page():
         freq = counts.drop(columns="n")
         cat_order = ["Clear (0–3/10)", "Intermediate (4–7/10)", "Cloudy (8–10/10)"]
         colors = ["#8FD3FF", "#7BB07B", "#F08A8A"]
-        import plotly.express as px
         fig_cloud = px.bar(
             freq, x="month", y="pct", color="category",
             category_orders={"category": cat_order},
@@ -16190,6 +16329,8 @@ def render_psychrometrics_interactive_section(
     wmo = header.get("WMO Station ID", loc_meta.get("wmo", "-")) if isinstance(header, dict) else "-"
     data_source = st.session_state.get("source_label") or header.get("data_source") or header.get("Data Source") or "EPW"
     timezone_label = loc_meta.get("timezone", header.get("Time Zone", "-")) if isinstance(header, dict) else "-"
+    climate_zone = _header_climate_zone(header)
+    climate_zone_label = f" | Climate Zone {climate_zone}" if climate_zone != "--" else ""
     st.markdown(
         f"""
         <div class="cc-psy-topbar">
@@ -16197,7 +16338,7 @@ def render_psychrometrics_interactive_section(
             <div class="cc-psy-top-meta">
                 <strong>LOCATION:</strong><span>{_ui_escape(location_label)}</span>
                 <strong>Latitude/Longitude:</strong><span>{_ui_escape(lat)}, {_ui_escape(lon)} | Time Zone from Greenwich { _ui_escape(timezone_label) }</span>
-                <strong>Data Source:</strong><span>{_ui_escape(data_source)} | WMO { _ui_escape(wmo) } | Elevation { _ui_escape(elevation) } m</span>
+                <strong>Data Source:</strong><span>{_ui_escape(data_source)} | WMO { _ui_escape(wmo) } | Elevation { _ui_escape(elevation) } m{_ui_escape(climate_zone_label)}</span>
             </div>
         </div>
         """,
@@ -16629,40 +16770,38 @@ def render_psychrometrics_interactive_section(
             unsafe_allow_html=True,
         )
 
-        # Back / Next buttons for strategy cycling
-        st.session_state.setdefault("psy_strategy_focus_idx", -1)
-        focus_idx = st.session_state["psy_strategy_focus_idx"]
-        zone_ids = list(all_zones.keys())
+        export_svg_col, export_html_col = st.columns(2)
+        try:
+            svg_bytes = fig_psy.to_image(format="svg", width=1400, height=850, scale=2)
+            export_svg_col.download_button(
+                "Download Psychrometric Chart (SVG)",
+                svg_bytes,
+                f"{clean_loc}_psychrometric_chart.svg",
+                "image/svg+xml",
+                key="psy_download_svg",
+                use_container_width=True,
+            )
+        except Exception as e:
+            export_svg_col.download_button(
+                "Download Psychrometric Chart (SVG)",
+                b"",
+                f"{clean_loc}_psychrometric_chart.svg",
+                "image/svg+xml",
+                key="psy_download_svg_unavailable",
+                use_container_width=True,
+                disabled=True,
+                help=f"SVG export failed. Requires a working Kaleido installation. Error: {str(e)[:80]}",
+            )
 
-        _, _, back_col, next_col = st.columns([3, 3, 1, 1])
-        with back_col:
-            if st.button("Back", key="psy_back_btn", use_container_width=True):
-                new_idx = max(-1, focus_idx - 1)
-                st.session_state["psy_strategy_focus_idx"] = new_idx
-                if new_idx >= 0 and new_idx < len(zone_ids):
-                    for zid in zone_ids:
-                        st.session_state[f"psy_strat_{zid}"] = (zid == zone_ids[new_idx])
-                    st.session_state["psy_strat_comfort"] = False
-                else:
-                    for zid in zone_ids:
-                        st.session_state[f"psy_strat_{zid}"] = True
-                    st.session_state["psy_strat_comfort"] = True
-                _rerun()
-        with next_col:
-            if st.button("Next", key="psy_next_btn", use_container_width=True):
-                new_idx = focus_idx + 1
-                if new_idx >= len(zone_ids):
-                    new_idx = -1
-                st.session_state["psy_strategy_focus_idx"] = new_idx
-                if new_idx >= 0 and new_idx < len(zone_ids):
-                    for zid in zone_ids:
-                        st.session_state[f"psy_strat_{zid}"] = (zid == zone_ids[new_idx])
-                    st.session_state["psy_strat_comfort"] = False
-                else:
-                    for zid in zone_ids:
-                        st.session_state[f"psy_strat_{zid}"] = True
-                    st.session_state["psy_strat_comfort"] = True
-                _rerun()
+        html_bytes = fig_psy.to_html(include_plotlyjs="cdn").encode("utf-8")
+        export_html_col.download_button(
+            "Download Psychrometric Chart (HTML)",
+            html_bytes,
+            f"{clean_loc}_psychrometric_chart.html",
+            "text/html",
+            key="psy_download_html",
+            use_container_width=True,
+        )
 
     _add_manual_pdf_figure("Psychrometric Chart", fig_psy)
 
