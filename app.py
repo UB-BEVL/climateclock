@@ -4297,13 +4297,25 @@ div[role="radiogroup"][aria-label="Detail view"] label:has(input:checked) {
     display: grid;
     gap: 7px;
     margin: 0.25rem 0 0.5rem;
+    min-width: 0;
+}
+.cc-sidebar-guide-shell {
+    max-height: min(42vh, 360px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 4px;
+    box-sizing: border-box;
+    overscroll-behavior: contain;
 }
 .cc-guide-row {
     border: 1px solid rgba(148, 163, 184, 0.35);
     border-left: 3px solid rgba(148, 163, 184, 0.65);
-    border-radius: 8px;
-    padding: 7px 9px;
+    border-radius: 6px;
+    padding: 6px 8px;
     background: rgba(248, 250, 252, 0.82);
+    box-sizing: border-box;
+    max-width: 100%;
+    min-width: 0;
 }
 .cc-guide-row.active {
     border-color: rgba(74, 144, 164, 0.55);
@@ -4316,21 +4328,24 @@ div[role="radiogroup"][aria-label="Detail view"] label:has(input:checked) {
 .cc-guide-row strong {
     display: block;
     color: #1f2937;
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     line-height: 1.25;
+    overflow-wrap: anywhere;
 }
 .cc-guide-row span {
     display: block;
     margin-top: 2px;
     color: #475569;
-    font-size: 0.7rem;
+    font-size: 0.68rem;
     line-height: 1.3;
+    overflow-wrap: anywhere;
 }
 .cc-guide-note {
     color: #64748b;
-    font-size: 0.7rem;
+    font-size: 0.68rem;
     line-height: 1.35;
     padding: 6px 2px 0;
+    overflow-wrap: anywhere;
 }
 @keyframes cc-spotlight-pulse {
     0%, 100% { box-shadow: 0 0 0 4px rgba(74, 144, 164, 0.12), 0 0 20px rgba(74, 144, 164, 0.15); }
@@ -4977,7 +4992,7 @@ def _render_sidebar_route_guide(epw_loaded: bool, current_page: str) -> None:
             )
         detail_tabs = ", ".join(name for name, _ in DASHBOARD_SECTION_GUIDE)
         st.markdown(
-            "<div class='cc-sidebar-guide'>{rows}</div><div class='cc-guide-note'>Detail View contains: {detail_tabs}.</div>".format(
+            "<div class='cc-sidebar-guide-shell'><div class='cc-sidebar-guide'>{rows}</div><div class='cc-guide-note'>Detail View contains: {detail_tabs}.</div></div>".format(
                 rows="".join(rows),
                 detail_tabs=_ui_escape(detail_tabs),
             ),
