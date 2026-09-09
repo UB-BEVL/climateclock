@@ -36,76 +36,62 @@ def compute_di(df: pd.DataFrame, temp_col: str = "drybulb", rh_col: str = "relhu
     return pd.Series(di.to_numpy(), index=df.index, name="DI")
 
 
+def estimate_mean_radiant_temperature(tdb, ghi):
+    """Approximate outdoor MRT from air temperature and horizontal irradiance.
+
+    Retains the existing standing-person solar-gain assumptions. MRT is an
+    estimate; the subsequent UTCI calculation uses the full reference model.
+    """
+    ta, solar = np.broadcast_arrays(np.asarray(tdb, dtype=float), np.asarray(ghi, dtype=float))
+    solar = np.clip(solar, 0, None)
+    mrt = ta + (0.7 / 0.95) * 0.308 * solar / (4 * 5.67e-8 * (ta + 273.15) ** 3)
+    return np.clip(mrt, ta, ta + 60.0)
+
+
+def compute_utci_values(tdb, tr, v, rh) -> np.ndarray:
+    """Full UTCI model. Never replace failed calculations with a proxy index."""
+    try:
+        from pythermalcomfort.models import utci
+    except ImportError as exc:
+        raise RuntimeError("UTCI is unavailable. Install the packages in requirements.txt.") from exc
+
+    ta, mrt, wind, humidity = np.broadcast_arrays(
+        np.asarray(tdb, dtype=float), np.asarray(tr, dtype=float),
+        np.asarray(v, dtype=float), np.asarray(rh, dtype=float),
+    )
+    # The reference model uses a minimum wind speed of 0.5 m/s. Preserve NaNs
+    # and let limit_inputs reject temperatures/MRT/high winds outside its range.
+    wind = np.maximum(wind, 0.5)
+    humidity = np.where((humidity >= 0) & (humidity <= 100), humidity, np.nan)
+    try:
+        result = utci(tdb=ta, tr=mrt, v=wind, rh=humidity, limit_inputs=True)
+        values = result.utci if hasattr(result, "utci") else result
+        return np.asarray(values, dtype=float)
+    except Exception as exc:
+        raise RuntimeError(f"UTCI calculation failed: {exc}") from exc
+
+
 def compute_utci_approx(
     df: pd.DataFrame,
     temp_col: str = "drybulb",
     rh_col: str = "relhum",
     wind_col: str = "windspd",
 ) -> pd.Series:
-    """Compute UTCI, using a lightweight approximation on constrained cloud runtimes."""
+    """Compute reference UTCI using an estimated outdoor mean radiant temperature."""
     missing = [c for c in (temp_col, rh_col, wind_col) if c not in df.columns]
     if missing:
         raise KeyError(f"Cannot compute UTCI, missing columns: {missing}")
-
-    Ta = df[temp_col].to_numpy()
-    RH = df[rh_col].astype(float).clip(0, 100).to_numpy()
-    ws = df[wind_col].astype(float).fillna(1.5).clip(0.5, 17.0).to_numpy()
-
-
-    # Compute a simplified outdoor MRT using the Thorsson (2007) approach.
-    # Uses GHI from EPW if available, otherwise falls back to Ta.
-    # NOTE: EPW 'glohorrad' is global horizontal, *not* direct-beam radiation.
-    # This overpredicts MRT during hours with high diffuse fraction.
-    # For a defensible paper, consider pvlib's MRT module or cite Thorsson (2007)
-    # explicitly and note the standing-person assumption.
-    if 'glohorrad' in df.columns:
-        ghi = df['glohorrad'].to_numpy(dtype=float)
-        # Stefan-Boltzmann: mrt ~ Ta + solar_gain_term
-        # Simple outdoor approximation (unitless absorptivity a=0.7,
-        # projection factor fp=0.308 for standing person, emissivity e=0.95)
-        mrt = Ta + (0.7 / 0.95) * 0.308 * ghi / (4 * 5.67e-8 * (Ta + 273.15)**3)
-        mrt = np.clip(mrt, Ta, Ta + 60.0)  # physical bounds
+    ta = pd.to_numeric(df[temp_col], errors="coerce").to_numpy(dtype=float)
+    rh = pd.to_numeric(df[rh_col], errors="coerce").to_numpy(dtype=float)
+    wind = pd.to_numeric(df[wind_col], errors="coerce").to_numpy(dtype=float)
+    if "glohorrad" in df.columns:
+        ghi = pd.to_numeric(df["glohorrad"], errors="coerce").to_numpy(dtype=float)
+        mrt = estimate_mean_radiant_temperature(ta, ghi)
     else:
-        mrt = Ta  # fallback — note in paper
-
-
-    def _fallback_utci_values() -> np.ndarray:
-        vp = (RH / 100.0) * 6.105 * np.exp((17.27 * Ta) / (237.7 + Ta))
-        return (
-            Ta + 0.607562 + 0.022771 * Ta + 0.000806 * (Ta**2)
-            + 0.002 * vp - 0.065 * ws + 0.001 * Ta * ws
-            - 0.015 * Ta * vp / 100.0 - 0.00025 * vp * ws
-        )
-
-    _utci_used_fallback = _lightweight_comfort_mode()
-    if _utci_used_fallback:
-        utci_vals = _fallback_utci_values()
-        series = pd.Series(utci_vals, index=df.index, name="UTCI")
-        series.attrs["used_fallback"] = True
-        return series
-
-    try:
-        from pythermalcomfort.models import utci
-        results = utci(tdb=Ta, tr=mrt, v=ws, rh=RH)
-# Handle both old API (returns object) and new API (returns ndarray directly)
-        if hasattr(results, 'utci'):
-            utci_vals = results.utci
-        elif isinstance(results, np.ndarray):
-            utci_vals = results
-        else:
-            utci_vals = np.array(results)
-    except Exception as e:
-        import warnings
-        warnings.warn(
-            f'PyThermalComfort UTCI failed ({e}). Using simplified polynomial '
-            f'fallback — results may deviate from ISO 15743 by up to 5 °C at extremes.',
-            RuntimeWarning, stacklevel=2
-        )
-        _utci_used_fallback = True
-        utci_vals = _fallback_utci_values()
-
-    series = pd.Series(utci_vals, index=df.index, name="UTCI")
-    series.attrs["used_fallback"] = _utci_used_fallback
+        mrt = ta.copy()
+    values = compute_utci_values(ta, mrt, wind, rh)
+    series = pd.Series(values, index=df.index, name="UTCI")
+    series.attrs["used_fallback"] = False
     return series
 
 

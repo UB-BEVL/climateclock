@@ -14,5 +14,4 @@ geopy==2.4.1
 scipy==1.14.1
 kaleido==0.2.1
 fpdf2==2.7.1
-
-
+pythermalcomfort==4.4.2

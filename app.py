@@ -36,6 +36,7 @@ except Exception as _pvlib_import_exc:
 from metrics import comfort_energy as ce
 import live_sensors as ls
 import psychro_helpers as psh
+from tour import run_onboarding_tour
 
 # Patch platform processor to avoid Windows WMI KeyError during h5py/pvlib import
 import platform as _platform
@@ -143,29 +144,13 @@ def compute_all_utci_scenarios(tdb, tr, v, rh):
     v = np.asarray(v, dtype=float)
     rh = np.asarray(rh, dtype=float)
 
-    def _utci_from_arrays(tdb_arr, tr_arr, v_arr, rh_arr):
-        wind_arr = np.clip(np.asarray(v_arr, dtype=float), 0.1, None)
-        rh_arr = np.clip(np.asarray(rh_arr, dtype=float), 0, 100)
-        try:
-            from pythermalcomfort.models import utci
-            result = utci(tdb=tdb_arr, tr=tr_arr, v=wind_arr, rh=rh_arr)
-            if hasattr(result, "utci"):
-                return np.asarray(result.utci, dtype=float)
-            return np.asarray(result, dtype=float)
-        except Exception:
-            vp = (rh_arr / 100.0) * 6.105 * np.exp((17.27 * tdb_arr) / (237.7 + tdb_arr))
-            return (
-                tdb_arr + 0.607562 + 0.022771 * tdb_arr + 0.000806 * (tdb_arr**2)
-                + 0.002 * vp - 0.065 * wind_arr + 0.001 * tdb_arr * wind_arr
-                - 0.015 * tdb_arr * vp / 100.0 - 0.00025 * vp * wind_arr
-            )
-
     return {
-        'baseline': _utci_from_arrays(tdb, tr, v, rh),
-        'shaded':   _utci_from_arrays(tdb, tr - 15.0, v, rh),
-        'calm':     _utci_from_arrays(tdb, tr, np.full_like(v, 0.5), rh),
-        'neutral':  _utci_from_arrays(tdb, tr, v, np.full_like(rh, 50.0)),
+        "baseline": ce.compute_utci_values(tdb, tr, v, rh),
+        "shaded": ce.compute_utci_values(tdb, tr - 15.0, v, rh),
+        "calm": ce.compute_utci_values(tdb, tr, np.full_like(v, 0.5), rh),
+        "neutral": ce.compute_utci_values(tdb, tr, v, np.full_like(rh, 50.0)),
     }
+
 
 
 def _prepare_advanced_figure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
@@ -1435,16 +1420,6 @@ def fix_station_url(url: str) -> List[str]:
     return list(dict.fromkeys(alternatives))
 
 
-# Alternative EPW sources as fallbacks
-ALTERNATIVE_EPW_SOURCES = [
-    # Keep a minimal, general-purpose fallback list for manual selections
-    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/NY/Buffalo/Buffalo_Greater_International_AP_725280_TMY3.epw",
-    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/AZ/Phoenix/Phoenix_Sky_Harbor_Intl_Airport_722780_TMY3.epw",
-    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/IL/Chicago/Chicago_OHare_Intl_Airport_725300_TMY3.epw",
-    "https://energyplus-weather.s3.amazonaws.com/north_america_wmo_region_4/USA/FL/Miami/Miami_Intl_Airport_722020_TMY3.epw",
-]
-
-
 @CACHE(show_spinner=False)
 def fetch_epw_bytes_no_ui(url: str) -> Tuple[Optional[bytes], Optional[str]]:
     """Fetch EPW bytes (or extract from ZIP) with no Streamlit UI calls."""
@@ -1971,7 +1946,7 @@ def build_clima_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     es = 610.94 * np.exp(17.625*T/(T+243.04))
     wx["sat_press"] = es
     wx["vap_press"] = es*(RH/100.0)
-    wx["abs_hum"]   = 216.7 * wx["vap_press"] / (T + 273.15)
+    wx["abs_hum"]   = 2.167 * wx["vap_press"] / (T + 273.15)
         # Stull (2011) J. Appl. Meteorol. Climatol. 50(11): valid range T: 5-45°C, RH: 5-99%
     T_clamp = T.clip(5, 45)   # clamp for formula validity
     RH_clamp = RH.clip(5, 99)
@@ -2018,6 +1993,7 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
     package: Dict[str, Optional[pd.DataFrame]] = {
         "di": None,
         "utci": None,
+        "utci_error": None,
         "pmv": None,
         "heat_index": None,
         "humidex": None,
@@ -2051,6 +2027,7 @@ def build_comfort_package(cdf: pd.DataFrame) -> Dict[str, Optional[pd.DataFrame]
             package["utci"] = utci
         except Exception as e:
             utci = None
+            package["utci_error"] = str(e)
             _log_comfort_warning(f"UTCI failed: {e}")
 
     pmv = None
@@ -2253,13 +2230,18 @@ def _read_epw_via_pvlib(epw_bytes_or_path: Union[bytes, str, Path]) -> Optional[
             header_lines = []
 
     try:
-        pv_df, meta = pvlib_read_epw(source)
+        if buffer is not None:
+            # pvlib 0.11 read_epw accepts paths; parse_epw accepts uploads.
+            from pvlib.iotools import parse_epw as pvlib_parse_epw
+            pv_df, meta = pvlib_parse_epw(buffer)
+        else:
+            pv_df, meta = pvlib_read_epw(source)
     except Exception:
         return None
 
     df = pv_df.copy()
     df.index = pd.to_datetime(df.index)
-    df.index = df.index - pd.to_timedelta(1, "h")
+    # pvlib already subtracts one from the EPW hour; retain its timestamps.
     df.index.name = "timestamp"
     df.columns = [str(c).lower() for c in df.columns]
     df = df.rename(columns=PVLIB_COLUMN_MAP)
@@ -2449,16 +2431,6 @@ def run_controller(
                 successful_url = str(test_url)
                 break
             attempt_notes.append(f"Attempt {i+1}/{len(urls_to_try)} failed")
-
-        if fetched_bytes is None:
-            fallback_sources = ALTERNATIVE_EPW_SOURCES[:1] if _IS_STREAMLIT_CLOUD else ALTERNATIVE_EPW_SOURCES
-            for j, alt_url in enumerate(fallback_sources, start=1):
-                attempted_urls.append(str(alt_url))
-                fetched_bytes, _err = fetch_epw_bytes_no_ui(str(alt_url))
-                if fetched_bytes is not None:
-                    successful_url = str(alt_url)
-                    break
-                attempt_notes.append(f"Alternate {j}/{len(fallback_sources)} failed")
 
         if fetched_bytes is None:
             set_updates["is_loading"] = False
@@ -4788,6 +4760,183 @@ def _render_tour_step(page: str) -> None:
 
 
 
+ONBOARDING_TOUR_SESSION_KEY = "climate_clock_tour_session"
+
+
+def _workspace_ready_for_onboarding_tour() -> bool:
+    cdf = st.session_state.get("cdf")
+    return cdf is not None and not cdf.empty and bool(st.session_state.get("header"))
+
+
+def _onboarding_steps(stage: str) -> List[Dict[str, object]]:
+    reset_step = {
+        "selector": ".st-key-reset_session",
+        "fallback_selectors": ["#cc-tour-report", "#cc-tour-overview", ".st-key-dashboard_section_nav"],
+        "title": "Choose a different location",
+        "description": "Use Reset Session in the sidebar when you want a new location. It clears the current weather file and report, then returns you to Location. Download your PDF first if you want to keep it.",
+    }
+    if stage == "station":
+        return [
+            {
+                "selector": ".st-key-nav_select_weather_file",
+                "fallback_selectors": ["[data-testid='stFileUploader']"],
+                "title": "Start with your location",
+                "description": "Load a weather station to unlock your climate workspace. Pick a point on the map, search for a city, or upload an EPW file.",
+                "next_label": "Choose a station",
+            },
+            {
+                "selector": ".st-key-tour_station_search",
+                "fallback_selectors": ["[data-testid='stFileUploader']"],
+                "title": "Load your weather station",
+                "description": "Enter a city in Station Search, choose a match, then click Load Selected Station. You can also use the map or upload a file. Once it loads, we will continue in Overview.",
+                "wait_for_station": True,
+            },
+        ]
+    if stage == "overview":
+        metrics = [
+            ("Mean dry bulb", "Average air temperature", "Mean dry bulb is the average air temperature across your weather file. It gives you a starting point for understanding how warm or cold this location is."),
+            ("Hours >", "Count the hot hours", "This card counts hours above the temperature shown in its label. More hours above that threshold mean more frequent hot conditions."),
+            ("Mean humidity", "Understand the humidity", "Mean humidity is average relative humidity. It tells you how moist the air is compared with the moisture it could hold at that temperature."),
+            ("Mean wind", "Check the wind resource", "Mean wind is the average wind speed in metres per second. Use it as a first look at how breezy the location is; the wind rose below shows directions."),
+            ("Annual GHI", "Read the solar resource", "Annual GHI adds up solar energy reaching a horizontal surface over the weather year, in kWh per square metre. Higher values indicate a stronger solar resource."),
+            ("18-26 C hours", "Read the temperature comfort share", "This is the share of hours with air temperature between 18 and 26 degrees Celsius. It is a simple temperature screen; the thermal-stress summary below also considers other weather conditions."),
+        ]
+        return [
+            {
+                "selector": "#cc-tour-overview",
+                "title": "Your climate at a glance",
+                "description": "Overview summarizes your loaded station. Check the location, climate zone, and weather source here. Choose Next and we will explain each part of the page.",
+            },
+            *[
+                {"selector": ".st-key-tour_overview_metrics [data-testid='stMetric']",
+                 "match_text": label, "match_mode": "contains",
+                 "fallback_selectors": [".st-key-tour_overview_metrics"],
+                 "title": title, "description": description}
+                for label, title, description in metrics
+            ],
+            {
+                "selector": ".cc-key-takeaways", "optional": True,
+                "title": "Read the key takeaways",
+                "description": "These highlights explain the warmest and coldest months, comfortable hours, humidity, wind, and solar patterns in plain language.",
+            },
+            {
+                "selector": ".st-key-tour_overview_weather",
+                "title": "Compare weather by month",
+                "description": "Hover over this chart to compare sky cover, rainfall, humidity, and temperature across the year. The charts below give more detail on monthly temperature, humidity, and wind.",
+            },
+            {
+                "selector": ".st-key-tour_overview_seasons",
+                "title": "Compare the seasons",
+                "description": "Each seasonal card shows average temperature and the percentages of hours that are comfortable, hot, or cold using the 18–26°C temperature band.",
+            },
+            {
+                "selector": ".st-key-tour_overview_stress",
+                "title": "Understand thermal stress",
+                "description": "The Discomfort Index combines temperature and humidity. UTCI also accounts for wind and radiant temperature. These cards summarize the resulting stress categories; valid-hour coverage is shown underneath.",
+            },
+            {
+                "selector": ".st-key-tour_overview_wind", "optional": True,
+                "title": "See where the wind comes from",
+                "description": "The wind rose shows how frequently wind arrives from each direction, with colours separating wind-speed ranges. Longer sectors mean more frequent winds from that direction.",
+            },
+            {
+                "selector": ".st-key-nav_dashboard",
+                "fallback_selectors": ["#cc-tour-overview"],
+                "title": "Continue in Detail View",
+                "description": "Open Detail View in the sidebar for the individual analysis sections. That page has its own guide explaining what each section is for.",
+            },
+            reset_step,
+        ]
+    if stage == "detail" or stage.startswith("detail:"):
+        sections = [
+            ("Overview & Stats", "Site statistics and data quality", "Start here for station information, climate averages, distributions, data completeness, and hourly resource patterns."),
+            ("Comfort & Loads", "Comfort and heating or cooling demand", "Explore thermal-comfort indices, hours outside comfort ranges, and temperature-based heating and cooling indicators. The tabs and controls let you inspect different comfort models."),
+            ("Temp & Humidity", "Temperature and moisture patterns", "Compare monthly averages, hourly spreads, and heatmaps to see daily swings, seasonal extremes, and humid or dry periods."),
+            ("Solar Analysis", "Sun paths and solar energy", "Inspect the sun's position through the year and the available solar radiation. Use the controls to explore orientation, shading, and seasonal solar exposure."),
+            ("Psychrometrics", "Temperature and moisture together", "The psychrometric chart places hourly air conditions on one diagram. Its overlays help you explore comfort conditions and potential passive-design strategies."),
+            ("Wind", "Wind speed and direction", "Use wind roses and seasonal patterns to understand prevailing directions, stronger winds, and calmer periods."),
+            ("Precipitation", "Rainfall and water patterns", "Explore precipitation totals, seasonality, and related indicators. Check the source and coverage notes before interpreting rainfall or snowfall values."),
+            ("Raw Data", "Inspect the hourly records", "Review and filter the underlying weather table. Use CSV downloads when you want to work with the hourly values outside this app."),
+        ]
+        section_name = stage.partition(":")[2] or REPORT_TAB_ORDER[0]
+        label, title, description = next((item for item in sections if item[0] == section_name), sections[0])
+        scope = ".st-key-tour_detail_content"
+        subtab_descriptions = {
+            "😌 Comfort Compliance & Stress": "This subtab summarizes hours within the comfort band and hours with heat or cold stress. Next explains the visible metrics, settings, and charts.",
+            "🌡️ Degree Days & Loads": "Compare heating and cooling degree days against their base temperatures. These temperature-based indicators help compare seasonal demand; they are not building energy consumption.",
+            "Advanced Diagnostics": "These charts explore additional comfort indicators and daily patterns. Read each model's labels and data-availability notes as you step through the charts.",
+            "DI": "The Discomfort Index combines air temperature and relative humidity. The charts show how humid heat stress changes through the weather year.",
+            "UTCI": "UTCI combines air temperature, radiant temperature, wind, and humidity to estimate outdoor thermal stress. Check valid-hour coverage and the category legend when reading these charts.",
+            "PMV": "Predicted Mean Vote estimates thermal sensation using environmental conditions and the stated clothing and activity assumptions. Read those assumptions and the model's applicability notes alongside the charts.",
+            "📊 Overview": "Compare temperature and humidity through the year. Next walks through the visible chart and its controls.",
+            "🌡️ Temperature Summary": "Explore temperature by month, the spread of hourly values, and annual heatmaps. Next explains each visible chart and download control.",
+            "💧 Humidity Summary": "Explore the seasonal and hourly variation in relative humidity. Next explains the visible charts, their scales, and the available downloads.",
+        }
+        return [
+            {"selector": ".st-key-dashboard_section_nav label", "match_text": label,
+             "fallback_selectors": [".st-key-dashboard_section_nav"],
+             "title": title, "description": description + " Choose Next to walk through this section's content.",
+             "subtab_intro": True, "subtab_descriptions": subtab_descriptions},
+            {"selector": scope + " [role='tablist']", "optional": True,
+             "title": "Explore the subtabs",
+             "description": "Each subtab has its own walkthrough. Switch subtabs whenever you want; Next explains the content currently visible, and each subtab remembers your progress."},
+            {"selector": scope + " [data-testid='stMetric']", "expand": "metrics"},
+            {"selector": scope + " [data-testid='stExpander'] summary", "expand": "settings"},
+            {"selector": scope + " [data-testid='stSelectbox'], " + scope + " [data-testid='stSlider']", "expand": "controls"},
+            {"selector": scope + " [data-testid='stPlotlyChart']", "expand": "charts"},
+            {"selector": scope + " [data-testid='stDataFrame'], " + scope + " [data-testid='stTable']", "expand": "tables"},
+            {"selector": scope + " [data-testid='stDownloadButton']", "expand": "downloads"},
+            {"selector": ".st-key-nav_export", "fallback_selectors": [".st-key-dashboard_section_nav"],
+             "title": "Save the complete report",
+             "description": "Open Report in the sidebar to generate and download the full climate report as a PDF. You can also choose another Detail View section to continue exploring."},
+            reset_step,
+        ]
+    if stage == "report":
+        return [
+            {
+                "selector": "#cc-tour-report",
+                "title": "Take your climate analysis with you",
+                "description": "This is the Reporting Center. Generate the full climate report as one PDF for your loaded location, then download it to keep or share.",
+            },
+            {
+                "selector": ".st-key-tour_report_options",
+                "title": "Set up the report",
+                "description": "Enter a report title, choose the PDF page size, and select the branding options. Changing these settings clears an older download so the next PDF uses your new choices.",
+            },
+            {
+                "selector": ".st-key-generate_full_pdf_report",
+                "title": "Generate the full PDF",
+                "description": "Click Generate Full PDF Report to compile the climate report. Wait while the charts and captions are prepared; then the download button appears below.",
+            },
+            {
+                "selector": ".st-key-tour_report_download",
+                "title": "Download and keep the PDF",
+                "description": "After generation finishes, click Download PDF Report here to save the complete report as one file. If an error is shown, resolve it and generate the report again.",
+            },
+            reset_step,
+        ]
+    return []
+
+
+def _maybe_run_onboarding_tour(effective_page: str) -> None:
+    ready = _workspace_ready_for_onboarding_tour()
+    if st.session_state.get("pdf_dashboard_autobuild_pending"):
+        stage = "paused"
+    elif not ready and effective_page == DEFAULT_PAGE:
+        stage = "station"
+    elif ready:
+        stage = {"Overview": "overview", "Dashboard": "detail", "Export": "report"}.get(effective_page, "paused")
+        if stage == "detail":
+            section = st.session_state.get("dashboard_section_nav", REPORT_TAB_ORDER[0])
+            stage = "detail:" + (section if section in REPORT_TAB_ORDER else REPORT_TAB_ORDER[0])
+    else:
+        stage = "paused"
+    session_id = st.session_state.setdefault(ONBOARDING_TOUR_SESSION_KEY, os.urandom(8).hex())
+    # Each page keeps its own browser progress. Reset Session creates a new key
+    # and starts the Location guide again after clearing the weather file.
+    run_onboarding_tour(_onboarding_steps(stage), key=f"climate-clock-tour-{session_id}", stage=stage)
+
+
 def _encode_image_to_base64(path: Union[str, Path]) -> str:
     """Embed local assets (e.g., logos) as base64 data URIs for consistent rendering."""
     try:
@@ -5070,18 +5219,8 @@ def render_sidebar():
         render_sidebar_filters(epw_loaded)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Take tour", use_container_width=True, help="Open the compact guided tour"):
-            # Reset all tour completion flags so tour replays.
-            for k in list(st.session_state.keys()):
-                if k.startswith("tour_completed_") or k.startswith("tour_step_") or k.startswith("tour_collapsed_"):
-                    del st.session_state[k]
-            st.session_state["nav_page"] = "Overview" if epw_loaded else DEFAULT_PAGE
-            st.session_state["_tour_force_expand"] = True
-            _rerun()
 
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        if st.button("Reset Session", use_container_width=True):
+        if st.button("Reset Session", key="reset_session", use_container_width=True, help="Clear the current weather file and report to select a new location"):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             _rerun()
@@ -5519,7 +5658,8 @@ def render_station_picker():
         st.warning(f"Map fragment error (try refreshing): {_frag_err}")
     st.divider()
     try:
-        _station_search_fragment()
+        with st.container(key="tour_station_search"):
+            _station_search_fragment()
     except Exception as _frag_err:
         st.warning(f"Search fragment error (try refreshing): {_frag_err}")
 
@@ -5593,7 +5733,6 @@ if controller_page != "select_station" or st.session_state.pop("_clear_map_on_ne
 main_upload = None
 def render_select_station_page():
     render_landing_hero()
-    _render_tour_step(DEFAULT_PAGE)
     main_upload = st.file_uploader(
         "Upload EPW or ZIP file",
         type=["epw", "zip"],
@@ -9824,64 +9963,7 @@ def render_figure_page(
     pdf.multi_cell(content_w, 5.3 if large_page else (4.2 if landscape_page else 4.8), _pdf_safe_text(caption))
 
 
-def build_climate_pdf() -> bytes:
-    header = st.session_state.get("header", {})
-    cdf = st.session_state.get("cdf")
-    location_label = _pdf_safe_text(_safe_location_label(header))
-
-    loc_meta = {k: _pdf_safe_text(v) for k, v in _location_meta(header).items()}
-    source = _pdf_safe_text(st.session_state.get("source_label", "EPW File"))
-    figs = _merged_pdf_figures()
-    derived_figs = _build_additional_pdf_figures(cdf)
-    existing_norms = set()
-    existing_fingerprints = set()
-    for existing_key, existing_fig in figs.items():
-        existing_norms.update(_report_equivalent_norms(existing_key))
-        try:
-            existing_fingerprints.add(existing_fig.to_json())
-        except Exception:
-            pass
-    for key, fig in derived_figs.items():
-        key_norms = _report_equivalent_norms(key)
-        try:
-            fig_fingerprint = fig.to_json()
-        except Exception:
-            fig_fingerprint = ""
-        if key_norms.isdisjoint(existing_norms) and (not fig_fingerprint or fig_fingerprint not in existing_fingerprints):
-            figs[key] = _clone_dashboard_figure(fig)
-            existing_norms.update(key_norms)
-            if fig_fingerprint:
-                existing_fingerprints.add(fig_fingerprint)
-    generated_on = _pdf_safe_text(datetime.date.today().strftime("%B %d, %Y"))
-
-    pdf = ClimateReportPDF(location_label=location_label, source_label=source, generated_on=generated_on)
-    pdf.alias_nb_pages()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.set_margins(15, 15, 15)
-
-    sections = _resolve_report_sections(figs)
-
-    figure_count = sum(len(section.get("items", [])) for section in sections)
-    toc_pages = _estimate_toc_pages(pdf, sections, figure_count)
-    figure_rows: List[Tuple[int, str, str, int]] = []
-    section_page_map: Dict[str, int] = {}
-    next_page = 1 + toc_pages + 1  # cover + ToC pages + climate summary page
-    fig_no = 1
-    for section in sections:
-        section_name = str(section.get("section", ""))
-        items = section.get("items", [])
-        next_page += 1
-        section_page_map[section_name] = next_page
-        for item in items:
-            next_page += 1
-            figure_rows.append((fig_no, section_name, str(item.get("title", "Figure")), next_page))
-            fig_no += 1
-        if section_name == "Psychrometrics":
-            next_page += 1
-
-    build_cover_page(pdf, location_label, source, loc_meta, generated_on)
-    build_toc(pdf, sections, figure_rows, section_page_map)
-
+def build_climate_summary_pages(pdf: ClimateReportPDF, cdf: Optional[pd.DataFrame], header: dict) -> None:
     # Climate summary page
     pdf.current_section = "Climate Summary"
     pdf.add_page()
@@ -9933,13 +10015,81 @@ def build_climate_pdf() -> bytes:
     pdf.set_text_color(*PDF_INK)
     pdf.multi_cell(166, 4.5, _pdf_safe_text(koppen["implication"]))
 
+
+def build_climate_pdf() -> bytes:
+    header = st.session_state.get("header", {})
+    cdf = st.session_state.get("cdf")
+    location_label = _pdf_safe_text(_safe_location_label(header))
+
+    loc_meta = {k: _pdf_safe_text(v) for k, v in _location_meta(header).items()}
+    source = _pdf_safe_text(st.session_state.get("source_label", "EPW File"))
+    figs = _merged_pdf_figures()
+    derived_figs = _build_additional_pdf_figures(cdf)
+    existing_norms = set()
+    existing_fingerprints = set()
+    for existing_key, existing_fig in figs.items():
+        existing_norms.update(_report_equivalent_norms(existing_key))
+        try:
+            existing_fingerprints.add(existing_fig.to_json())
+        except Exception:
+            pass
+    for key, fig in derived_figs.items():
+        key_norms = _report_equivalent_norms(key)
+        try:
+            fig_fingerprint = fig.to_json()
+        except Exception:
+            fig_fingerprint = ""
+        if key_norms.isdisjoint(existing_norms) and (not fig_fingerprint or fig_fingerprint not in existing_fingerprints):
+            figs[key] = _clone_dashboard_figure(fig)
+            existing_norms.update(key_norms)
+            if fig_fingerprint:
+                existing_fingerprints.add(fig_fingerprint)
+    generated_on = _pdf_safe_text(datetime.date.today().strftime("%B %d, %Y"))
+
+    pdf = ClimateReportPDF(location_label=location_label, source_label=source, generated_on=generated_on)
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_margins(15, 15, 15)
+
+    sections = _resolve_report_sections(figs)
+
+    figure_count = sum(len(section.get("items", [])) for section in sections)
+    toc_pages = _estimate_toc_pages(pdf, sections, figure_count)
+    figure_rows: List[Tuple[int, str, str, int]] = []
+    section_page_map: Dict[str, int] = {}
+    # Measure the summary with the same layout: landscape reports can need
+    # more than one page. Counting it as one shifts every contents reference.
+    summary_probe = ClimateReportPDF(location_label=location_label, source_label=source, generated_on=generated_on)
+    summary_probe.set_auto_page_break(auto=True, margin=15)
+    summary_probe.set_margins(15, 15, 15)
+    build_climate_summary_pages(summary_probe, cdf, header)
+    summary_pages = summary_probe.page_no()
+    del summary_probe
+    next_page = 1 + toc_pages + summary_pages
+    fig_no = 1
+    for section in sections:
+        section_name = str(section.get("section", ""))
+        items = section.get("items", [])
+        next_page += 1
+        section_page_map[section_name] = next_page
+        for item in items:
+            next_page += 1
+            figure_rows.append((fig_no, section_name, str(item.get("title", "Figure")), next_page))
+            fig_no += 1
+        if section_name == "Psychrometrics":
+            next_page += 1
+
+    build_cover_page(pdf, location_label, source, loc_meta, generated_on)
+    build_toc(pdf, sections, figure_rows, section_page_map)
+
+    build_climate_summary_pages(pdf, cdf, header)
+
     # Section + figure pages
     import gc
     temp_images: List[str] = []
     fig_no = 1
-    # On cloud, cap total figures to avoid cumulative OOM.
-    _MAX_CLOUD_FIGURES = 25
-    _total_figures_rendered = 0
+    # Export every figure so the full report and its contents stay consistent.
+    # Cloud image resolution is already reduced to limit export memory use.
     for section in sections:
         tab_name = str(section.get("tab", ""))
         section_name = str(section.get("section", ""))
@@ -9948,14 +10098,11 @@ def build_climate_pdf() -> bytes:
         build_section_page(pdf, tab_name, section_name, intro, len(items))
 
         for item in items:
-            if _IS_STREAMLIT_CLOUD and _total_figures_rendered >= _MAX_CLOUD_FIGURES:
-                break
             raw_key = str(item.get("raw_key", ""))
             clean_title = str(item.get("title", format_figure_title(raw_key)))
             fig = figs.get(raw_key)
             render_figure_page(pdf, fig_no, section_name, clean_title, raw_key, fig, cdf, temp_images)
             fig_no += 1
-            _total_figures_rendered += 1
             # Reclaim memory between figure exports to stay under Streamlit Cloud limits.
             gc.collect()
         if section_name == "Psychrometrics":
@@ -9973,7 +10120,7 @@ def build_climate_pdf() -> bytes:
         ("Beaufort Scale", "A categorical description of wind strength based on typical observed effects at the surface (No. 0-12, corresponding to specific m/s ranges)."),
         ("Wind Power Density", "Available wind energy flux per unit swept area, proportional to air density and the cube of wind speed."),
         ("Wind Power Classes", "A classification system (Class 1-7) representing the wind resource potential, based on wind power density ranges (W/m²) at specific elevations."),
-        ("Weibull Distribution", "A continuous probability distribution often used to model wind speed frequencies. Formula: ƒ(x;λ,k) = (k/λ)(x/λ)^(k-1) exp(-(x/λ)^k)."),
+        ("Weibull Distribution", "A continuous probability distribution often used to model wind speed frequencies. Formula: f(x; lambda, k) = (k/lambda)(x/lambda)^(k-1) exp(-(x/lambda)^k)."),
         ("TMY / CWEC Data Disclaimer", "Typical Meteorological Year (TMY) and Canadian Weather for Energy Calculations (CWEC) datasets represent typical long-term conditions rather than extreme historical events. They are intended for energy simulation and general climate analysis, not for designing against extreme localized weather events.")
     ]
     pdf.current_section = "Glossary"
@@ -10034,6 +10181,7 @@ def build_climate_pdf() -> bytes:
         except Exception:
             pass
 
+    st.session_state["pdf_download_figure_count"] = figure_count
     if isinstance(out, (bytes, bytearray)):
         return bytes(out)
     return str(out).encode("latin-1", errors="replace")
@@ -10670,7 +10818,7 @@ def render_overview_page():
 
     st.markdown(
         f"""
-        <section class="cc-hero-panel">
+        <section class="cc-hero-panel" id="cc-tour-overview">
             <div>
                 <p class="cc-eyebrow">Climate intelligence workspace</p>
                 <h1>{_ui_escape(location_label)}</h1>
@@ -10693,44 +10841,42 @@ def render_overview_page():
         unsafe_allow_html=True,
     )
 
-    # Interactive guided tour (replaces old text-heavy guide card)
-    _render_tour_step("Overview")
+    with st.container(key="tour_overview_metrics"):
+        metric_cols = st.columns(6)
 
-    metric_cols = st.columns(6)
+        if "drybulb" in cdf:
+            temp = pd.to_numeric(cdf["drybulb"], errors="coerce")
+            metric_cols[0].metric("Mean dry bulb", format_temperature(temp.mean()))
+            hot_hours = int((temp > focus_threshold).sum())
+            metric_cols[1].metric(f"Hours > {format_temperature(focus_threshold, digits=0)}", f"{hot_hours:,} h")
+        else:
+            metric_cols[0].metric("Mean dry bulb", "--")
+            metric_cols[1].metric("Hot hours", "--")
 
-    if "drybulb" in cdf:
-        temp = pd.to_numeric(cdf["drybulb"], errors="coerce")
-        metric_cols[0].metric("Mean dry bulb", format_temperature(temp.mean()))
-        hot_hours = int((temp > focus_threshold).sum())
-        metric_cols[1].metric(f"Hours > {format_temperature(focus_threshold, digits=0)}", f"{hot_hours:,} h")
-    else:
-        metric_cols[0].metric("Mean dry bulb", "--")
-        metric_cols[1].metric("Hot hours", "--")
+        if "relhum" in cdf:
+            rh = pd.to_numeric(cdf["relhum"], errors="coerce")
+            metric_cols[2].metric("Mean humidity", f"{rh.mean():.0f} %")
+        else:
+            metric_cols[2].metric("Mean humidity", "--")
 
-    if "relhum" in cdf:
-        rh = pd.to_numeric(cdf["relhum"], errors="coerce")
-        metric_cols[2].metric("Mean humidity", f"{rh.mean():.0f} %")
-    else:
-        metric_cols[2].metric("Mean humidity", "--")
+        if "windspd" in cdf:
+            wind = pd.to_numeric(cdf["windspd"], errors="coerce")
+            metric_cols[3].metric("Mean wind", f"{wind.mean():.1f} m/s")
+        else:
+            metric_cols[3].metric("Mean wind", "--")
 
-    if "windspd" in cdf:
-        wind = pd.to_numeric(cdf["windspd"], errors="coerce")
-        metric_cols[3].metric("Mean wind", f"{wind.mean():.1f} m/s")
-    else:
-        metric_cols[3].metric("Mean wind", "--")
+        if "glohorrad" in cdf:
+            ghi = pd.to_numeric(cdf["glohorrad"], errors="coerce").clip(lower=0)
+            metric_cols[4].metric("Annual GHI", f"{ghi.sum() / 1000:.0f} kWh/m2")
+        else:
+            metric_cols[4].metric("Annual GHI", "--")
 
-    if "glohorrad" in cdf:
-        ghi = pd.to_numeric(cdf["glohorrad"], errors="coerce").clip(lower=0)
-        metric_cols[4].metric("Annual GHI", f"{ghi.sum() / 1000:.0f} kWh/m2")
-    else:
-        metric_cols[4].metric("Annual GHI", "--")
-
-    if "drybulb" in cdf:
-        comfort_temp = pd.to_numeric(cdf["drybulb"], errors="coerce")
-        comfort_share = ((comfort_temp >= 18) & (comfort_temp <= 26)).mean() * 100
-        metric_cols[5].metric("18-26 C hours", f"{comfort_share:.0f} %")
-    else:
-        metric_cols[5].metric("18-26 C hours", "--")
+        if "drybulb" in cdf:
+            comfort_temp = pd.to_numeric(cdf["drybulb"], errors="coerce")
+            comfort_share = ((comfort_temp >= 18) & (comfort_temp <= 26)).mean() * 100
+            metric_cols[5].metric("18-26 C hours", f"{comfort_share:.0f} %")
+        else:
+            metric_cols[5].metric("18-26 C hours", "--")
 
     # ── Key Climate Takeaways ──────────────────────────────────────
     st.markdown("<div class='section-gap-lg'></div>", unsafe_allow_html=True)
@@ -10797,12 +10943,13 @@ def render_overview_page():
     st.caption("A compact month-by-month view of sky cover, rainfall, humidity, temperature, and water stress signals.")
     precip_info = _overview_precipitation_summary(cdf, header)
     fig_weather_month = _build_overview_weather_by_month_figure(cdf, location_label, precip_info)
-    _st_plotly_chart(
-        fig_weather_month,
-        use_container_width=True,
-        key="overview_weather_by_month",
-        config={"displayModeBar": True, "toImageButtonOptions": {"filename": f"{get_clean_city_name().replace(' ', '_')}_weather_by_month", "format": "png", "scale": 2}},
-    )
+    with st.container(key="tour_overview_weather"):
+        _st_plotly_chart(
+            fig_weather_month,
+            use_container_width=True,
+            key="overview_weather_by_month",
+            config={"displayModeBar": True, "toImageButtonOptions": {"filename": f"{get_clean_city_name().replace(' ', '_')}_weather_by_month", "format": "png", "scale": 2}},
+        )
     _add_manual_pdf_figure("Overview Weather By Month", fig_weather_month)
     _render_overview_precipitation_tracker(precip_info)
 
@@ -10906,110 +11053,123 @@ def render_overview_page():
             )
             _st_plotly_chart(fig_ws, use_container_width=True, key="overview_monthly_wind")
 
-    # ── Seasonal Comfort Breakdown ────────────────────────────────
-    st.markdown("<div class='section-gap-lg'></div>", unsafe_allow_html=True)
-    st.markdown("### 🌡️ Seasonal Comfort Snapshot")
-    st.caption("How comfortable is each season based on the 18–26°C comfort band?")
+    with st.container(key="tour_overview_seasons"):
+        # ── Seasonal Comfort Breakdown ────────────────────────────────
+        st.markdown("<div class='section-gap-lg'></div>", unsafe_allow_html=True)
+        st.markdown("### 🌡️ Seasonal Comfort Snapshot")
+        st.caption("How comfortable is each season based on the 18–26°C comfort band?")
 
-    if "drybulb" in cdf:
-        temp_comfort = pd.to_numeric(cdf["drybulb"], errors="coerce")
-        season_map = {
-            "Winter": [12, 1, 2], "Spring": [3, 4, 5],
-            "Summer": [6, 7, 8], "Fall": [9, 10, 11],
-        }
-        season_icons = {"Winter": "❄️", "Spring": "🌱", "Summer": "☀️", "Fall": "🍂"}
-        s_cols = st.columns(4)
-        for idx, (season, months_list) in enumerate(season_map.items()):
-            mask = temp_comfort.index.month.isin(months_list)
-            season_data = temp_comfort[mask]
-            if not season_data.empty:
-                avg_t = season_data.mean()
-                comf_pct = ((season_data >= 18) & (season_data <= 26)).mean() * 100
-                hot_pct = (season_data > 26).mean() * 100
-                cold_pct = (season_data < 18).mean() * 100
+        if "drybulb" in cdf:
+            temp_comfort = pd.to_numeric(cdf["drybulb"], errors="coerce")
+            season_map = {
+                "Winter": [12, 1, 2], "Spring": [3, 4, 5],
+                "Summer": [6, 7, 8], "Fall": [9, 10, 11],
+            }
+            season_icons = {"Winter": "❄️", "Spring": "🌱", "Summer": "☀️", "Fall": "🍂"}
+            s_cols = st.columns(4)
+            for idx, (season, months_list) in enumerate(season_map.items()):
+                mask = temp_comfort.index.month.isin(months_list)
+                season_data = temp_comfort[mask]
+                if not season_data.empty:
+                    avg_t = season_data.mean()
+                    comf_pct = ((season_data >= 18) & (season_data <= 26)).mean() * 100
+                    hot_pct = (season_data > 26).mean() * 100
+                    cold_pct = (season_data < 18).mean() * 100
+                else:
+                    avg_t, comf_pct, hot_pct, cold_pct = 0, 0, 0, 0
+
+                with s_cols[idx]:
+                    st.markdown(
+                        f"""
+                        <div class="cc-mini-card" style="text-align:center; padding: 16px 12px;">
+                            <div style="font-size:1.8rem;">{season_icons[season]}</div>
+                            <strong>{season}</strong><br/>
+                            <span style="font-size:1.3rem; font-weight:700; color:#60a5fa;">{format_temperature(avg_t)}</span><br/>
+                            <span style="font-size:0.85rem; opacity:0.8;">avg temperature</span><br/>
+                            <div style="margin-top:8px; display:flex; gap:6px; justify-content:center; flex-wrap:wrap;">
+                                <span style="background:rgba(34,197,94,0.2); border-radius:6px; padding:2px 8px; font-size:0.78rem;">✅ {comf_pct:.0f}% comfortable</span>
+                            </div>
+                            <div style="margin-top:4px; display:flex; gap:6px; justify-content:center; flex-wrap:wrap;">
+                                <span style="background:rgba(239,68,68,0.15); border-radius:6px; padding:2px 6px; font-size:0.72rem;">🔥 {hot_pct:.0f}% hot</span>
+                                <span style="background:rgba(96,165,250,0.15); border-radius:6px; padding:2px 6px; font-size:0.72rem;">🧊 {cold_pct:.0f}% cold</span>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+    with st.container(key="tour_overview_stress"):
+        # ── Comfort Stress Summary (DI / UTCI) ────────────────────────
+        st.markdown("<div class='section-gap-lg'></div>", unsafe_allow_html=True)
+        st.markdown(f"### 🧭 Comfort Stress Summary {_glossary_tip('UTCI')} {_glossary_tip('DI')}", unsafe_allow_html=True)
+
+        if "drybulb" in cdf and "relhum" in cdf:
+            _ov_tdb = pd.to_numeric(cdf["drybulb"], errors="coerce")
+            _ov_rh = pd.to_numeric(cdf["relhum"], errors="coerce")
+            # Discomfort Index (Thom)
+            _ov_twb = _ov_tdb * np.arctan(0.151977 * (_ov_rh + 8.313659) ** 0.5) + np.arctan(_ov_tdb + _ov_rh) - np.arctan(_ov_rh - 1.676331) + 0.00391838 * _ov_rh ** 1.5 * np.arctan(0.023101 * _ov_rh) - 4.686035
+            _ov_di = 0.5 * _ov_tdb + 0.5 * _ov_twb
+
+            di_comfort = ((_ov_di >= 15) & (_ov_di <= 24)).mean() * 100
+            di_heat_stress = (_ov_di > 27).mean() * 100
+            di_cold_stress = (_ov_di < 15).mean() * 100
+
+            _ov_wind = pd.to_numeric(cdf.get("windspd", pd.Series(1.0, index=cdf.index)), errors="coerce")
+            _ov_ghi = pd.to_numeric(cdf.get("glohorrad", pd.Series(0.0, index=cdf.index)), errors="coerce").clip(lower=0)
+            _ov_tr = ce.estimate_mean_radiant_temperature(_ov_tdb.values, _ov_ghi.values)
+            utci_error = None
+            try:
+                utci_scenarios = compute_all_utci_scenarios(_ov_tdb.values, _ov_tr, _ov_wind.values, _ov_rh.values)
+                utci_vals = utci_scenarios["baseline"]
+            except Exception as exc:
+                utci_vals = np.full(len(cdf), np.nan)
+                utci_error = str(exc)
+
+            valid_utci = np.asarray(utci_vals, dtype=float)
+            valid_utci = valid_utci[np.isfinite(valid_utci)]
+            if len(valid_utci):
+                utci_no_stress_label = f"{((valid_utci >= 9) & (valid_utci <= 26)).mean() * 100:.0f}%"
+                utci_heat_label = f"{(valid_utci > 32).mean() * 100:.0f}%"
+                utci_cold_label = f"{(valid_utci < 0).mean() * 100:.0f}%"
             else:
-                avg_t, comf_pct, hot_pct, cold_pct = 0, 0, 0, 0
+                utci_no_stress_label, utci_heat_label, utci_cold_label = "Unavailable", "—", "—"
+            utci_coverage_label = f"{len(valid_utci):,} of {len(cdf):,} hours have valid UTCI results"
 
-            with s_cols[idx]:
+            gc1, gc2 = st.columns(2)
+            with gc1:
                 st.markdown(
                     f"""
-                    <div class="cc-mini-card" style="text-align:center; padding: 16px 12px;">
-                        <div style="font-size:1.8rem;">{season_icons[season]}</div>
-                        <strong>{season}</strong><br/>
-                        <span style="font-size:1.3rem; font-weight:700; color:#60a5fa;">{format_temperature(avg_t)}</span><br/>
-                        <span style="font-size:0.85rem; opacity:0.8;">avg temperature</span><br/>
-                        <div style="margin-top:8px; display:flex; gap:6px; justify-content:center; flex-wrap:wrap;">
-                            <span style="background:rgba(34,197,94,0.2); border-radius:6px; padding:2px 8px; font-size:0.78rem;">✅ {comf_pct:.0f}% comfortable</span>
+                    <div class="cc-mini-card" style="padding: 20px; text-align: center;">
+                        <div style="font-size: 0.82rem; opacity: 0.7; margin-bottom: 6px;">Discomfort Index (DI)</div>
+                        <div style="font-size: 2.2rem; font-weight: 800; color: #22c55e;">{di_comfort:.0f}%</div>
+                        <div style="font-size: 0.78rem; opacity: 0.7;">comfortable hours (DI 15–24)</div>
+                        <div style="margin-top: 10px; display: flex; gap: 10px; justify-content: center;">
+                            <span style="background: rgba(239,68,68,0.15); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem;">🔥 {di_heat_stress:.0f}% heat stress</span>
+                            <span style="background: rgba(96,165,250,0.15); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem;">🧊 {di_cold_stress:.0f}% cold stress</span>
                         </div>
-                        <div style="margin-top:4px; display:flex; gap:6px; justify-content:center; flex-wrap:wrap;">
-                            <span style="background:rgba(239,68,68,0.15); border-radius:6px; padding:2px 6px; font-size:0.72rem;">🔥 {hot_pct:.0f}% hot</span>
-                            <span style="background:rgba(96,165,250,0.15); border-radius:6px; padding:2px 6px; font-size:0.72rem;">🧊 {cold_pct:.0f}% cold</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with gc2:
+                st.markdown(
+                    f"""
+                    <div class="cc-mini-card" style="padding: 20px; text-align: center;">
+                        <div style="font-size: 0.82rem; opacity: 0.7; margin-bottom: 6px;">UTCI Outdoor Thermal Stress</div>
+                        <div style="font-size: 2.2rem; font-weight: 800; color: #3b82f6;">{utci_no_stress_label}</div>
+                        <div style="font-size: 0.78rem; opacity: 0.7;">no thermal stress (UTCI 9–26 °C)</div>
+                        <div style="margin-top: 10px; display: flex; gap: 10px; justify-content: center;">
+                            <span style="background: rgba(239,68,68,0.15); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem;">🔥 {utci_heat_label} strong heat</span>
+                            <span style="background: rgba(96,165,250,0.15); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem;">🧊 {utci_cold_label} below 0 °C</span>
                         </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
 
-    # ── Comfort Stress Summary (DI / UTCI) ────────────────────────
-    st.markdown("<div class='section-gap-lg'></div>", unsafe_allow_html=True)
-    st.markdown(f"### 🧭 Comfort Stress Summary {_glossary_tip('UTCI')} {_glossary_tip('DI')}", unsafe_allow_html=True)
-
-    if "drybulb" in cdf and "relhum" in cdf:
-        _ov_tdb = pd.to_numeric(cdf["drybulb"], errors="coerce")
-        _ov_rh = pd.to_numeric(cdf["relhum"], errors="coerce")
-        # Discomfort Index (Thom)
-        _ov_twb = _ov_tdb * np.arctan(0.151977 * (_ov_rh + 8.313659) ** 0.5) + np.arctan(_ov_tdb + _ov_rh) - np.arctan(_ov_rh - 1.676331) + 0.00391838 * _ov_rh ** 1.5 * np.arctan(0.023101 * _ov_rh) - 4.686035
-        _ov_di = 0.5 * _ov_tdb + 0.5 * _ov_twb
-
-        di_comfort = ((_ov_di >= 15) & (_ov_di <= 24)).mean() * 100
-        di_heat_stress = (_ov_di > 27).mean() * 100
-        di_cold_stress = (_ov_di < 15).mean() * 100
-
-        # Simple UTCI fallback
-        _ov_wind = pd.to_numeric(cdf.get("windspd", pd.Series(dtype=float)), errors="coerce").fillna(1.0).clip(lower=0.5)
-        _ov_ghi = pd.to_numeric(cdf.get("glohorrad", pd.Series(dtype=float)), errors="coerce").fillna(0).clip(lower=0)
-        _ov_tr = _ov_tdb + 0.25 * (_ov_ghi.clip(upper=1000) / 5.67e-8).clip(lower=0) ** 0.25
-        try:
-            utci_scenarios = compute_all_utci_scenarios(_ov_tdb.values, _ov_tr.values, _ov_wind.values, _ov_rh.values)
-            utci_vals = utci_scenarios["baseline"]
-        except Exception:
-            utci_vals = _ov_tdb.values  # fallback
-
-        utci_no_stress = ((utci_vals >= 9) & (utci_vals <= 26)).mean() * 100 if len(utci_vals) > 0 else 0
-        utci_heat = (utci_vals > 32).mean() * 100 if len(utci_vals) > 0 else 0
-        utci_cold = (utci_vals < 0).mean() * 100 if len(utci_vals) > 0 else 0
-
-        gc1, gc2 = st.columns(2)
-        with gc1:
-            st.markdown(
-                f"""
-                <div class="cc-mini-card" style="padding: 20px; text-align: center;">
-                    <div style="font-size: 0.82rem; opacity: 0.7; margin-bottom: 6px;">Discomfort Index (DI)</div>
-                    <div style="font-size: 2.2rem; font-weight: 800; color: #22c55e;">{di_comfort:.0f}%</div>
-                    <div style="font-size: 0.78rem; opacity: 0.7;">comfortable hours (DI 15–24)</div>
-                    <div style="margin-top: 10px; display: flex; gap: 10px; justify-content: center;">
-                        <span style="background: rgba(239,68,68,0.15); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem;">🔥 {di_heat_stress:.0f}% heat stress</span>
-                        <span style="background: rgba(96,165,250,0.15); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem;">🧊 {di_cold_stress:.0f}% cold stress</span>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with gc2:
-            st.markdown(
-                f"""
-                <div class="cc-mini-card" style="padding: 20px; text-align: center;">
-                    <div style="font-size: 0.82rem; opacity: 0.7; margin-bottom: 6px;">UTCI Outdoor Thermal Stress</div>
-                    <div style="font-size: 2.2rem; font-weight: 800; color: #3b82f6;">{utci_no_stress:.0f}%</div>
-                    <div style="font-size: 0.78rem; opacity: 0.7;">no thermal stress (UTCI 9–26 °C)</div>
-                    <div style="margin-top: 10px; display: flex; gap: 10px; justify-content: center;">
-                        <span style="background: rgba(239,68,68,0.15); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem;">🔥 {utci_heat:.0f}% strong heat</span>
-                        <span style="background: rgba(96,165,250,0.15); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem;">🧊 {utci_cold:.0f}% extreme cold</span>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            st.caption(utci_coverage_label)
+            if utci_error:
+                st.info(utci_error)
 
     # Annual wind rose
     st.markdown("<div class='section-gap-lg'></div>", unsafe_allow_html=True)
@@ -11032,12 +11192,13 @@ def render_overview_page():
                     height=560,
                     margin=dict(l=24, r=210, t=64, b=30),
                 )
-                _st_plotly_chart(
-                    fig_overview_wind,
-                    use_container_width=True,
-                    key="overview_wind_rose",
-                    config={"displayModeBar": True},
-                )
+                with st.container(key="tour_overview_wind"):
+                    _st_plotly_chart(
+                        fig_overview_wind,
+                        use_container_width=True,
+                        key="overview_wind_rose",
+                        config={"displayModeBar": True},
+                    )
                 _add_manual_pdf_figure("Overview Annual Wind Rose", fig_overview_wind)
         except Exception as exc:
             st.warning(f"Wind rose failed to render: {exc}")
@@ -11385,7 +11546,7 @@ def render_export_page():
 
     st.markdown(
         """
-        <section class="cc-page-intro">
+        <section class="cc-page-intro" id="cc-tour-report">
             <p class="cc-eyebrow">Report</p>
             <h1>Reporting Center</h1>
         </section>
@@ -11393,7 +11554,6 @@ def render_export_page():
         unsafe_allow_html=True,
     )
 
-    _render_tour_step("Export")
     left, right = st.columns([1.25, 1])
     with left:
         st.markdown(
@@ -11401,23 +11561,24 @@ def render_export_page():
             <section class="cc-panel cc-export-panel">
                 <div class="cc-panel-head">
                     <h3>Full Climate Report</h3>
-                    <p>Captures the complete internal dashboard once, then returns here with a download.</p>
+                    <p>Generate one PDF with the climate summary, analysis charts, data notes, and glossary. Report charts are included even if you have not opened every analysis section.</p>
                 </div>
             </section>
             """,
             unsafe_allow_html=True,
         )
-        st.text_input("Report title", value=st.session_state.get("export_report_title", "Climate Analysis Report"), key="export_report_title")
-        page_size_options = ["A4 Landscape", "A4 Portrait", "A3 Landscape", "A2 Landscape"]
-        st.selectbox(
-            "PDF page size",
-            options=page_size_options,
-            index=page_size_options.index(_pdf_page_choice()),
-            key="export_pdf_page_size",
-            help="A4 landscape keeps report text readable while giving charts a wider frame.",
-        )
-        st.toggle("Include research branding", value=st.session_state.get("export_include_branding", True), key="export_include_branding")
-        st.toggle("Presentation / white-label mode", value=st.session_state.get("export_white_label", False), key="export_white_label")
+        with st.container(key="tour_report_options"):
+            st.text_input("Report title", value=st.session_state.get("export_report_title", "Climate Analysis Report"), key="export_report_title")
+            page_size_options = ["A4 Landscape", "A4 Portrait", "A3 Landscape", "A2 Landscape"]
+            st.selectbox(
+                "PDF page size",
+                options=page_size_options,
+                index=page_size_options.index(_pdf_page_choice()),
+                key="export_pdf_page_size",
+                help="A4 landscape keeps report text readable while giving charts a wider frame.",
+            )
+            st.toggle("Include research branding", value=st.session_state.get("export_include_branding", True), key="export_include_branding")
+            st.toggle("Presentation / white-label mode", value=st.session_state.get("export_white_label", False), key="export_white_label")
 
         export_options_sig = "|".join([
             str(st.session_state.get("export_report_title", "")),
@@ -11430,8 +11591,9 @@ def render_export_page():
             st.session_state["pdf_download_bytes"] = None
             st.session_state["pdf_download_name"] = None
             st.session_state["pdf_download_error"] = None
+            st.session_state["pdf_download_figure_count"] = None
 
-        if st.button("Generate Full PDF Report", type="primary", use_container_width=True, disabled=not has_data):
+        if st.button("Generate Full PDF Report", key="generate_full_pdf_report", type="primary", use_container_width=True, disabled=not has_data):
             try:
                 with st.spinner("Preparing PDF report..."):
                     pdf_bytes = build_climate_pdf()
@@ -11445,25 +11607,28 @@ def render_export_page():
                 st.session_state["pdf_download_bytes"] = None
                 st.session_state["pdf_download_name"] = None
                 st.session_state["pdf_download_error"] = f"PDF generation failed: {exc}"
+                st.session_state["pdf_download_figure_count"] = None
 
-        pdf_error = st.session_state.get("pdf_download_error")
-        pdf_bytes_ready = st.session_state.get("pdf_download_bytes")
-        pdf_name_ready = st.session_state.get("pdf_download_name")
-        if pdf_bytes_ready and pdf_name_ready:
-            st.download_button(
-                label="Download PDF Report",
-                data=pdf_bytes_ready,
-                file_name=pdf_name_ready,
-                mime="application/pdf",
-                use_container_width=True,
-            )
-            st.success(f"PDF ready with {len(captured_figures)} visualization(s).")
-        elif pdf_error:
-            st.error(pdf_error)
-        elif has_data:
-            st.caption("Generate the report to capture the complete chart set.")
-        else:
-            st.info("Load a weather file before exporting reports.")
+        with st.container(key="tour_report_download"):
+            pdf_error = st.session_state.get("pdf_download_error")
+            pdf_bytes_ready = st.session_state.get("pdf_download_bytes")
+            pdf_name_ready = st.session_state.get("pdf_download_name")
+            if pdf_bytes_ready and pdf_name_ready:
+                st.download_button(
+                    label="Download PDF Report",
+                    data=pdf_bytes_ready,
+                    file_name=pdf_name_ready,
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+                figure_count = st.session_state.get("pdf_download_figure_count")
+                st.success(f"PDF ready with {figure_count} visualization(s)." if figure_count is not None else "PDF ready to download.")
+            elif pdf_error:
+                st.error(pdf_error)
+            elif has_data:
+                st.caption("Generate the report to capture the complete chart set.")
+            else:
+                st.info("Load a weather file before exporting reports.")
 
     with right:
         st.markdown(
@@ -11552,7 +11717,6 @@ def render_dashboard_page():
     def _render_dashboard_section(section_name: str) -> bool:
         return pdf_capture_mode or dashboard_section == section_name
 
-    _render_tour_step("Dashboard")
 
     if _render_dashboard_section("Overview & Stats"):
         st.markdown("### 📊 Climate Overview")
@@ -13401,7 +13565,7 @@ def render_utci_page():
     utci_df = st.session_state.get("comfort_pkg", {}).get("utci")
     
     if utci_df is None or utci_df.empty:
-        st.info("UTCI index could not be computed. Ensure dry-bulb temperature, relative humidity, and wind speed are present.")
+        st.info(st.session_state.get("comfort_pkg", {}).get("utci_error") or "UTCI index could not be computed. Ensure dry-bulb temperature, relative humidity, and wind speed are present.")
         return
     
     st.caption("**UTCI (Universal Thermal Climate Index)** is an equivalent temperature (°C) that combines air temperature, radiation, humidity, and wind speed to estimate outdoor thermal stress on the human body.")
@@ -16038,7 +16202,8 @@ def _diurnal_comfort_matrix(df, utci_a, utci_b, title, station_name, metric_name
     
     for r_idx, (r_name, r_months) in enumerate(rows):
         for c_idx, (c_name, c_hours) in enumerate(cols):
-            mask = df.index.month.isin(r_months) & df.index.hour.isin(c_hours)
+            mask = (df.index.month.isin(r_months) & df.index.hour.isin(c_hours)
+                    & np.isfinite(utci_a) & np.isfinite(utci_b))
             if not mask.any(): continue
             
             ua = pd.Series(utci_a[mask]).apply(cat).value_counts(normalize=True) * 100
@@ -17721,7 +17886,7 @@ def render_live_data_page():
         rh_pct = pd.to_numeric(rh_pct, errors="coerce")
         es = 610.94 * np.exp(17.625 * temp_c / (temp_c + 243.04))
         vap = es * (rh_pct / 100.0)
-        return 216.7 * vap / (temp_c + 273.15)
+        return 2.167 * vap / (temp_c + 273.15)
 
     def _normalize_sensor_columns(df: pd.DataFrame, tz_assumed) -> pd.DataFrame:
         if df is None or df.empty:
@@ -20218,6 +20383,8 @@ def main():
     # 4. Evaluate Effective Routing Page State (AFTER sidebar so nav_page is current)
     effective_page = st.session_state.get("nav_page", DEFAULT_PAGE)
 
+    _maybe_run_onboarding_tour(effective_page)
+
     # 6. Page Routing Execution
     
     #    - Dispatch to appropriate render function
@@ -20227,7 +20394,8 @@ def main():
         render_select_station_page()
     
     elif effective_page == "Dashboard":
-        render_dashboard_page()
+        with st.container(key="tour_detail_content"):
+            render_dashboard_page()
 
     elif effective_page == "Overview":
         render_overview_page()
