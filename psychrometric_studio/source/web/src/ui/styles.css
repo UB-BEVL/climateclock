@@ -1,0 +1,2501 @@
+/**
+ * Application styling.
+ *
+ * The palette is defined as custom properties in both themes so the chart
+ * renderer never needs to know which is active — it emits `var(--family-*)` and
+ * the theme resolves it. Family hues are categorical, not a ramp: five
+ * overlapping line families have to stay distinguishable from one another, and
+ * a sequential scale would make neighbouring families read as related.
+ */
+
+/*
+ * The light palette, on the root and on anything that asks for it by name.
+ *
+ * The `[data-theme="light"]` half exists for **export**. A chart serialised out
+ * of a dark-mode session would arrive in a report as pale lines on a black
+ * field; the exporter mounts a hidden clone inside a `data-theme="light"`
+ * container and resolves computed styles there, which produces a light chart
+ * without the visible interface flickering. Custom properties cascade, so one
+ * extra selector is the whole mechanism.
+ */
+:root {
+  color-scheme: light dark;
+}
+
+:root,
+[data-theme='light'] {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #d9dee5;
+  --ink: #14202b;
+  --ink-muted: #5d6b7a;
+  --accent: #0F5F52;
+  --accent-bright: #3FC98A;
+
+  --plot-bg: #ffffff;
+  --grid: #eceff3;
+  --frame: #9aa6b4;
+
+  --family-saturation: #16324f;
+  --family-rh: #2f7fd1;
+  --family-wetbulb: #0f8a7a;
+  --family-enthalpy: #c2610a;
+  --family-volume: #7a4bbd;
+  --family-dewpoint: #8a94a1;
+
+  --hover: #d1345b;
+
+  --process: #1F7A6B;
+  --process-selected: #C2610A;
+  --warn: #B4690E;
+  --warn-ink: #7A4708;
+  --warn-bg: #FDF3E3;
+  --danger: #B3261E;
+  --danger-bg: #FCEBEA;
+  --ok-ink: #1F6E4E;
+  --ok-bg: #E8F6EE;
+  --selected-bg: #E9F2EF;
+
+  /* Design conditions are the weather's, not the design's — a different
+     kind of thing from a process point, and marked in a different colour. */
+  --design-day: #6B4FA8;
+  --design-day-ink: #FFFFFF;
+
+  /* A design note is advice, not a fault. It gets its own colour so a reader
+     can tell at a glance whether the tool is reporting a problem with the
+     calculation or offering an opinion about the design. */
+  --note: #2F6FA8;
+  --note-ink: #1D4D77;
+  --note-bg: #EAF2F9;
+
+  /* Comfort zones are translucent so the chart's gridlines read through them —
+     the zone is a region of the chart, not a sticker on top of it. */
+  --comfort-winter: rgba(47, 127, 209, 0.13);
+  --comfort-winter-line: rgba(47, 127, 209, 0.55);
+  --comfort-summer: rgba(194, 97, 10, 0.13);
+  --comfort-summer-line: rgba(194, 97, 10, 0.55);
+}
+
+@media (prefers-color-scheme: dark) {
+  /* The guard is what makes an export container win over the viewer's system
+     preference. Without it, a light-themed clone inside a dark-mode page would
+     inherit the dark tokens from :root and the whole exercise would be a
+     no-op. */
+  :root:not([data-theme='light']) {
+    --bg: #10151b;
+    --surface: #171e26;
+    --border: #2a3543;
+    --ink: #e6ecf3;
+    --ink-muted: #93a1b1;
+    /* The identity green is too dark to read on a dark surface; the bright
+       green from the mark's bottom rule carries the accent role instead. */
+    --accent: #3FC98A;
+    --accent-bright: #6FE0AC;
+
+    --plot-bg: #141a21;
+    --grid: #202934;
+    --frame: #4a5766;
+
+    /* Lifted and desaturated for legibility on a dark plot without vibrating. */
+    --family-saturation: #cfe0f0;
+    --family-rh: #6cb0ee;
+    --family-wetbulb: #45c7b3;
+    --family-enthalpy: #f0a355;
+    --family-volume: #b18bea;
+    --family-dewpoint: #8d99a8;
+
+    --hover: #ff7a96;
+
+    --process: #45C7B3;
+    --process-selected: #F0A355;
+    --warn: #E0A050;
+    --warn-ink: #F0C48A;
+    --warn-bg: #33270F;
+    --danger: #F08078;
+    --danger-bg: #34191A;
+    --note: #6CB0EE;
+    --note-ink: #A9D2F5;
+    --note-bg: #17232F;
+    --ok-ink: #7EDCAB;
+    --ok-bg: #12291F;
+    --selected-bg: #1D2A31;
+
+    --design-day: #B18BEA;
+    --design-day-ink: #141A21;
+
+    --comfort-winter: rgba(108, 176, 238, 0.16);
+    --comfort-winter-line: rgba(108, 176, 238, 0.6);
+    --comfort-summer: rgba(240, 163, 85, 0.16);
+    --comfort-summer-line: rgba(240, 163, 85, 0.6);
+  }
+}
+
+/*
+ * The same palette again, for a theme the user has *chosen* rather than
+ * inherited.
+ *
+ * The media query above only fires when the operating system asks for dark, so
+ * it cannot serve someone on a light system who has pressed the moon. There is
+ * no way in plain CSS to share one declaration block between a media query and
+ * a bare selector, so the values are repeated — and
+ * `tests/theme.test.ts` asserts the two blocks are token-for-token identical,
+ * which is what makes the duplication safe rather than a slow leak.
+ */
+[data-theme='dark'] {
+  --bg: #10151b;
+  --surface: #171e26;
+  --border: #2a3543;
+  --ink: #e6ecf3;
+  --ink-muted: #93a1b1;
+  /* The identity green is too dark to read on a dark surface; the bright
+     green from the mark's bottom rule carries the accent role instead. */
+  --accent: #3FC98A;
+  --accent-bright: #6FE0AC;
+
+  --plot-bg: #141a21;
+  --grid: #202934;
+  --frame: #4a5766;
+
+  /* Lifted and desaturated for legibility on a dark plot without vibrating. */
+  --family-saturation: #cfe0f0;
+  --family-rh: #6cb0ee;
+  --family-wetbulb: #45c7b3;
+  --family-enthalpy: #f0a355;
+  --family-volume: #b18bea;
+  --family-dewpoint: #8d99a8;
+
+  --hover: #ff7a96;
+
+  --process: #45C7B3;
+  --process-selected: #F0A355;
+  --warn: #E0A050;
+  --warn-ink: #F0C48A;
+  --warn-bg: #33270F;
+  --danger: #F08078;
+  --danger-bg: #34191A;
+  --note: #6CB0EE;
+  --note-ink: #A9D2F5;
+  --note-bg: #17232F;
+  --ok-ink: #7EDCAB;
+  --ok-bg: #12291F;
+  --selected-bg: #1D2A31;
+
+  --design-day: #B18BEA;
+  --design-day-ink: #141A21;
+
+  --comfort-winter: rgba(108, 176, 238, 0.16);
+  --comfort-winter-line: rgba(108, 176, 238, 0.6);
+  --comfort-summer: rgba(240, 163, 85, 0.16);
+  --comfort-summer-line: rgba(240, 163, 85, 0.6);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 14px;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ---------------------------------------------------------------- header */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.brand-icon {
+  display: block;
+  flex-shrink: 0;
+  border-radius: 9px;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.brand-org {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.brand-tagline {
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+
+.unit-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.unit-toggle button {
+  padding: 0.4rem 0.9rem;
+  border: 0;
+  background: var(--surface);
+  color: var(--ink-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.unit-toggle button.active {
+  background: var(--accent);
+  /* The dark-theme accent is a light green, so white text would vanish on it. */
+  color: var(--surface);
+}
+
+/* ------------------------------------------------------------------ body */
+
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.chart-pane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  /* Without min-height a flex child is sized by its content, so the SVG would
+     push the pane taller than the viewport and the chart would scroll out of
+     view instead of fitting. overflow guards the ResizeObserver against
+     feeding its own growth back in. */
+  min-height: 0;
+  overflow: hidden;
+  /* The chart is grabbable for panning; the cursor is the only affordance. */
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.chart-pane.panning {
+  cursor: grabbing;
+}
+
+.chart-hint {
+  position: absolute;
+  left: 1.5rem;
+  bottom: 0.35rem;
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+  pointer-events: none;
+}
+
+.psych-chart {
+  display: block;
+}
+
+/* ----------------------------------------------------------------- chart */
+
+.plot-background {
+  fill: var(--plot-bg);
+}
+
+.plot-frame {
+  fill: none;
+  stroke: var(--frame);
+  stroke-width: 1;
+}
+
+.gridlines line {
+  stroke: var(--grid);
+  stroke-width: 1;
+}
+
+.line-label {
+  font-size: 9px;
+  paint-order: stroke;
+  stroke: var(--plot-bg);
+  stroke-width: 2.5px;
+  stroke-linejoin: round;
+}
+
+.axis line {
+  stroke: var(--frame);
+  stroke-width: 1;
+}
+
+.axis text {
+  font-size: 10px;
+  fill: var(--ink-muted);
+}
+
+.axis-title {
+  font-size: 11px;
+  fill: var(--ink);
+}
+
+.hover-marker line {
+  stroke: var(--hover);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.hover-marker circle {
+  fill: var(--hover);
+  stroke: var(--plot-bg);
+  stroke-width: 1.5;
+}
+
+.protractor-face {
+  fill: var(--plot-bg);
+  fill-opacity: 0.85;
+  stroke: var(--frame);
+  stroke-width: 1;
+}
+
+.protractor-hub {
+  fill: var(--ink);
+}
+
+.protractor-ray {
+  stroke: var(--ink-muted);
+  stroke-width: 0.75;
+}
+
+.protractor-label {
+  font-size: 8px;
+  fill: var(--ink-muted);
+}
+
+.protractor-title {
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--ink);
+}
+
+/* ----------------------------------------------------------------- panel */
+
+.panel {
+  width: 20rem;
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 1rem 1.15rem;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+}
+
+.panel section {
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel h2 {
+  margin: 0 0 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.readout {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 0.75rem;
+  margin: 0;
+}
+
+.readout dt {
+  color: var(--ink-muted);
+}
+
+.readout dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  margin: 0;
+  color: var(--ink-muted);
+  line-height: 1.45;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.field label {
+  color: var(--ink-muted);
+}
+
+.field input,
+.field select {
+  width: 9rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+}
+
+.basis {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
+.family-toggles {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+}
+
+.family-toggles li {
+  margin-bottom: 0.35rem;
+}
+
+.family-toggles label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.swatch {
+  display: inline-block;
+  width: 18px;
+  border-radius: 1px;
+}
+
+.swatch-plain {
+  height: 2px;
+  background: var(--ink-muted);
+}
+
+.reset {
+  width: 100%;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.reset:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.panel-footer {
+  border-bottom: 0;
+}
+
+.panel-footer p {
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+  line-height: 1.4;
+}
+
+.disclaimer {
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 860px) {
+  .app-body {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  /* Stacked, the chart needs a floor or flex collapses it to nothing. */
+  .chart-pane {
+    flex: none;
+    height: 70vh;
+    min-height: 22rem;
+  }
+
+  .panel {
+    width: 100%;
+    flex: none;
+    overflow: visible;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+}
+
+/* ------------------------------------------------- process chain on chart */
+
+.process-line {
+  fill: none;
+  stroke: var(--process);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.process-line.selected {
+  stroke: var(--process-selected);
+  stroke-width: 3.25;
+}
+
+.process-arrowhead {
+  fill: var(--process);
+}
+
+.process-auxiliary line {
+  stroke: var(--process);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.7;
+}
+
+.process-auxiliary circle {
+  fill: var(--plot-bg);
+  stroke: var(--process);
+  stroke-width: 1.5;
+}
+
+.process-point {
+  cursor: pointer;
+}
+
+.process-point circle {
+  fill: var(--process);
+  stroke: var(--plot-bg);
+  stroke-width: 2;
+}
+
+.process-point text {
+  font-size: 8.5px;
+  font-weight: 700;
+  fill: var(--plot-bg);
+  pointer-events: none;
+}
+
+.process-point.selected circle {
+  fill: var(--process-selected);
+}
+
+.process-point.warned circle {
+  stroke: var(--warn);
+  stroke-width: 2.5;
+}
+
+/* ------------------------------------------------------------ chain editor */
+
+.panel-left {
+  /* Wider than it was: the education section carries running prose and a
+     three-column table, and neither survives a 17.5rem column. */
+  width: 21.5rem;
+  border-left: 0;
+  border-right: 1px solid var(--border);
+}
+
+.panel-right {
+  width: 21rem;
+}
+
+.chain {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+}
+
+.stage {
+  margin-bottom: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.stage.selected {
+  border-color: var(--accent);
+}
+
+.stage.errored {
+  border-color: var(--danger);
+}
+
+.stage-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stage-head:hover {
+  background: var(--bg);
+}
+
+.stage-number,
+.row-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--process);
+  color: var(--plot-bg);
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+.row-number {
+  margin-right: 0.4rem;
+}
+
+.stage.selected .stage-number {
+  background: var(--process-selected);
+}
+
+.stage-name {
+  flex: 1;
+}
+
+.stage-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 50%;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.stage-badge.error {
+  background: var(--danger);
+}
+
+.stage-badge.warn {
+  background: var(--warn);
+}
+
+.stage-badge.note {
+  background: var(--note);
+}
+
+.stage-icon {
+  flex-shrink: 0;
+  color: var(--ink-muted);
+}
+
+.stage.selected .stage-icon {
+  color: var(--process-selected);
+}
+
+.stage-body {
+  padding: 0.5rem 0.55rem 0.6rem;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.stage-summary,
+.stage-alt {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--ink-muted);
+}
+
+.stage-alt {
+  font-style: italic;
+}
+
+.param {
+  margin-bottom: 0.4rem;
+}
+
+.param label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+
+.param-unit {
+  font-size: 0.68rem;
+  opacity: 0.75;
+}
+
+.param input[type='number'] {
+  width: 100%;
+  padding: 0.25rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.param-boolean label {
+  justify-content: flex-start;
+  gap: 0.4rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.param-help {
+  margin: 0.15rem 0 0;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--ink-muted);
+}
+
+.stage-error,
+.stage-warning {
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.stage-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.stage-warning {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.stage-advisory {
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0.5rem;
+  border-left: 3px solid var(--note);
+  border-radius: 0 4px 4px 0;
+  background: var(--note-bg);
+  color: var(--note-ink);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.stage-actions {
+  display: flex;
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+}
+
+.stage-actions button {
+  flex: 1;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.stage-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.stage-actions button.danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.chain-add label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+
+.chain-add select {
+  width: 100%;
+  padding: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+}
+
+/* ---------------------------------------------------------------- results */
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+/**
+ * Sized so six data columns fit the panel without scrolling.
+ *
+ * Dew point made it six, and at the previous 0.73rem/0.3rem the table needed
+ * 318px in a 298px column. Type alone could not close that, so the horizontal
+ * padding came down with it.
+ *
+ * The size is set by SI rather than IP, which is the harder case by some way:
+ * a winter state carries a minus sign on dry bulb, wet bulb, dew point AND
+ * enthalpy, and those four characters cost more width than the padding change
+ * gives back. At 0.64rem/0.2rem SI needs 291px of the 298 available, where IP
+ * needs 279. SI did not fit before dew point either -- five columns wanted
+ * 300px -- so this is the first arrangement that fits both.
+ *
+ * Both results tables share this: they sit one above the other, and type that
+ * changed size between them would read as a mistake.
+ */
+.results {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.64rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.results th,
+.results td {
+  padding: 0.22rem 0.2rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.results thead th {
+  font-weight: 600;
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.results tbody th {
+  display: flex;
+  align-items: center;
+  text-align: left;
+  font-weight: 400;
+}
+
+.results tbody tr {
+  cursor: pointer;
+}
+
+.results tbody tr:hover {
+  background: var(--bg);
+}
+
+.results tbody tr.selected {
+  background: var(--selected-bg);
+}
+
+.table-units {
+  margin: 0.3rem 0 0;
+  font-size: 0.68rem;
+  color: var(--ink-muted);
+}
+
+.balance {
+  margin: 0.6rem 0 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  background: var(--ok-bg);
+  color: var(--ok-ink);
+}
+
+.balance.failed {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.process-point.draggable {
+  cursor: grab;
+}
+
+.process-point.draggable:active {
+  cursor: grabbing;
+}
+
+/* ------------------------------------------------------------ comfort zone */
+
+.comfort-zone path {
+  stroke-width: 1.25;
+  stroke-linejoin: round;
+}
+
+.comfort-zone-0 path {
+  fill: var(--comfort-winter);
+  stroke: var(--comfort-winter-line);
+}
+
+.comfort-zone-1 path {
+  fill: var(--comfort-summer);
+  stroke: var(--comfort-summer-line);
+}
+
+.comfort-legend {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  font-size: 0.75rem;
+}
+
+.comfort-legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.25rem;
+}
+
+.comfort-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.comfort-swatch.comfort-zone-0 {
+  background: var(--comfort-winter);
+  border: 1px solid var(--comfort-winter-line);
+}
+
+.comfort-swatch.comfort-zone-1 {
+  background: var(--comfort-summer);
+  border: 1px solid var(--comfort-summer-line);
+}
+
+.comfort-empty {
+  color: var(--ink-muted);
+  font-style: italic;
+}
+
+.comfort-note {
+  margin: 0.5rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--ink-muted);
+}
+
+.comfort-limit {
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.comfort-panel h3 {
+  margin: 0.85rem 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.verdict-ok {
+  color: var(--ok-ink);
+  font-weight: 600;
+}
+
+.verdict-no {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------- adaptive chart */
+
+.adaptive-chart {
+  display: block;
+  margin: 0.6rem 0;
+}
+
+.adaptive-bg {
+  fill: var(--plot-bg);
+}
+
+.adaptive-frame {
+  fill: none;
+  stroke: var(--frame);
+  stroke-width: 1;
+}
+
+.adaptive-band-80 {
+  fill: var(--comfort-summer);
+  stroke: var(--comfort-summer-line);
+  stroke-width: 1;
+}
+
+.adaptive-band-90 {
+  fill: var(--comfort-winter);
+  stroke: var(--comfort-winter-line);
+  stroke-width: 1;
+}
+
+.adaptive-neutral {
+  stroke: var(--process);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+
+.adaptive-point {
+  fill: var(--hover);
+  stroke: var(--plot-bg);
+  stroke-width: 1.5;
+}
+
+.adaptive-axis text {
+  font-size: 9px;
+  fill: var(--ink-muted);
+}
+
+.adaptive-axis-title {
+  font-size: 9px;
+  fill: var(--ink-muted);
+}
+
+.adaptive-outside {
+  font-size: 10px;
+  fill: var(--ink-muted);
+}
+
+/* ------------------------------------------------------ collapsible panels */
+
+.collapsible {
+  padding-bottom: 0.75rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.collapsible > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.collapsible > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A caret drawn in CSS so it rotates with the open state without any script. */
+.collapsible > summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transition: transform 0.12s ease;
+}
+
+.collapsible[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.collapsible > summary:hover {
+  color: var(--accent);
+}
+
+.collapsible-title {
+  flex: 1;
+}
+
+.collapsible-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-muted);
+}
+
+.collapsible-body {
+  padding-top: 0.6rem;
+}
+
+/* Sections inside a collapsible supply their own rhythm. */
+.collapsible-body > section {
+  padding-bottom: 0;
+  margin-bottom: 0.85rem;
+  border-bottom: 0;
+}
+
+.collapsible-body > section:last-child {
+  margin-bottom: 0;
+}
+
+.param-derived input {
+  color: var(--ink-muted);
+  font-style: italic;
+}
+
+.param-derived-note {
+  margin: 0.1rem 0 0;
+  font-size: 0.66rem;
+  color: var(--process);
+}
+
+
+/* -------------------------------------------------------- coil construction */
+
+.coil-construction line {
+  stroke: var(--process-selected);
+  stroke-width: 1.25;
+  stroke-dasharray: 5 3;
+  opacity: 0.9;
+}
+
+.coil-construction circle {
+  fill: var(--plot-bg);
+  stroke: var(--process-selected);
+  stroke-width: 2;
+}
+
+.coil-construction text {
+  font-size: 8.5px;
+  font-weight: 600;
+  fill: var(--process-selected);
+  paint-order: stroke;
+  stroke: var(--plot-bg);
+  stroke-width: 2.5px;
+  stroke-linejoin: round;
+}
+
+/* --------------------------------------------------------- weather layer */
+
+.weather-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* The chart sits above the canvas, and must not paint over it. */
+.chart-pane .psych-chart {
+  position: relative;
+}
+
+.chart-pane .psych-chart .plot-background {
+  fill: none;
+}
+
+.dropzone {
+  padding: 1.25rem 0.75rem;
+  border: 1.5px dashed var(--border);
+  border-radius: 6px;
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.dropzone:hover,
+.dropzone.over {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--bg);
+}
+
+.density-legend {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0.5rem 0;
+  font-size: 0.68rem;
+  color: var(--ink-muted);
+}
+
+.density-swatch {
+  width: 16px;
+  height: 10px;
+}
+
+.density-legend span:first-child {
+  margin-right: 0.3rem;
+}
+
+.density-legend span:last-child {
+  margin-left: 0.3rem;
+}
+
+.zone-stat {
+  margin-bottom: 0.7rem;
+}
+
+.zone-stat-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+}
+
+.zone-stat-bar {
+  height: 6px;
+  margin: 0.2rem 0;
+  border-radius: 3px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.zone-stat-bar span {
+  display: block;
+  height: 100%;
+  background: var(--process);
+}
+
+.zone-stat-detail {
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  color: var(--ink-muted);
+}
+
+.citation {
+  margin: 0.75rem 0 0;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+
+.citation a,
+.comfort-note a {
+  color: var(--accent);
+}
+
+/* -------------------------------------------------------------- education */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- terms and tooltips ---- */
+
+.term-wrap {
+  position: relative;
+  display: inline;
+}
+
+.term {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 0.15em;
+  cursor: help;
+}
+
+.term:hover,
+.term:focus-visible {
+  color: var(--accent);
+  text-decoration-style: solid;
+}
+
+.infotip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.95rem;
+  height: 0.95rem;
+  margin-left: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--ink-muted);
+  font-size: 0.6rem;
+  line-height: 1;
+  text-decoration: none;
+  vertical-align: middle;
+}
+
+.infotip:hover,
+.infotip:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Fixed, and placed by Tooltip.tsx. Both panels scroll, so an absolutely
+   positioned popup is clipped by their overflow context — measured, not
+   assumed. Width is capped here and the cap is mirrored in the component, which
+   needs it to clamp the popup against the window edge. */
+.tooltip {
+  position: fixed;
+  z-index: 40;
+  display: block;
+  width: max-content;
+  max-width: 16rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 28%);
+  color: var(--ink);
+  font-size: 0.7rem;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  text-decoration: none;
+  white-space: normal;
+}
+
+.tooltip-more {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--accent);
+  font-size: 0.63rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ---- the education section ---- */
+
+.education-panel {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.edu-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.edu-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.edu-head h2 {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.2;
+}
+
+.edu-kind {
+  margin: 0.1rem 0 0;
+  color: var(--ink-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.edu-back {
+  margin-bottom: 0.6rem;
+  padding: 0.25rem 0.45rem;
+  font-size: 0.68rem;
+}
+
+.education-panel h4 {
+  margin: 0.85rem 0 0.35rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-muted);
+}
+
+.edu-summary,
+.edu-text,
+.edu-check {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+.edu-summary {
+  font-weight: 600;
+}
+
+.edu-check {
+  padding-left: 0.55rem;
+  border-left: 2px solid var(--border);
+  color: var(--ink-muted);
+}
+
+.edu-advisory {
+  margin: 0 0 0.5rem;
+  padding: 0.45rem 0.55rem;
+  border-left: 3px solid var(--note);
+  border-radius: 0 4px 4px 0;
+  background: var(--note-bg);
+  color: var(--note-ink);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.edu-typical {
+  font-size: 0.72rem;
+}
+
+.edu-typical div {
+  display: contents;
+}
+
+/* ---- what moves ---- */
+
+.moves {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.7rem;
+}
+
+.moves th,
+.moves td {
+  padding: 0.22rem 0.3rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-weight: 400;
+  vertical-align: top;
+}
+
+.moves thead th {
+  color: var(--ink-muted);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.moves tbody th {
+  width: 42%;
+}
+
+.move-glyph {
+  display: inline-block;
+  min-width: 1.2em;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.move-qualifier {
+  display: block;
+  color: var(--ink-muted);
+  font-size: 0.63rem;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.move-actual {
+  font-variant-numeric: tabular-nums;
+}
+
+.move-constant {
+  color: var(--ink-muted);
+}
+
+/* A declared direction the solver did not produce. Marked, never hidden. */
+.moves-disagree td:last-child {
+  color: var(--warn-ink);
+  font-weight: 700;
+}
+
+/* ---- see also, and the concept index ---- */
+
+.see-also ul,
+.concept-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.see-also li {
+  margin-bottom: 0.3rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.see-also-kind {
+  display: block;
+  color: var(--ink-muted);
+  font-size: 0.63rem;
+}
+
+.concept-group {
+  margin-bottom: 0.5rem;
+}
+
+.concept-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.6rem;
+  font-size: 0.72rem;
+}
+
+/* ---- walkthrough ---- */
+
+.wt-start {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  margin-bottom: 0.85rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--selected-bg);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.wt-start:hover {
+  background: var(--ok-bg);
+}
+
+.wt-start .icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.wt-start strong {
+  display: block;
+  font-size: 0.78rem;
+}
+
+.wt-start em {
+  display: block;
+  color: var(--ink-muted);
+  font-size: 0.65rem;
+  font-style: normal;
+}
+
+.walkthrough {
+  margin-bottom: 1rem;
+  padding: 0.6rem;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.wt-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.wt-head .icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.wt-head h2 {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.wt-head > div {
+  flex: 1;
+}
+
+.wt-progress {
+  margin: 0.1rem 0 0;
+  color: var(--ink-muted);
+  font-size: 0.65rem;
+}
+
+.wt-exit {
+  padding: 0.1rem 0.35rem;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.wt-bar {
+  height: 3px;
+  margin: 0.5rem 0 0.7rem;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.wt-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 160ms ease-out;
+}
+
+.wt-body {
+  margin: 0 0 0.55rem;
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.wt-question {
+  margin: 0.7rem 0;
+  padding: 0.55rem;
+  border-radius: 5px;
+  background: var(--bg);
+}
+
+.wt-prompt {
+  margin: 0 0 0.45rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.wt-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.wt-options li {
+  margin-bottom: 0.35rem;
+}
+
+.wt-option {
+  width: 100%;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.72rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wt-option:hover {
+  border-color: var(--accent);
+}
+
+.wt-option.correct {
+  border-color: var(--ok-ink);
+  background: var(--ok-bg);
+  color: var(--ok-ink);
+  font-weight: 600;
+}
+
+/* A wrong answer is marked, but not scolded: same weight, muted colour, and
+   the response beneath it does the actual teaching. */
+.wt-option.incorrect {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.wt-response {
+  margin: 0.3rem 0 0;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--border);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+
+.wt-concepts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.6rem;
+  margin: 0.5rem 0;
+  font-size: 0.7rem;
+}
+
+.wt-nav {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+}
+
+.wt-nav button {
+  flex: 1;
+}
+
+.wt-nav .primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--plot-bg);
+  font-weight: 600;
+}
+
+/* Artwork not yet supplied — see icons/map.ts. */
+.icon-pending {
+  opacity: 0.7;
+}
+
+/* The label and its tooltip trigger share a row; the trigger is a sibling of
+   the label, not a child of it. See ChainEditor. */
+.param-label {
+  display: flex;
+  align-items: center;
+}
+
+.param-label label {
+  flex: 1;
+}
+
+/* ------------------------------------------------------------------ export */
+
+.export-panel h3 {
+  margin: 0.9rem 0 0.4rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-muted);
+}
+
+.export-panel h3:first-child {
+  margin-top: 0;
+}
+
+.export-panel textarea {
+  width: 100%;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.75rem;
+  resize: vertical;
+}
+
+.export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+
+.export-actions button {
+  flex: 1 1 auto;
+}
+
+.export-actions .primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--plot-bg);
+  font-weight: 600;
+}
+
+/* Monospace and selectable: this is a string to be copied, and a proportional
+   font makes it impossible to see where it has been truncated. */
+.share-link {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.62rem;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.export-disclaimer {
+  margin-top: 0.9rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+/* Opening a project can produce notes that are not errors — an upgrade, a
+   weather file that needs reloading. They sit above the panels because they are
+   about the whole session, and they are dismissible because they are not
+   problems to be fixed. */
+.load-notice {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.6rem;
+  border-left: 3px solid var(--note);
+  border-radius: 0 4px 4px 0;
+  background: var(--note-bg);
+  color: var(--note-ink);
+}
+
+.load-notice p {
+  margin: 0 0 0.4rem;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+/* ------------------------------------------------------------------- about */
+
+.about-list {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+}
+
+.about-list li {
+  margin-bottom: 0.45rem;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.about-licence {
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--ink-muted);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.about-role {
+  display: block;
+  color: var(--ink-muted);
+  font-size: 0.65rem;
+}
+
+.about-panel h4 {
+  margin: 0.85rem 0 0.35rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-muted);
+}
+
+/* ------------------------------------------------------------------- crash */
+
+.crash {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 2rem;
+  background: var(--bg);
+}
+
+.crash-body {
+  max-width: 34rem;
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.crash-body h1 {
+  margin: 0 0 0.75rem;
+  font-size: 1.2rem;
+}
+
+.crash-body p {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.crash-message {
+  padding: 0.5rem 0.65rem;
+  border-left: 3px solid var(--danger);
+  border-radius: 0 4px 4px 0;
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem !important;
+}
+
+.crash-body button {
+  margin-right: 0.4rem;
+}
+
+.crash-body .primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--plot-bg);
+  font-weight: 600;
+}
+
+.crash-body details {
+  margin-top: 1rem;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+
+.crash-body pre {
+  overflow-x: auto;
+  max-height: 14rem;
+  padding: 0.5rem;
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 0.65rem;
+  line-height: 1.5;
+}
+
+/* --------------------------------------------------- prevailing mean, adaptive */
+
+.prevailing {
+  margin: 0.6rem 0;
+  padding: 0.55rem 0.6rem;
+  border-left: 3px solid var(--note);
+  border-radius: 0 4px 4px 0;
+  background: var(--note-bg);
+}
+
+.prevailing h4 {
+  margin: 0 0 0.25rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--note-ink);
+}
+
+.prevailing .comfort-note {
+  margin-bottom: 0.45rem;
+}
+
+.prevailing-date {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-bottom: 0.45rem;
+}
+
+.prevailing-date select {
+  flex: 1 1 auto;
+  min-width: 5rem;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.7rem;
+}
+
+.prevailing-result {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.prevailing-result strong {
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--note-ink);
+}
+
+.prevailing-result button {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.68rem;
+}
+
+.prevailing-inuse {
+  color: var(--ok-ink);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ------------------------------------------------------- appearance toggle */
+
+.header-toggles {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Shares the unit toggle's shell so the two read as one control cluster. The
+   buttons are square because they hold an icon rather than a word. */
+.theme-toggle button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem 0.45rem;
+  line-height: 1;
+}
+
+.theme-toggle .icon {
+  display: block;
+  /* The icons inherit their outline from `currentColor`, so the active state
+     needs no separate rule — the button's own colour carries it. */
+  color: currentColor;
+}
+
+/* The units row. Muted and rule-separated so it reads as an annotation on the
+   table rather than as another row of data. */
+.results tfoot td {
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+  color: var(--ink-muted);
+  font-size: 0.68rem;
+}
+
+/* ------------------------------------------------------------ design days */
+
+.design-day polygon {
+  fill: var(--design-day);
+  stroke: var(--plot-bg);
+  stroke-width: 1.5;
+  cursor: pointer;
+}
+
+.design-day.selected polygon {
+  stroke-width: 2.5;
+}
+
+.design-day-tag {
+  fill: var(--design-day);
+  font-size: 9px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: var(--plot-bg);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.design-day.selected .design-day-tag {
+  font-size: 10.5px;
+}
+
+.design-day-list {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+}
+
+.design-day-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  margin-bottom: 0.25rem;
+  padding: 0.32rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.72rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.design-day-row:hover {
+  border-color: var(--design-day);
+}
+
+.design-day-row.selected {
+  border-color: var(--design-day);
+  background: var(--selected-bg);
+}
+
+/* The chip carries the same two letters as the chart marker; it is the whole
+   link between the list and the plot. */
+.design-day-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  flex-shrink: 0;
+  padding: 0.1rem 0;
+  border-radius: 3px;
+  background: var(--design-day);
+  color: var(--design-day-ink);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.design-day-name {
+  flex: 1;
+}
+
+.design-day-values {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.design-day-field select {
+  font-size: 0.7rem;
+}
+
+/* ------------------------------------------------------- weather by link */
+
+.weather-url {
+  margin: 0.6rem 0 0.5rem;
+}
+
+.weather-url label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.7rem;
+  color: var(--ink-muted);
+}
+
+.weather-url-row {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.weather-url-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.68rem;
+}
+
+.weather-url-row button {
+  flex-shrink: 0;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.7rem;
+}
+
+.weather-url-row button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* -------------------------------------------------------------------------- *
+ * The page corner that turns to the other operating case
+ * -------------------------------------------------------------------------- */
+
+/**
+ * A turned corner, drawn in the top-left of the chart.
+ *
+ * One triangle: the page showing through behind the sheet. It is a plain border
+ * on a zero-sized box, which is how a triangle is drawn without an image — so
+ * the whole affordance costs no request and follows the theme like everything
+ * else.
+ *
+ * The label sits outside the corner rather than on it. Text on a 45° wedge is
+ * unreadable at any size that fits, and the corner's job is to say "there is
+ * something behind this", not to carry the whole message.
+ */
+.system-flip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  /* The chart beneath is grabbable for panning; this is not part of that. */
+  touch-action: manipulation;
+}
+
+.system-flip-fold {
+  position: relative;
+  display: block;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  transition: width 0.14s ease, height 0.14s ease;
+}
+
+/* The page behind, revealed by the turn. */
+.system-flip-fold::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-width: 22px 22px 0 0;
+  border-style: solid;
+  border-color: var(--accent-bright) transparent transparent transparent;
+  transition: border-width 0.14s ease;
+}
+
+.system-flip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 1px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-muted);
+  opacity: 0;
+  transform: translateX(-3px);
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  pointer-events: none;
+}
+
+/* Lift the corner further on approach, and name where it goes. */
+.system-flip:hover .system-flip-fold,
+.system-flip:focus-visible .system-flip-fold {
+  width: 30px;
+  height: 30px;
+}
+
+.system-flip:hover .system-flip-fold::after,
+.system-flip:focus-visible .system-flip-fold::after {
+  border-width: 30px 30px 0 0;
+}
+
+.system-flip:hover .system-flip-label,
+.system-flip:focus-visible .system-flip-label {
+  opacity: 1;
+  transform: none;
+  color: var(--ink);
+}
+
+.system-flip:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Someone who has asked for less motion still needs the affordance, so the
+   corner keeps its hover state and only stops animating into it. */
+@media (prefers-reduced-motion: reduce) {
+  .system-flip-fold,
+  .system-flip-fold::after,
+  .system-flip-label {
+    transition: none;
+  }
+}
+
+/* -------------------------------------------------------------------------- *
+ * Turning the chart to the other operating case
+ * -------------------------------------------------------------------------- */
+
+/**
+ * A two-sided sheet, turned about its vertical axis.
+ *
+ * Both faces stay mounted. The far one is a whole chart — its own chain, its
+ * own view, its own weather — because the point of a turn is that something is
+ * already there behind the page, and building it during the animation would
+ * make the first frame the one frame with nothing on it. It costs about 260
+ * SVG nodes, which is why this is affordable rather than clever.
+ *
+ * The back face carries its own `rotateY(180deg)`. That is what keeps the
+ * chart from reading mirrored when the sheet is turned: the face's rotation
+ * and the sheet's cancel out, leaving the drawing the right way round while
+ * the sheet itself has genuinely turned over.
+ */
+.chart-sheet {
+  /* One definition of how long a turn takes, and the instant the faces swap.
+
+     The swap must land exactly when the sheet is edge-on, because that is the
+     only moment a face has no width and so cannot be seen mid-change. Half
+     the duration is that instant ONLY while the easing is symmetric — which
+     is why the curve below is, and why changing it is a change to this too.
+
+     It was not, once. An asymmetric curve had the sheet 75% turned at half
+     its duration, so for ~84ms the outgoing chart sat past 90 degrees showing
+     its own back: the original chart, mirrored, widening until the swap cut
+     it off. */
+  --turn: 0.55s;
+  --turn-half: 0.275s;
+
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  /* Older Safari does not apply the unprefixed form, and without it the faces
+     flatten into one plane — which is precisely the state in which both charts
+     paint at once. */
+  -webkit-transform-style: preserve-3d;
+  /* Point-symmetric about its midpoint: (x1,y1) equals (1-x2,1-y2), so half
+     the duration is half the rotation and --turn-half above is correct by
+     construction rather than by a constant that has to be maintained. */
+  transition: transform var(--turn) cubic-bezier(0.42, 0, 0.58, 1);
+}
+
+/* Perspective belongs to the container the sheet turns inside, not the sheet:
+   applied to the sheet it would be recomputed per face and the two halves of
+   the turn would not meet. */
+.chart-pane {
+  perspective: 2200px;
+}
+
+.chart-sheet.turned {
+  transform: rotateY(-180deg);
+}
+
+/**
+ * Which face is painted, said twice.
+ *
+ * `backface-visibility` is the natural way to express "you cannot see the back
+ * of a page", and it is kept. It cannot be the only thing expressing it. When
+ * an engine declines to cull — an older Safari that never applied
+ * `transform-style`, a machine with GPU rasterisation off — the result is not a
+ * slightly wrong animation, it is both charts drawn on top of each other and a
+ * chart that cannot be read. A guarantee that important should not rest on a
+ * property with compositing preconditions.
+ *
+ * So visibility says it a second way, with no preconditions at all. The swap is
+ * delayed to the half-way point of the turn, where the sheet is edge-on and
+ * neither face is legible: invisible as a transition, and absolute as a
+ * guarantee that the two are never painted in the same frame.
+ */
+.chart-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  /* Safari still wants the prefixed form to hide a turned-away face. */
+  -webkit-backface-visibility: hidden;
+
+  visibility: hidden;
+  transition: visibility 0s linear var(--turn-half);
+}
+
+.chart-face.live {
+  visibility: visible;
+}
+
+.chart-face + .chart-face {
+  transform: rotateY(180deg);
+}
+
+/* The face turned away takes no input. `backface-visibility` hides it, but a
+   hidden element can still be the target of a click in some engines, and a
+   chart answering for the one in front of it is the kind of bug that looks
+   like the numbers are wrong. */
+.chart-face:not(.live) {
+  pointer-events: none;
+}
+
+/* A sheet with only one side — a project with some other number of cases —
+   must not sit under a perspective it never uses. */
+.chart-sheet:not(.can-turn) {
+  transform: none;
+  transition: none;
+}
+
+/**
+ * Reduced motion: turn the page instantly rather than not at all.
+ *
+ * The two cases are still two pages, and the reader still has to know the
+ * chart changed. What is removed is the half-second of rotation, not the
+ * change of state — so the swap happens, it simply happens at once.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .chart-sheet {
+    transition: none;
+  }
+
+  /* With no rotation to hide behind, the swap happens at once rather than
+     half a turn later — otherwise the chart would go blank for 275ms. */
+  .chart-face {
+    transition: none;
+  }
+}
+
+/* ----------------------------------------------------------------- feedback */
+
+.feedback h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.feedback .reset {
+  margin-top: 0.6rem;
+}
+
+/* A quieter second route, for a reader whose browser has no mail client. */
+.feedback-alt {
+  display: block;
+  width: 100%;
+  margin-top: 0.4rem;
+  padding: 0.2rem 0;
+  border: 0;
+  background: none;
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: 0.72rem;
+  text-align: center;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.feedback-alt:hover,
+.feedback-alt:focus-visible {
+  color: var(--accent);
+}
+
+.feedback-address {
+  margin-top: 0.5rem;
+  text-align: center;
+}
+
+.feedback-address code {
+  font-size: 0.75rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.feedback-copied {
+  color: var(--accent);
+}
+
+/* Climate Analysis Pro embedding */
+.climateclock-sync { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:8px 14px; background:var(--surface); border-bottom:1px solid var(--border); font-size:12px; color:var(--ink-muted); }
+.climateclock-sync button { flex-shrink:0; padding:4px 10px; }
+.chart-focused .panel { display: none; }
+@media (min-width: 861px) and (max-width: 1200px) {
+  .panel-left { width: 14rem; padding: 0.75rem; }
+  .panel-right { width: 17rem; padding: 0.75rem; }
+}
+@media (max-width: 860px) {
+  .panel-left, .panel-right { width: 100%; }
+  .app-header { flex-wrap: wrap; gap: 0.5rem; }
+}

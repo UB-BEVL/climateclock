@@ -1,6 +1,11 @@
 """
-Psychrometric chart helpers — Givoni bioclimatic zones, heatmap grid, thermo calcs.
+Psychrometric properties (ASHRAE 2017 SI equations) and screening overlays.
 Used by render_psychrometrics_page() in app.py.
+
+Thermodynamic equations: ASHRAE Handbook Fundamentals (2017), chapter 1,
+as documented by https://psychrometrics.github.io/psychrolib/api_docs.html.
+The legacy strategy polygons below are illustrative, not validated comfort
+or building-performance models. Polygon membership is only climate screening.
 """
 import numpy as np
 import pandas as pd
@@ -9,13 +14,24 @@ import plotly.graph_objects as go
 # ──────────────── Thermo helpers (SI) ────────────────
 
 def p_ws_kPa(TC):
-    """Saturation vapor pressure over water [kPa] (Magnus/Tetens)."""
+    """Saturation pressure [kPa], over ice below 0.01 C, water above.
+
+    ASHRAE 2017 ch. 1, equations 5 and 6; validity -100 to 200 C.
+    Invalid inputs return NaN rather than extrapolated physical properties.
+    """
     TC = np.asarray(TC, dtype=float)
-    return 0.61094 * np.exp(17.625 * TC / (TC + 243.04))
+    valid = np.isfinite(TC) & (TC >= -100) & (TC <= 200)
+    t = np.where(valid, TC, 0.) + 273.15
+    ice = (-5.6745359e3/t + 6.3925247 - 9.677843e-3*t + 6.2215701e-7*t**2
+           + 2.0747825e-9*t**3 - 9.484024e-13*t**4 + 4.1635019*np.log(t))
+    water = (-5.8002206e3/t + 1.3914993 - 4.8640239e-2*t + 4.1764768e-5*t**2
+             - 1.4452093e-8*t**3 + 6.5459673*np.log(t))
+    return np.where(valid, np.exp(np.where(TC <= .01, ice, water))/1000., np.nan)
 
 def w_from_Pv_kPa(Pv_kPa, P_kPa):
-    Pv_kPa = np.clip(np.asarray(Pv_kPa, dtype=float), 0.0, 0.999 * P_kPa)
-    return 0.62198 * Pv_kPa / (P_kPa - Pv_kPa)
+    pv, pressure = np.broadcast_arrays(np.asarray(Pv_kPa, float), np.asarray(P_kPa, float))
+    valid = np.isfinite(pv) & np.isfinite(pressure) & (pressure > 0) & (pv >= 0) & (pv < pressure)
+    return np.where(valid, .621945 * pv / np.where(valid, pressure-pv, 1.), np.nan)
 
 def gpkg(w):
     return 1000.0 * np.asarray(w, dtype=float)
@@ -24,38 +40,65 @@ def w_sat(TC, P_kPa):
     return w_from_Pv_kPa(p_ws_kPa(TC), P_kPa)
 
 def dew_point_C(TC, RH):
-    a, b = 17.625, 243.04
-    TC, RH = np.asarray(TC, float), np.asarray(RH, float)
-    gamma = np.log(np.clip(RH, 1e-6, 100) / 100.0) + (a * TC) / (b + TC)
-    return (b * gamma) / (a - gamma)
+    """Invert the same saturation equation used by the chart (ice/water)."""
+    t, rh = np.broadcast_arrays(np.asarray(TC, float), np.asarray(RH, float))
+    pv = rh / 100. * p_ws_kPa(t)
+    valid = np.isfinite(pv) & (rh > 0) & (rh <= 100) & (pv >= p_ws_kPa(-100.))
+    lo, hi = np.full(t.shape, -100.), np.where(valid, t, 0.)
+    for _ in range(40):
+        mid = (lo + hi) / 2
+        below = p_ws_kPa(mid) < pv
+        lo, hi = np.where(below, mid, lo), np.where(below, hi, mid)
+    return np.where(valid, (lo + hi)/2, np.nan)
 
-def wet_bulb_C(TC, RH):
-    TC, RH = np.asarray(TC, float), np.clip(np.asarray(RH, float), 1e-6, 100)
-    return (TC * np.arctan(0.151977 * np.sqrt(RH + 8.313659))
-            + np.arctan(TC + RH) - np.arctan(RH - 1.676331)
-            + 0.00391838 * (RH ** 1.5) * np.arctan(0.023101 * RH) - 4.686035)
+def _w_from_wet_bulb(TC, TWB, P_kPa):
+    """Humidity ratio from thermodynamic wet bulb, ASHRAE eqs. 33/35."""
+    t, tw = np.asarray(TC, float), np.asarray(TWB, float)
+    ws = w_sat(tw, P_kPa)
+    water = ((2501.-2.326*tw)*ws - 1.006*(t-tw)) / (2501.+1.86*t-4.186*tw)
+    ice = ((2830.-.24*tw)*ws - 1.006*(t-tw)) / (2830.+1.86*t-2.1*tw)
+    return np.where(tw >= 0, water, ice)
+
+
+def wet_bulb_C(TC, RH, P_kPa=101.325):
+    """Pressure-aware thermodynamic wet bulb, solved to <0.001 C."""
+    t, rh, p = np.broadcast_arrays(np.asarray(TC, float), np.asarray(RH, float), np.asarray(P_kPa, float))
+    w = w_from_Pv_kPa(rh/100. * p_ws_kPa(t), p)
+    valid = np.isfinite(w) & (rh >= 0) & (rh <= 100) & (p_ws_kPa(t) < p)
+    lo, hi = np.full(t.shape, -100.), np.where(valid, t, 0.)
+    for _ in range(40):
+        mid = (lo + hi)/2
+        below = _w_from_wet_bulb(t, mid, p) < w
+        lo, hi = np.where(below, mid, lo), np.where(below, hi, mid)
+    return np.where(valid, (lo + hi)/2, np.nan)
 
 def enthalpy_kJkg(TC, w):
     return 1.006 * TC + w * (2501.0 + 1.86 * TC)
 
 def specific_vol(TC, w, P_kPa):
-    return 0.287042 * (TC + 273.15) * (1 + 1.6078 * w) / P_kPa
+    return 0.287042 * (TC + 273.15) * (1 + 1.607858 * w) / P_kPa
 
 # ──────────────── Givoni bioclimatic zone polygons ────────────────
 # Each zone is a list of (T_db °C, w g/kg) vertices forming a closed polygon.
-# Based on Givoni (1992) / Milne-Givoni standard references.
-# The comfort zone shifts with mean outdoor temperature (Trm).
+# Illustrative legacy polygons inspired by bioclimatic charts; no claim that
+# these vertices reproduce Givoni, Climate Consultant or ASHRAE 55 boundaries.
 
 def _comfort_zone(Trm=20.0):
-    """ASHRAE 55-style adaptive comfort zone in dry-bulb/humidity-ratio space."""
+    """Illustrative dry-bulb reference, not an ASHRAE 55 compliance zone.
+
+    Temperature limits use the adaptive 80% band; humidity bounds 4-12 g/kg
+    are separate screening assumptions. Outdoor dry bulb is not indoor
+    operative temperature. Use the interactive workspace for comfort models.
+    """
+    if not 10.0 <= float(Trm) <= 33.5:
+        raise ValueError("Outdoor reference temperature must be between 10 and 33.5 C.")
     neutral = 0.31 * float(Trm) + 17.8
-    t_lo = max(18.0, neutral - 3.5)
-    t_hi = min(30.0, neutral + 3.5)
-    return [(t_lo, 4.0), (t_lo + 0.5, 12.0), (t_hi, 12.0), (t_hi + 0.5, 4.0)]
+    t_lo, t_hi = neutral - 3.5, neutral + 3.5
+    return [(t_lo, 4.0), (t_lo, 12.0), (t_hi, 12.0), (t_hi, 4.0)]
 
 def givoni_zones(P_kPa=101.325, Trm=20.0):
     """Return dict of zone_name -> list of (T, w_gpkg) polygon vertices.
-    Non-overlapping tiled zones based on Givoni (1992)."""
+    Illustrative regions only; they may overlap."""
     cz = _comfort_zone(Trm)
     cz_tlo, cz_thi = cz[0][0], cz[2][0]
     
@@ -198,32 +241,16 @@ def enthalpy_w_line(T_axis, h_kJkg):
 def volume_w_line(T_axis, v_m3kg, P_kPa):
     """w from specific volume."""
     R = 0.287042
-    w = (v_m3kg * P_kPa / (R * (T_axis + 273.15)) - 1.0) / 1.6078
+    w = (v_m3kg * P_kPa / (R * (T_axis + 273.15)) - 1.0) / 1.607858
     return gpkg(w)
 
 def wetbulb_curve(T_axis, twb_target, P_kPa, n_pts=200):
     """Points along a constant wet-bulb line on the psychrometric chart.
     Returns (T_array, w_gpkg_array) for plotting."""
-    # Sweep RH from 100% down to find T,RH pairs where Twb ≈ target
-    t_out, w_out = [], []
-    for t in T_axis:
-        if t < twb_target - 1:
-            continue
-        # Binary search for RH that gives this wet-bulb at this T
-        lo, hi = 0.1, 100.0
-        for _ in range(30):
-            mid = (lo + hi) / 2
-            twb = float(wet_bulb_C(np.array([t]), np.array([mid]))[0])
-            if twb < twb_target:
-                lo = mid
-            else:
-                hi = mid
-        rh_found = (lo + hi) / 2
-        pv = (rh_found / 100.0) * float(p_ws_kPa(np.array([t]))[0])
-        w_val = float(w_from_Pv_kPa(np.array([pv]), P_kPa)[0])
-        t_out.append(t)
-        w_out.append(gpkg(np.array([w_val]))[0])
-    return np.array(t_out), np.array(w_out)
+    t = np.asarray(T_axis, float)
+    w = _w_from_wet_bulb(t, twb_target, P_kPa)
+    valid = (t >= twb_target) & np.isfinite(w) & (w >= 0) & (w <= w_sat(t, P_kPa))
+    return t[valid], gpkg(w[valid])
 
 
 def get_design_strategy_polygons(P_kPa=101.325, Trm=20.0):
@@ -301,7 +328,7 @@ strategy_color_map = {
 }
 
 def get_all_strategy_zones(P_kPa=101.325, Trm=20.0):
-    """Return the 16 Climate Consultant-style design strategy polygons."""
+    """Return 15 illustrative strategy regions; membership is not comfort."""
     cz = _comfort_zone(Trm)
     cz_tlo = cz[0][0]
     cz_thi = cz[2][0]
@@ -420,3 +447,121 @@ def compute_centroids(zones_dict):
         ys = [v[1] for v in verts]
         centroids[zid] = (sum(xs) / len(xs), sum(ys) / len(ys))
     return centroids
+
+
+def prepare_hourly(frame, pressure_kpa):
+    """Clean EPW sentinels and calculate all chart properties at one pressure."""
+    t = pd.to_numeric(frame['drybulb'], errors='coerce')
+    rh = pd.to_numeric(frame['relhum'], errors='coerce')
+    valid = t.between(-100, 99.8) & rh.between(0, 100)
+    t, rh = t[valid].to_numpy(float), rh[valid].to_numpy(float)
+    w = w_from_Pv_kPa(rh / 100. * p_ws_kPa(t), pressure_kpa)
+    out = pd.DataFrame({'Dry bulb (C)': t, 'RH (%)': rh, 'Humidity ratio (g/kg)': gpkg(w),
+                        'Dew point (C)': dew_point_C(t, rh), 'Wet bulb (C)': wet_bulb_C(t, rh, pressure_kpa),
+                        'Enthalpy (kJ/kg)': enthalpy_kJkg(t, w),
+                        'Specific volume (m3/kg)': specific_vol(t, w, pressure_kpa)}, index=frame.index[valid])
+    return out.loc[np.isfinite(out['Humidity ratio (g/kg)']) & np.isfinite(out['Wet bulb (C)'])]
+
+
+def clip_region_to_saturation(vertices, pressure_kpa):
+    """Clip a convex illustrative polygon to physical moist-air states.
+
+    Sample vertical polygon sections so the upper boundary follows the curved
+    saturation limit instead of joining only a few clipped corner points.
+    """
+    polygon = np.asarray(vertices, float)
+    xs = np.unique(np.r_[np.linspace(polygon[:, 0].min(), polygon[:, 0].max(), 180), polygon[:, 0]])
+    lower, upper, kept = [], [], []
+    for x in xs:
+        crossings = []
+        for a, b in zip(polygon, np.roll(polygon, -1, axis=0)):
+            if abs(a[0]-b[0]) < 1e-10:
+                if abs(x-a[0]) < 1e-8:
+                    crossings.extend([a[1], b[1]])
+            elif min(a[0], b[0])-1e-9 <= x <= max(a[0], b[0])+1e-9:
+                crossings.append(a[1]+(b[1]-a[1])*(x-a[0])/(b[0]-a[0]))
+        if not crossings:
+            continue
+        lo, hi = max(0., min(crossings)), min(max(crossings), float(gpkg(w_sat(x, pressure_kpa))))
+        if np.isfinite(hi) and hi >= lo:
+            kept.append(x); lower.append(lo); upper.append(hi)
+    if len(kept) < 2:
+        return []
+    return list(zip(kept, lower)) + list(zip(kept[::-1], upper[::-1]))
+
+
+def strategy_screening(points, pressure_kpa, reference_t=20.):
+    from matplotlib.path import Path
+    zones = {'Reference band': {'polygon': _comfort_zone(reference_t), 'color': '#318477'}}
+    for info in get_all_strategy_zones(pressure_kpa, reference_t).values():
+        zones[info['name']] = {'polygon': info['polygon'], 'color': info['color']}
+    xy = points[['Dry bulb (C)', 'Humidity ratio (g/kg)']].to_numpy(float)
+    masks = {}
+    for name, zone in zones.items():
+        vertices = clip_region_to_saturation(zone['polygon'], pressure_kpa)
+        zone['polygon'] = vertices
+        masks[name] = Path(vertices + [vertices[0]]).contains_points(xy, radius=1e-9) if vertices else np.zeros(len(points), bool)
+    return zones, masks
+
+
+def strategy_figure(points, pressure_kpa, zones, selected, *, fit=True,
+                    show_rh=True, show_enthalpy=False, show_volume=False, show_wetbulb=False):
+    """Chart-first presentation; every plotted property uses the same SI basis."""
+    t, y = points['Dry bulb (C)'].to_numpy(float), points['Humidity ratio (g/kg)'].to_numpy(float)
+    xlo = min(-10., float(t.min())-3) if fit else -10.
+    xhi = max(40., float(t.max())+3) if fit else 40.
+    ymax = max(28., float(y.max())+2) if fit else 28.
+    axis = np.linspace(max(-100., xlo), min(99.8, xhi), 650)
+    sat = gpkg(w_sat(axis, pressure_kpa))
+    fig = go.Figure()
+
+    def line(tx, wy, name, color, dash=None):
+        tx, wy = np.asarray(tx), np.asarray(wy)
+        valid = np.isfinite(wy) & (wy >= 0) & (wy <= ymax) & (wy <= gpkg(w_sat(tx, pressure_kpa))+1e-8)
+        fig.add_trace(go.Scatter(x=np.where(valid, tx, np.nan), y=np.where(valid, wy, np.nan),
+                                 mode='lines', name=name, line=dict(color=color, width=.8, dash=dash),
+                                 showlegend=False, hovertemplate=name+'<extra></extra>', connectgaps=False))
+
+    for name in selected:
+        zone = zones[name]
+        vertices = zone['polygon']
+        if not vertices:
+            continue
+        xy = np.asarray(vertices+[vertices[0]])
+        colour = zone['color']
+        rgb = ','.join(str(int(colour[i:i+2], 16)) for i in (1, 3, 5))
+        fig.add_trace(go.Scatter(x=xy[:, 0], y=xy[:, 1], mode='lines', fill='toself',
+                                 line=dict(color=colour, width=1.5), fillcolor=f'rgba({rgb},0.10)',
+                                 name=name, hovertemplate=name+' (illustrative)<extra></extra>'))
+    line(axis, sat, 'Saturation (100% RH)', '#243c4b')
+    if show_rh:
+        for rh in (20, 40, 60, 80):
+            line(axis, rh_curve(axis, rh, pressure_kpa), f'{rh}% RH', '#a3b8bd', 'dot')
+    if show_enthalpy:
+        for h in range(-20, 121, 10):
+            line(axis, enthalpy_w_line(axis, h), f'h = {h} kJ/kg', '#c7a566', 'dash')
+    if show_volume:
+        # Select volumes appropriate to this station's pressure.
+        volumes = specific_vol(np.array([xlo, xhi]), np.array([0., ymax/1000]), pressure_kpa)
+        for v in np.linspace(volumes.min(), volumes.max(), 8):
+            line(axis, volume_w_line(axis, v, pressure_kpa), f'v = {v:.2f} m3/kg', '#9fa9c4', 'dot')
+    if show_wetbulb:
+        for tw in range(-20, 36, 5):
+            tx, wy = wetbulb_curve(axis, tw, pressure_kpa)
+            line(tx, wy, f'Wet bulb = {tw} C', '#89adb8', 'dash')
+    custom = points[['RH (%)', 'Wet bulb (C)', 'Dew point (C)', 'Enthalpy (kJ/kg)', 'Specific volume (m3/kg)']].to_numpy(float)
+    fig.add_trace(go.Scatter(x=t, y=y, mode='markers', name='Hourly weather',
+                             marker=dict(size=4, color='#235b75', opacity=.35), customdata=custom,
+                             text=points.index.strftime('%b %d %H:%M') if isinstance(points.index, pd.DatetimeIndex) else points.index.astype(str),
+                             hovertemplate='%{text}<br>Dry bulb: %{x:.1f} C<br>Humidity ratio: %{y:.2f} g/kg<br>RH: %{customdata[0]:.1f}%<br>Wet bulb: %{customdata[1]:.2f} C<br>Dew point: %{customdata[2]:.2f} C<br>Enthalpy: %{customdata[3]:.2f} kJ/kg<br>Specific volume: %{customdata[4]:.3f} m3/kg<extra></extra>'))
+    fig.update_layout(title=dict(text='Climate Strategies · Psychrometric Chart', font=dict(size=18)),
+                      height=650, margin=dict(l=60, r=25, t=55, b=170),
+                      xaxis=dict(title='Dry-bulb temperature (°C)', range=[xlo, xhi], gridcolor='#edf1f3', zeroline=False, color='#304757'),
+                      yaxis=dict(title='Humidity ratio (g/kg dry air)', range=[0, ymax], gridcolor='#edf1f3', zeroline=False, color='#304757'),
+                      legend=dict(orientation='h', y=-.17, x=0, font=dict(size=11, color='#304757')),
+                      paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#304757'),
+                      hovermode='closest', meta=dict(preserve_plot_style=True))
+    fig.add_annotation(text='Illustrative regions: overlapping hours are not predicted comfort or energy savings.',
+                       x=0, y=-.27, xref='paper', yref='paper', xanchor='left', showarrow=False,
+                       font=dict(size=10, color='#536675'))
+    return fig

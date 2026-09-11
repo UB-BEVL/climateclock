@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
@@ -20,6 +21,13 @@ def _lightweight_comfort_mode() -> bool:
 # ---------------------------
 # Comfort metric primitives
 # ---------------------------
+
+def _comfort_import_error(metric: str, cause: ImportError) -> RuntimeError:
+    return RuntimeError(
+        f"{metric} is unavailable in {sys.executable}: {cause}. "
+        "For local setup, run `py run_app.py` from the project folder. "
+        "Otherwise install requirements.txt using the Python interpreter that runs Streamlit."
+    )
 
 def compute_di(df: pd.DataFrame, temp_col: str = "drybulb", rh_col: str = "relhum") -> pd.Series:
     """Compute Thom's Discomfort Index (DI).
@@ -53,7 +61,7 @@ def compute_utci_values(tdb, tr, v, rh) -> np.ndarray:
     try:
         from pythermalcomfort.models import utci
     except ImportError as exc:
-        raise RuntimeError("UTCI is unavailable. Install the packages in requirements.txt.") from exc
+        raise _comfort_import_error("UTCI", exc) from exc
 
     ta, mrt, wind, humidity = np.broadcast_arrays(
         np.asarray(tdb, dtype=float), np.asarray(tr, dtype=float),
@@ -118,12 +126,12 @@ def compute_pmv(
         return series
 
     try:
-        from pythermalcomfort.models import pmv_ppd as _pmv_func
+        from pythermalcomfort.models import pmv_ppd_ashrae as _pmv_func
     except ImportError:
         try:
-            from pythermalcomfort.models.pmv_ppd_ashrae import pmv_ppd_ashrae as _pmv_func
-        except ImportError:
-            raise ImportError("Could not import PMV function from pythermalcomfort. Please install or update: pip install pythermalcomfort>=2.5")
+            from pythermalcomfort.models import pmv_ppd as _pmv_func
+        except ImportError as exc:
+            raise _comfort_import_error("PMV", exc) from exc
     # ASHRAE 55 Table C1 seasonal clo values
     _SEASONAL_CLO = {
         1: 1.0, 2: 1.0, 3: 0.9, 4: 0.7,   # Jan–Apr
@@ -190,11 +198,13 @@ def compute_heat_index(
         - 0.00000199 * (Tf ** 2) * (RH ** 2)
     )
 
-    adj_low_rh = ((13 - RH) / 4.0) * np.sqrt((17 - np.abs(Tf - 95)) / 17)
-    adj_high_rh = ((RH - 85) / 10.0) * ((87 - Tf) / 5.0)
-
     cond_low = (RH < 13) & (Tf >= 80) & (Tf <= 112)
     cond_high = (RH > 85) & (Tf >= 80) & (Tf <= 87)
+    # The NWS low-humidity adjustment only applies at 80--112 F. Mask
+    # other rows before sqrt; np.where alone evaluates both branches.
+    low_rh_radicand = ((17 - np.abs(Tf - 95)) / 17).where(cond_low, 0.0)
+    adj_low_rh = ((13 - RH) / 4.0) * np.sqrt(low_rh_radicand)
+    adj_high_rh = ((RH - 85) / 10.0) * ((87 - Tf) / 5.0)
     hi_f = np.where(cond_low, hi_f - adj_low_rh, hi_f)
     hi_f = np.where(cond_high, hi_f + adj_high_rh, hi_f)
     hi_f = np.where(Tf < 80, Tf, hi_f)

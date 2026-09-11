@@ -1,0 +1,361 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://psychro-studio.dev/schema/project-2.json",
+  "title": "Psychrometric Studio project",
+  "description": "A saved project. Stores states as the user *declared* them rather than as solved values, so that reopening at a different site pressure re-solves instead of carrying stale properties.",
+  "type": "object",
+  "required": ["schemaVersion", "units", "atmosphere", "systems"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "description": "Incremented on any breaking change to this format. Readers must refuse versions they do not understand rather than guessing.",
+      "type": "integer",
+      "const": 2
+    },
+    "meta": { "$ref": "#/$defs/meta" },
+    "units": { "$ref": "#/$defs/unitSystem" },
+    "atmosphere": { "$ref": "#/$defs/atmosphere" },
+    "systems": {
+      "description": "Operating cases. Normally two — a cooling case and a heating case — but the format does not cap the count, and nothing calculates from the role. Each carries its own equipment chain and its own view.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/system" }
+    },
+    "activeSystem": {
+      "description": "Index into systems of the case that was on screen. Advisory: a reader clamps it rather than trusting it, because a hand-edited file can point past the end.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "comfort": { "$ref": "#/$defs/comfortSettings" },
+    "weather": { "$ref": "#/$defs/weatherSource" }
+  },
+
+  "$defs": {
+    "unitSystem": {
+      "description": "IP is primary. Calculations run natively in the selected system.",
+      "type": "string",
+      "enum": ["IP", "SI"]
+    },
+
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "projectNumber": { "type": "string" },
+        "client": { "type": "string" },
+        "engineer": { "type": "string" },
+        "notes": { "type": "string" },
+        "created": { "type": "string", "format": "date-time" },
+        "modified": { "type": "string", "format": "date-time" },
+        "createdWith": {
+          "description": "Application and calculation-basis versions that produced the file. Stamped for traceability; never trusted for behaviour.",
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "application": { "type": "string" },
+            "version": { "type": "string" },
+            "libraryVersion": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "atmosphere": {
+      "description": "Site barometric pressure. Stored as its basis, not only its value, so a report can say where the number came from.",
+      "type": "object",
+      "required": ["basis"],
+      "additionalProperties": false,
+      "properties": {
+        "basis": { "type": "string", "enum": ["standard", "altitude", "explicit"] },
+        "altitude": {
+          "description": "Site elevation, ft (IP) or m (SI). Required when basis is 'altitude'.",
+          "type": "number"
+        },
+        "pressure": {
+          "description": "Barometric pressure in canonical units: psia (IP) or Pa (SI). Required when basis is 'explicit'.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "basis": { "const": "altitude" } }, "required": ["basis"] },
+          "then": { "required": ["altitude"] }
+        },
+        {
+          "if": { "properties": { "basis": { "const": "explicit" } }, "required": ["basis"] },
+          "then": { "required": ["pressure"] }
+        }
+      ]
+    },
+
+    "system": {
+      "description": "One complete operating case. This sits above airstreams rather than beside them: an airstream is a parallel duct within one system and couplings resolve across them by id, whereas a system is an alternative operating state of the whole assembly.",
+      "type": "object",
+      "required": ["id", "role", "airstreams"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "role": {
+          "description": "What this case is for. Picks the default label and icon; nothing calculates from it, and the role 'other' exists because the cooling/heating pairing is a convention rather than a rule.",
+          "type": "string",
+          "enum": ["cooling", "heating", "other"]
+        },
+        "label": { "type": "string" },
+        "notes": {
+          "description": "Notes about this case. Project-wide notes live in meta, which is deliberately not duplicated per system: a client name copied into two places is a client name that will disagree with itself.",
+          "type": "string"
+        },
+        "airstreams": {
+          "description": "One or more airstreams. A single-AHU study has one; energy recovery, indirect evaporative cooling, and mixing with a distinct source all use two or more. First-class from the outset so it never needs retrofitting.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/airstream" }
+        },
+        "chart": { "$ref": "#/$defs/chartSettings" },
+        "weather": { "$ref": "#/$defs/weatherView" }
+      }
+    },
+
+    "airstream": {
+      "type": "object",
+      "required": ["id", "name", "stages"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string" },
+        "role": {
+          "type": "string",
+          "enum": ["supply", "return", "outdoor", "exhaust", "secondary", "other"],
+          "default": "supply"
+        },
+        "stages": {
+          "description": "An ordered chain. Each stage takes the leaving state of the previous one.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/stage" }
+        }
+      }
+    },
+
+    "stage": {
+      "type": "object",
+      "required": ["id", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "$ref": "#/$defs/stageType" },
+        "name": { "type": "string" },
+        "airflow": {
+          "description": "Volumetric airflow, CFM (IP) or L/s (SI). Omit to inherit the upstream mass flow.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "params": {
+          "description": "Process parameters, keyed by stage type. Validated by the process model rather than by this schema, so that adding a process type does not require a schema version bump.",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "couplings": {
+          "description": "References to other airstreams or stages. This is how a mixing box names its second stream, how a recovery device names the stream it exchanges with, and how a wrap-around coil's two legs find each other.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/coupling" }
+        },
+        "notes": { "type": "string" }
+      }
+    },
+
+    "stageType": {
+      "type": "string",
+      "enum": [
+        "source",
+        "mixing",
+        "cooling",
+        "heating",
+        "humidifier-steam",
+        "humidifier-adiabatic",
+        "fan",
+        "room",
+        "recovery-runaround",
+        "recovery-wraparound-precool",
+        "recovery-wraparound-reheat",
+        "recovery-wheel-sensible",
+        "recovery-wheel-enthalpy",
+        "recovery-plate",
+        "evaporative-direct",
+        "evaporative-indirect",
+        "desiccant"
+      ]
+    },
+
+    "coupling": {
+      "type": "object",
+      "required": ["role", "airstreamId"],
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "description": "What the referenced stream is to this stage.",
+          "type": "string",
+          "enum": ["second-stream", "exchange-stream", "secondary-stream", "paired-leg"]
+        },
+        "airstreamId": { "$ref": "#/$defs/id" },
+        "stageId": {
+          "description": "Optional. Names the specific stage whose leaving state is used; defaults to the referenced airstream's terminal state.",
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+
+    "stateInput": {
+      "description": "A state as declared by the user. Which pair was entered is preserved, because re-solving at a new pressure must honour the original intent.",
+      "type": "object",
+      "required": ["kind"],
+      "oneOf": [
+        { "properties": { "kind": { "const": "tdb-rh" }, "tdb": { "type": "number" }, "rh": { "type": "number", "minimum": 0, "maximum": 1 } }, "required": ["tdb", "rh"], "additionalProperties": false },
+        { "properties": { "kind": { "const": "tdb-twb" }, "tdb": { "type": "number" }, "twb": { "type": "number" } }, "required": ["tdb", "twb"], "additionalProperties": false },
+        { "properties": { "kind": { "const": "tdb-tdp" }, "tdb": { "type": "number" }, "tdp": { "type": "number" } }, "required": ["tdb", "tdp"], "additionalProperties": false },
+        { "properties": { "kind": { "const": "tdb-w" }, "tdb": { "type": "number" }, "w": { "type": "number", "minimum": 0 } }, "required": ["tdb", "w"], "additionalProperties": false },
+        { "properties": { "kind": { "const": "tdb-h" }, "tdb": { "type": "number" }, "h": { "type": "number" } }, "required": ["tdb", "h"], "additionalProperties": false },
+        { "properties": { "kind": { "const": "h-w" }, "h": { "type": "number" }, "w": { "type": "number", "minimum": 0 } }, "required": ["h", "w"], "additionalProperties": false },
+        { "properties": { "kind": { "const": "twb-rh" }, "twb": { "type": "number" }, "rh": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 } }, "required": ["twb", "rh"], "additionalProperties": false }
+      ]
+    },
+
+    "chartSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tdbRange": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+        "humidityRatioRange": {
+          "description": "Both ends of the humidity axis, canonical lb/lb or kg/kg. The view can be panned as well as zoomed, so the bottom of the axis is not always zero and storing only the top would lose the pan.",
+          "type": "array",
+          "items": { "type": "number", "minimum": 0 },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "maxHumidityRatio": {
+          "description": "Superseded by humidityRatioRange. Still accepted on read, where it is taken as the top of an axis starting at zero.",
+          "deprecated": true,
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "projection": { "type": "string", "enum": ["rectangular", "oblique"], "default": "rectangular" },
+        "families": {
+          "description": "Which line families are drawn.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "relativeHumidity": { "type": "boolean", "default": true },
+            "wetBulb": { "type": "boolean", "default": true },
+            "enthalpy": { "type": "boolean", "default": true },
+            "specificVolume": { "type": "boolean", "default": true },
+            "dewPoint": { "type": "boolean", "default": false },
+            "protractor": { "type": "boolean", "default": false }
+          }
+        }
+      }
+    },
+
+    "comfortSettings": {
+      "description": "ASHRAE 55 inputs. Absent means no comfort overlay is drawn.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": { "type": "string", "enum": ["pmv", "adaptive"], "default": "pmv" },
+        "metabolicRate": { "type": "number", "minimum": 0.7, "maximum": 4.0, "default": 1.1 },
+        "clothingWinter": {
+          "description": "Clothing insulation for the winter zone, clo. Named rather than positional: an array of two numbers does not say which end is which, and a reader that guesses wrong swaps the two zones silently.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1.5,
+          "default": 1.0
+        },
+        "clothingSummer": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1.5,
+          "default": 0.5
+        },
+        "clothing": {
+          "description": "Superseded by clothingWinter and clothingSummer. Still accepted on read as [winter, summer].",
+          "deprecated": true,
+          "type": "array",
+          "items": { "type": "number", "minimum": 0, "maximum": 1.5 },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "adaptiveIndoor": {
+          "description": "Indoor operative temperature assessed against the adaptive model, in the project's temperature units.",
+          "type": "number"
+        },
+        "adaptivePrevailing": {
+          "description": "Prevailing mean outdoor temperature for the adaptive model, in the project's temperature units.",
+          "type": "number"
+        },
+        "airSpeed": {
+          "description": "Average air speed, m/s. Above 0.2 the still-air PMV method does not apply; the elevated-air-speed cooling effect is out of scope for v1.",
+          "type": "number",
+          "minimum": 0,
+          "default": 0.1
+        },
+        "meanRadiantTemperatureOffset": {
+          "description": "MRT minus dry bulb, in the project's temperature units. Zero means MRT tracks dry bulb.",
+          "type": "number",
+          "default": 0
+        },
+        "temperatureOffset": {
+          "description": "Horizontal shift applied to the comfort polygon. Zero in v1; reserved for the SET elevated-air-speed cooling effect so that adding it later is not a restructure.",
+          "type": "number",
+          "default": 0
+        }
+      }
+    },
+
+    "weatherSource": {
+      "description": "Which weather file was used. The EPW itself is deliberately NOT stored: it is roughly 1.5 MB of text that would dominate the project file, it is redistributable only under the source's own terms, and it is reproducible from the station identity below. On load the tool names the station and asks for the file again. Project-level, because every system reads the same year.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "station": {
+          "description": "Enough to recognise the file that was used, and to tell the user they have opened the wrong one.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "city": { "type": "string" },
+            "state": { "type": "string" },
+            "country": { "type": "string" },
+            "wmo": { "type": "string" },
+            "elevation": { "type": "number" }
+          }
+        }
+      }
+    },
+
+    "weatherView": {
+      "description": "Which hours of the weather file one system looks at. Per-system rather than shared: a heating case wants the heating months and a cooling case the cooling months, and re-picking the filter on every flip would make the second system a chore rather than a view.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["off", "scatter", "density"], "default": "off" },
+        "months": {
+          "description": "Months included, 1-12. Empty means all.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1, "maximum": 12 }
+        },
+        "hours": {
+          "description": "Hours of the day included, 0-23. Empty means all.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 23 }
+        },
+        "presetIndex": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    }
+  }
+}

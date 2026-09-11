@@ -1,0 +1,422 @@
+/**
+ * Editable parameters per stage type.
+ *
+ * This lives in the UI layer rather than on the process models so that the
+ * models stay pure calculation, with no opinion about labels, units, or widget
+ * kinds. The models already validate and produce messages that name the missing
+ * field, so the editor can render every field as optional and let the solver
+ * explain what a given stage still needs.
+ */
+import type { Stage, StageType } from '../types/project.js';
+import type { StageResult } from '../processes/types.js';
+import { MOISTURE_PARAMS } from '../processes/models/source.js';
+import type { UnitSystem } from '../psych/units.js';
+import { LABELS } from '../psych/units.js';
+
+export type FieldKind = 'number' | 'percent' | 'boolean';
+
+export interface ParamField {
+  readonly key: string;
+  readonly label: string;
+  readonly kind: FieldKind;
+  /** Which unit label to show, if any. */
+  readonly unit?:
+    | 'temperature'
+    | 'duty'
+    | 'power'
+    | 'airflow'
+    | 'moistureRate'
+    | 'humidityRatio'
+    | 'enthalpy';
+  /**
+   * How this value converts when the user switches unit systems.
+   *
+   * Defaults to the field's `unit`. Dimensionless fields (SHR, effectiveness,
+   * relative humidity) declare `'none'` and are carried across unchanged.
+   */
+  readonly convert?:
+    | 'temperature'
+    | 'temperatureDelta'
+    | 'duty'
+    | 'power'
+    | 'airflow'
+    | 'moistureRate'
+    | 'humidityRatio'
+    | 'none';
+  readonly step?: number;
+  readonly placeholder?: string;
+  /**
+   * What this field works out to when the user specified the *other* way of
+   * defining the stage.
+   *
+   * Most stages can be defined by a leaving condition or by a capacity. Once
+   * one is given, the other is determined — and showing it is the difference
+   * between a form and a calculator. It is surfaced as a **placeholder**, so an
+   * empty field still reads as "not specified" while telling you the answer.
+   *
+   * Percent fields return the stored fraction; the formatter scales it.
+   */
+  readonly derive?: (result: StageResult) => number | undefined;
+  /** Shown under the field. Keep to one short sentence. */
+  readonly help?: string;
+}
+
+export interface StageFields {
+  /** One line describing what the stage does, shown when it is selected. */
+  readonly summary: string;
+  /** How to define the stage, when there is more than one way. */
+  readonly alternatives?: string;
+  readonly fields: readonly ParamField[];
+}
+
+const TEMPERATURE = { kind: 'number', unit: 'temperature', step: 1 } as const;
+const DUTY = { kind: 'number', unit: 'duty', step: 1 } as const;
+const PERCENT = { kind: 'percent', step: 1 } as const;
+
+export const STAGE_FIELDS: Partial<Record<StageType, StageFields>> = {
+  source: {
+    summary:
+      'The starting point of the airstream. Everything downstream is solved from ' +
+      'here, so the quality of this input sets the quality of the whole analysis.',
+    alternatives: 'Give dry bulb plus any one of the other properties.',
+    fields: [
+      { key: 'tdb', label: 'Dry bulb', ...TEMPERATURE, derive: (r) => r.state.tdb },
+      { key: 'rh', label: 'Relative humidity', ...PERCENT, derive: (r) => r.state.rh },
+      { key: 'twb', label: 'Wet bulb', ...TEMPERATURE, derive: (r) => r.state.twb },
+      { key: 'tdp', label: 'Dew point', ...TEMPERATURE, derive: (r) => r.state.tdp },
+    ],
+  },
+
+  mixing: {
+    summary:
+      'Two airstreams combine with no heat added or removed. The mixed state ' +
+      'always lies on the straight line between them, positioned by mass fraction.',
+    fields: [
+      { key: 'airflow2', label: 'Second airflow', kind: 'number', unit: 'airflow', step: 50 },
+      { key: 'tdb2', label: 'Second dry bulb', ...TEMPERATURE },
+      { key: 'rh2', label: 'Second RH', ...PERCENT },
+    ],
+  },
+
+  cooling: {
+    summary:
+      'Air passes over a coil below its dew point, so moisture condenses as the ' +
+      'air cools.',
+    alternatives:
+      'Either leaving conditions, or a capacity with a sensible heat ratio — not both.',
+    fields: [
+      { key: 'tdbOut', label: 'Leaving dry bulb', ...TEMPERATURE, derive: (r) => r.state.tdb },
+      { key: 'rhOut', label: 'Leaving RH', ...PERCENT, derive: (r) => r.state.rh },
+      {
+        key: 'power',
+        label: 'Total capacity',
+        ...DUTY,
+        derive: (r) => Math.abs(r.duty.total),
+      },
+      {
+        key: 'shr',
+        label: 'Coil SHR',
+        kind: 'number',
+        step: 0.05,
+        derive: (r) => (Number.isFinite(r.duty.shr) ? r.duty.shr : undefined),
+        help: 'Fraction of the total capacity that is sensible.',
+      },
+    ],
+  },
+
+  heating: {
+    summary:
+      'A horizontal move to the right at constant humidity ratio. No moisture is ' +
+      'exchanged, so relative humidity falls as the air warms.',
+    alternatives: 'Either a leaving temperature or a capacity.',
+    fields: [
+      { key: 'tdbOut', label: 'Leaving dry bulb', ...TEMPERATURE, derive: (r) => r.state.tdb },
+      { key: 'power', label: 'Capacity', ...DUTY, derive: (r) => r.duty.total },
+    ],
+  },
+
+  'humidifier-steam': {
+    summary:
+      'Dry steam adds moisture with only a small sensible gain, so the process is ' +
+      'a near-vertical climb — near-vertical, not vertical.',
+    alternatives: 'Either a target relative humidity or a moisture rate.',
+    fields: [
+      { key: 'rhOut', label: 'Leaving RH', ...PERCENT, derive: (r) => r.state.rh },
+      {
+        key: 'moistureRate',
+        label: 'Moisture rate',
+        kind: 'number',
+        unit: 'moistureRate',
+        step: 1,
+        derive: (r) => r.moistureRate,
+      },
+    ],
+  },
+
+  'humidifier-adiabatic': {
+    summary:
+      'Water evaporates using heat from the air itself, so the state slides down ' +
+      'the constant wet-bulb line toward saturation.',
+    alternatives: 'Either an effectiveness or a target relative humidity.',
+    fields: [
+      {
+        key: 'effectiveness',
+        label: 'Effectiveness',
+        ...PERCENT,
+        help: 'Fraction of the wet-bulb depression achieved. Never above 100%.',
+      },
+      { key: 'rhOut', label: 'Leaving RH', ...PERCENT, derive: (r) => r.state.rh },
+    ],
+  },
+
+  fan: {
+    summary:
+      'Fan and motor losses enter the airstream as sensible heat. Typically 0.5–2°F, ' +
+      'and routinely forgotten — after which the space runs warm at design load.',
+    fields: [
+      {
+        key: 'power',
+        label: 'Fan power',
+        kind: 'number',
+        unit: 'power',
+        step: 0.25,
+        help: 'Shaft power. The heat added to the air is calculated from it.',
+      },
+      {
+        key: 'motorInAirstream',
+        label: 'Motor in airstream',
+        kind: 'boolean',
+        help: 'Draw-through or blow-through changes where the gain lands.',
+      },
+    ],
+  },
+
+  'recovery-wheel-sensible': {
+    summary:
+      'A rotating matrix carries heat between the supply and exhaust streams. ' +
+      'Sensible only — no moisture crosses.',
+    fields: [
+      { key: 'sensible', label: 'Sensible effectiveness', ...PERCENT },
+      { key: 'tdb3', label: 'Other stream dry bulb', ...TEMPERATURE },
+      { key: 'rh3', label: 'Other stream RH', ...PERCENT },
+      { key: 'airflow3', label: 'Other stream airflow', kind: 'number', unit: 'airflow', step: 50 },
+    ],
+  },
+
+  'recovery-wheel-enthalpy': {
+    summary:
+      'A desiccant-coated matrix carries heat and moisture. In summer it ' +
+      'pre-dries the outdoor air as well as pre-cooling it.',
+    fields: [
+      { key: 'sensible', label: 'Sensible effectiveness', ...PERCENT },
+      { key: 'latent', label: 'Latent effectiveness', ...PERCENT },
+      { key: 'tdb3', label: 'Other stream dry bulb', ...TEMPERATURE },
+      { key: 'rh3', label: 'Other stream RH', ...PERCENT },
+      { key: 'airflow3', label: 'Other stream airflow', kind: 'number', unit: 'airflow', step: 50 },
+    ],
+  },
+
+  'recovery-plate': {
+    summary:
+      'Fixed plates keep the two streams apart, so there is no cross-leakage ' +
+      'and no moisture transfer.',
+    fields: [
+      { key: 'sensible', label: 'Sensible effectiveness', ...PERCENT },
+      { key: 'tdb3', label: 'Other stream dry bulb', ...TEMPERATURE },
+      { key: 'rh3', label: 'Other stream RH', ...PERCENT },
+      { key: 'airflow3', label: 'Other stream airflow', kind: 'number', unit: 'airflow', step: 50 },
+    ],
+  },
+
+  'recovery-runaround': {
+    summary:
+      'A pumped water or glycol loop couples coils in two streams that never ' +
+      'meet — the choice where cross-contamination is unacceptable.',
+    fields: [
+      {
+        key: 'sensible',
+        label: 'Loop effectiveness',
+        ...PERCENT,
+        help: '45–65% is realistic for a two-coil loop. Count the pump energy against the benefit.',
+      },
+      { key: 'tdb3', label: 'Other stream dry bulb', ...TEMPERATURE },
+      { key: 'rh3', label: 'Other stream RH', ...PERCENT },
+      { key: 'airflow3', label: 'Other stream airflow', kind: 'number', unit: 'airflow', step: 50 },
+    ],
+  },
+
+  'recovery-wraparound-precool': {
+    summary:
+      'The upstream leg of a passive circuit. It pre-cools air before the coil, ' +
+      'so the coil can dry the air further for the same leaving temperature.',
+    alternatives: 'Either a temperature drop or a duty.',
+    fields: [
+      { key: 'deltaT', label: 'Temperature drop', kind: 'number', unit: 'temperature', step: 1, convert: 'temperatureDelta' },
+      { key: 'power', label: 'Duty', ...DUTY, derive: (r) => Math.abs(r.duty.total) },
+    ],
+  },
+
+  'recovery-wraparound-reheat': {
+    summary:
+      'The downstream leg. It returns exactly the heat the pre-cool leg removed ' +
+      '— free reheat, with no new energy — so it has nothing to configure.',
+    alternatives: 'Pair this leg with its pre-cool leg using a coupling.',
+    fields: [],
+  },
+
+  'evaporative-direct': {
+    summary:
+      'Water evaporates into the airstream, cooling it along the constant ' +
+      'wet-bulb line. The leaving dry bulb can never fall below the entering wet bulb.',
+    fields: [
+      {
+        key: 'effectiveness',
+        label: 'Saturation effectiveness',
+        ...PERCENT,
+        help: 'Fraction of the wet-bulb depression achieved. 80–90% for a rigid-media pad.',
+      },
+    ],
+  },
+
+  'evaporative-indirect': {
+    summary:
+      'A scavenger stream is evaporatively cooled and then cools the supply air ' +
+      'through a heat exchanger — so the supply air cools at constant humidity ratio.',
+    fields: [
+      { key: 'effectiveness', label: 'Exchanger effectiveness', ...PERCENT },
+      { key: 'secondaryEffectiveness', label: 'Scavenger effectiveness', ...PERCENT },
+      { key: 'tdbSecondary', label: 'Scavenger dry bulb', ...TEMPERATURE },
+      { key: 'rhSecondary', label: 'Scavenger RH', ...PERCENT },
+    ],
+  },
+
+  desiccant: {
+    summary:
+      'A sorbent removes water vapour and releases the heat of sorption into the ' +
+      'air, so it leaves drier and hotter. Modelled as an idealised constant-enthalpy path.',
+    alternatives: 'Either a leaving humidity ratio or the fraction of moisture removed.',
+    fields: [
+      {
+        key: 'wOut',
+        label: 'Leaving humidity ratio',
+        kind: 'number',
+        unit: 'humidityRatio',
+        step: 1,
+        // Held in display units, which differ by a factor of seven between
+        // systems even though the underlying ratio is dimensionless.
+        convert: 'humidityRatio',
+        help: 'The target moisture content of the leaving air.',
+      },
+      { key: 'removal', label: 'Moisture removed', ...PERCENT },
+    ],
+  },
+
+  room: {
+    summary:
+      'Supply air absorbs the space gains. The slope of this line is the room ' +
+      'sensible heat ratio, fixed by the loads rather than chosen.',
+    fields: [
+      { key: 'sensible', label: 'Sensible load', ...DUTY, derive: (r) => r.duty.sensible },
+      { key: 'latent', label: 'Latent load', ...DUTY, derive: (r) => r.duty.latent },
+    ],
+  },
+};
+
+/**
+ * Parameters that say the same thing in different terms, so a stage may carry
+ * only one of them at a time.
+ *
+ * The entering condition is the case that matters. Dry bulb is always an input;
+ * relative humidity, wet bulb and dew point are three ways of naming the *same*
+ * second property, and the state engine takes exactly one. Left to accumulate,
+ * a typed wet bulb sits in the stage next to the relative humidity it was meant
+ * to replace, the engine picks by a fixed priority, and the number the user
+ * entered is silently ignored while the field still displays it — the screen
+ * showing two different wet bulbs at once.
+ *
+ * So writing one of these clears its siblings, which turns them back into
+ * *calculated* values: the field empties, and the placeholder shows what the
+ * new input works out to.
+ */
+const EXCLUSIVE_GROUPS: Partial<Record<StageType, readonly (readonly string[])[]>> = {
+  source: [MOISTURE_PARAMS],
+};
+
+/**
+ * Write parameters onto a stage, honouring those exclusive groups.
+ *
+ * Every path that edits a stage's parameters goes through here — the field
+ * editor, the design-condition picker, and dragging a state point around the
+ * chart — because the invariant has to hold whichever one the user reached for.
+ *
+ * An `undefined` value clears its own field and nothing else: emptying the wet
+ * bulb box means "I no longer specify this", not "discard the dew point too".
+ */
+export function withParams(
+  stage: Stage,
+  changes: Readonly<Record<string, number | boolean | undefined>>,
+): Stage {
+  const params: Record<string, unknown> = { ...(stage.params ?? {}) };
+  const groups = EXCLUSIVE_GROUPS[stage.type] ?? [];
+
+  for (const [key, value] of Object.entries(changes)) {
+    if (value === undefined) {
+      delete params[key];
+      continue;
+    }
+
+    params[key] = value;
+
+    for (const group of groups) {
+      if (!group.includes(key)) continue;
+      for (const sibling of group) {
+        if (sibling !== key) delete params[sibling];
+      }
+    }
+  }
+
+  return { ...stage, params };
+}
+
+/** The unit label for a field, or an empty string when it is dimensionless. */
+export function unitLabelFor(field: ParamField, units: UnitSystem): string {
+  if (field.kind === 'percent') return '%';
+  if (!field.unit) return '';
+  return LABELS[units][field.unit];
+}
+
+/**
+ * Convert a stored parameter into what the input shows.
+ *
+ * Only percentages differ: relative humidity and effectiveness are stored as
+ * fractions and edited as percentages, for the same reason they are displayed
+ * that way everywhere else.
+ */
+export function toFieldValue(raw: unknown, field: ParamField): string {
+  if (field.kind === 'boolean') return raw === true ? 'true' : 'false';
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return '';
+  return field.kind === 'percent' ? String(Number((raw * 100).toFixed(4))) : String(raw);
+}
+
+/** Convert an edited value back to storage. Empty clears the parameter. */
+export function fromFieldValue(text: string, field: ParamField): number | undefined {
+  if (text.trim() === '') return undefined;
+  const value = Number.parseFloat(text);
+  if (!Number.isFinite(value)) return undefined;
+  return field.kind === 'percent' ? value / 100 : value;
+}
+
+
+/**
+ * Format a derived value for use as a field placeholder.
+ *
+ * Deliberately terse: it sits inside an input box, where a long string would be
+ * clipped. Percent fields are scaled here to match how they are edited.
+ */
+export function formatDerived(value: number, field: ParamField): string {
+  const shown = field.kind === 'percent' ? value * 100 : value;
+  if (!Number.isFinite(shown)) return '—';
+  const magnitude = Math.abs(shown);
+  const digits = magnitude >= 100 ? 0 : magnitude >= 10 ? 1 : 2;
+  return shown.toFixed(digits);
+}

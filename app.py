@@ -4793,58 +4793,30 @@ def _onboarding_steps(stage: str) -> List[Dict[str, object]]:
             },
         ]
     if stage == "overview":
-        metrics = [
-            ("Mean dry bulb", "Average air temperature", "Mean dry bulb is the average air temperature across your weather file. It gives you a starting point for understanding how warm or cold this location is."),
-            ("Hours >", "Count the hot hours", "This card counts hours above the temperature shown in its label. More hours above that threshold mean more frequent hot conditions."),
-            ("Mean humidity", "Understand the humidity", "Mean humidity is average relative humidity. It tells you how moist the air is compared with the moisture it could hold at that temperature."),
-            ("Mean wind", "Check the wind resource", "Mean wind is the average wind speed in metres per second. Use it as a first look at how breezy the location is; the wind rose below shows directions."),
-            ("Annual GHI", "Read the solar resource", "Annual GHI adds up solar energy reaching a horizontal surface over the weather year, in kWh per square metre. Higher values indicate a stronger solar resource."),
-            ("18-26 C hours", "Read the temperature comfort share", "This is the share of hours with air temperature between 18 and 26 degrees Celsius. It is a simple temperature screen; the thermal-stress summary below also considers other weather conditions."),
-        ]
+        # Keep this page a quick orientation; detailed explanations live in
+        # the section guides and the metric help text.
         return [
-            {
-                "selector": "#cc-tour-overview",
-                "title": "Your climate at a glance",
-                "description": "Overview summarizes your loaded station. Check the location, climate zone, and weather source here. Choose Next and we will explain each part of the page.",
-            },
-            *[
-                {"selector": ".st-key-tour_overview_metrics [data-testid='stMetric']",
-                 "match_text": label, "match_mode": "contains",
-                 "fallback_selectors": [".st-key-tour_overview_metrics"],
-                 "title": title, "description": description}
-                for label, title, description in metrics
-            ],
-            {
-                "selector": ".cc-key-takeaways", "optional": True,
-                "title": "Read the key takeaways",
-                "description": "These highlights explain the warmest and coldest months, comfortable hours, humidity, wind, and solar patterns in plain language.",
-            },
-            {
-                "selector": ".st-key-tour_overview_weather",
-                "title": "Compare weather by month",
-                "description": "Hover over this chart to compare sky cover, rainfall, humidity, and temperature across the year. The charts below give more detail on monthly temperature, humidity, and wind.",
-            },
-            {
-                "selector": ".st-key-tour_overview_seasons",
-                "title": "Compare the seasons",
-                "description": "Each seasonal card shows average temperature and the percentages of hours that are comfortable, hot, or cold using the 18–26°C temperature band.",
-            },
-            {
-                "selector": ".st-key-tour_overview_stress",
-                "title": "Understand thermal stress",
-                "description": "The Discomfort Index combines temperature and humidity. UTCI also accounts for wind and radiant temperature. These cards summarize the resulting stress categories; valid-hour coverage is shown underneath.",
-            },
-            {
-                "selector": ".st-key-tour_overview_wind", "optional": True,
-                "title": "See where the wind comes from",
-                "description": "The wind rose shows how frequently wind arrives from each direction, with colours separating wind-speed ranges. Longer sectors mean more frequent winds from that direction.",
-            },
-            {
-                "selector": ".st-key-nav_dashboard",
-                "fallback_selectors": ["#cc-tour-overview"],
-                "title": "Continue in Detail View",
-                "description": "Open Detail View in the sidebar for the individual analysis sections. That page has its own guide explaining what each section is for.",
-            },
+            {"selector": "#cc-tour-overview", "title": "Your climate at a glance",
+             "description": "Check the station, climate zone, and weather source here. This short guide covers the main sections of Overview."},
+            {"selector": ".st-key-tour_overview_metrics", "title": "Your climate snapshot",
+             "description": "Read these cards together: average temperature, hot hours, humidity, wind, annual solar energy (GHI), and hours within 18–26°C. Key Takeaways below explains the main patterns."},
+            {"selector": ".st-key-tour_overview_weather", "title": "See how the year changes",
+             "description": "Hover over Weather by Month to compare temperature, humidity, rainfall, and sky cover. The charts below and the seasonal cards show when conditions are warmer, colder, or more comfortable."},
+            {"selector": ".st-key-tour_overview_stress", "title": "Look beyond air temperature",
+             "description": "The stress cards combine weather conditions into comfort indicators. Check UTCI’s valid-hour coverage, then use the wind rose below to see the most frequent wind directions and speeds."},
+            {"selector": ".st-key-nav_dashboard", "title": "Explore, save, or choose a new location",
+             "fallback_selectors": ["#cc-tour-overview"],
+             "description": "Detail View opens the individual analyses and their guides. Report creates the full PDF. When you want another location, download your report and use Reset Session in the sidebar."},
+        ]
+    if stage == "detail:Psychrometrics":
+        return [
+            {"selector": ".st-key-psy_workspace", "title": "Choose your psychrometric workspace",
+             "description": "Interactive chart contains the HVAC process builder, comfort checks, and weather layers. Climate Strategies compares hourly weather with illustrative design regions."},
+            {"selector": ".st-key-tour_psychrometric_studio", "fallback_selectors": [".st-key-tour_psychrometric_strategies"], "optional": True,
+             "title": "Explore the psychrometric tools",
+             "description": "Edit equipment on the left, explore the chart in the middle, and open weather, comfort, results, and export controls on the right. The cooling-coil walkthrough gives a worked example. In Climate Strategies, select a few regions, compare the hourly weather, and read the assumptions below."},
+            {"selector": ".st-key-nav_export", "title": "Save the whole analysis",
+             "description": "Saved operating cases are included in Report. Save projects, CSV tables, and chart images in the export panel; the PDF download is beneath the interactive chart."},
             reset_step,
         ]
     if stage == "detail" or stage.startswith("detail:"):
@@ -4862,57 +4834,40 @@ def _onboarding_steps(stage: str) -> List[Dict[str, object]]:
         label, title, description = next((item for item in sections if item[0] == section_name), sections[0])
         scope = ".st-key-tour_detail_content"
         subtab_descriptions = {
-            "😌 Comfort Compliance & Stress": "This subtab summarizes hours within the comfort band and hours with heat or cold stress. Next explains the visible metrics, settings, and charts.",
+            "😌 Comfort Compliance & Stress": "This subtab summarizes hours within the comfort band and hours with heat or cold stress. The next steps cover summaries, settings, and charts as groups.",
             "🌡️ Degree Days & Loads": "Compare heating and cooling degree days against their base temperatures. These temperature-based indicators help compare seasonal demand; they are not building energy consumption.",
-            "Advanced Diagnostics": "These charts explore additional comfort indicators and daily patterns. Read each model's labels and data-availability notes as you step through the charts.",
+            "Advanced Diagnostics": "These charts explore additional comfort indicators and daily patterns. Read each model's labels and data-availability notes as you compare the charts.",
             "DI": "The Discomfort Index combines air temperature and relative humidity. The charts show how humid heat stress changes through the weather year.",
             "UTCI": "UTCI combines air temperature, radiant temperature, wind, and humidity to estimate outdoor thermal stress. Check valid-hour coverage and the category legend when reading these charts.",
             "PMV": "Predicted Mean Vote estimates thermal sensation using environmental conditions and the stated clothing and activity assumptions. Read those assumptions and the model's applicability notes alongside the charts.",
-            "📊 Overview": "Compare temperature and humidity through the year. Next walks through the visible chart and its controls.",
-            "🌡️ Temperature Summary": "Explore temperature by month, the spread of hourly values, and annual heatmaps. Next explains each visible chart and download control.",
-            "💧 Humidity Summary": "Explore the seasonal and hourly variation in relative humidity. Next explains the visible charts, their scales, and the available downloads.",
+            "📊 Overview": "Compare temperature and humidity through the year. Use the controls to choose what the charts show.",
+            "🌡️ Temperature Summary": "Explore temperature by month, the spread of hourly values, and annual heatmaps. Compare the charts together and hover for exact values.",
+            "💧 Humidity Summary": "Explore the seasonal and hourly variation in relative humidity. Read the scales and hover for exact values.",
         }
         return [
             {"selector": ".st-key-dashboard_section_nav label", "match_text": label,
              "fallback_selectors": [".st-key-dashboard_section_nav"],
-             "title": title, "description": description + " Choose Next to walk through this section's content.",
+             "title": title, "description": description + " Switch subtabs to explore another topic; each has a short guide.",
              "subtab_intro": True, "subtab_descriptions": subtab_descriptions},
-            {"selector": scope + " [role='tablist']", "optional": True,
-             "title": "Explore the subtabs",
-             "description": "Each subtab has its own walkthrough. Switch subtabs whenever you want; Next explains the content currently visible, and each subtab remembers your progress."},
-            {"selector": scope + " [data-testid='stMetric']", "expand": "metrics"},
-            {"selector": scope + " [data-testid='stExpander'] summary", "expand": "settings"},
-            {"selector": scope + " [data-testid='stSelectbox'], " + scope + " [data-testid='stSlider']", "expand": "controls"},
-            {"selector": scope + " [data-testid='stPlotlyChart']", "expand": "charts"},
-            {"selector": scope + " [data-testid='stDataFrame'], " + scope + " [data-testid='stTable']", "expand": "tables"},
-            {"selector": scope + " [data-testid='stDownloadButton']", "expand": "downloads"},
+            {"selector": scope + " [data-testid='stMetric']", "expand": "metrics", "group": True,
+             "title": "Read the summary together",
+             "description": "These cards summarize this analysis. Compare the labels, units, thresholds, and valid-hour coverage together before exploring the charts."},
+            {"selector": scope + " [data-testid='stExpander'] summary, " + scope + " [data-testid='stSelectbox'], " + scope + " [data-testid='stSlider']",
+             "expand": "controls", "group": True, "title": "Adjust the analysis",
+             "description": "The settings panels and controls choose the period, statistic, and model assumptions. Open only what you need; the charts update with your choices."},
+            {"selector": scope + " [data-testid='stPlotlyChart'], " + scope + " [data-testid='stDataFrame'], " + scope + " [data-testid='stTable']",
+             "expand": "charts", "group": True, "title": "Explore the charts and tables",
+             "description": "Read the axes, units, and legends, then hover for exact values. Compare seasonal patterns, extremes, and data gaps across the figures. Tables show the values behind them."},
             {"selector": ".st-key-nav_export", "fallback_selectors": [".st-key-dashboard_section_nav"],
-             "title": "Save the complete report",
-             "description": "Open Report in the sidebar to generate and download the full climate report as a PDF. You can also choose another Detail View section to continue exploring."},
-            reset_step,
+             "title": "Save or continue exploring",
+             "description": "Use downloads beside a chart for individual files, or Report for the complete PDF. Choose another Detail section to continue. Reset Session starts a new location after you save your work."},
         ]
     if stage == "report":
         return [
-            {
-                "selector": "#cc-tour-report",
-                "title": "Take your climate analysis with you",
-                "description": "This is the Reporting Center. Generate the full climate report as one PDF for your loaded location, then download it to keep or share.",
-            },
-            {
-                "selector": ".st-key-tour_report_options",
-                "title": "Set up the report",
-                "description": "Enter a report title, choose the PDF page size, and select the branding options. Changing these settings clears an older download so the next PDF uses your new choices.",
-            },
-            {
-                "selector": ".st-key-generate_full_pdf_report",
-                "title": "Generate the full PDF",
-                "description": "Click Generate Full PDF Report to compile the climate report. Wait while the charts and captions are prepared; then the download button appears below.",
-            },
-            {
-                "selector": ".st-key-tour_report_download",
-                "title": "Download and keep the PDF",
-                "description": "After generation finishes, click Download PDF Report here to save the complete report as one file. If an error is shown, resolve it and generate the report again.",
-            },
+            {"selector": "#cc-tour-report", "title": "Save your climate report",
+             "description": "Create one PDF with the climate summary, charts, data notes, and saved psychrometric cases. BEVL and UB logos are included. Optional settings let you change the title or page size."},
+            {"selector": ".st-key-generate_full_pdf_report", "title": "Generate, then download",
+             "description": "Click Generate Full PDF Report. When preparation finishes, Download PDF Report appears below. You can return here to rebuild after changing the analysis."},
             reset_step,
         ]
     return []
@@ -6520,7 +6475,7 @@ def _pdf_is_large_page(pdf: FPDF) -> bool:
 
 def _pdf_logo_paths() -> Tuple[Path, Path]:
     base = Path(__file__).parent / "assets"
-    return base / "bevl_framework.png", base / "ub_framework.png"
+    return base / "1.png", base / "2.png"
 
 
 def _png_dimensions(path: Path) -> Optional[Tuple[int, int]]:
@@ -6558,8 +6513,8 @@ class ClimateReportPDF(FPDF):
         self.current_section = ""
         self.page_choice = page_choice
         self.report_title = str(st.session_state.get("export_report_title") or "Climate Analysis Report").strip()
-        self.include_branding = bool(st.session_state.get("export_include_branding", True))
-        self.white_label = bool(st.session_state.get("export_white_label", False))
+        self.include_branding = True
+        self.white_label = False
 
     def header(self):
         # Skip header on cover page
@@ -6607,7 +6562,7 @@ class ClimateReportPDF(FPDF):
         right_w = content_w - left_w - center_w
         logo_drawn = False
         if self.include_branding and not self.white_label:
-            logo_h = 5.4
+            logo_h = 7.0
             logo_y = self.h - 11.4
             logo_x = margin
             logo_limit = margin + left_w - 2
@@ -7289,7 +7244,7 @@ def _figure_caption_text(clean_title: str, raw_key: str, section_name: str) -> s
         "cloud_coverage": "Monthly sky-cover frequencies show the balance among clear, intermediate, and cloudy conditions. The stacked composition is more important than any single monthly total.",
         "cloud_coverage_scatter": "Hourly sky-cover points show how cloudiness varies within each month and hour. The smoothed overlay helps separate recurring daily structure from noisy weather events.",
         "cloud_coverage_heatmap": "Total sky cover is mapped by day and hour to reveal cloudy periods that may suppress solar gain, daylight availability, and passive heating potential.",
-        "psychrometric_chart": "Hourly outdoor states are plotted in psychrometric space with comfort and strategy overlays. Dense clusters indicate dominant climate states; outlying arms show seasonal extremes.",
+        "psychrometric_chart": "Hourly outdoor states are plotted using ASHRAE moist-air equations at the stated chart pressure. Shaded regions are illustrative screening aids, not predicted comfort or savings. Dense clusters indicate frequent conditions. Strategy regions can overlap.",
         "annual_wind_rose": "Wind-rose sectors show prevailing direction and speed-class frequency. Read the longest sectors first, then compare color distribution to understand whether wind is frequent, strong, or diffuse.",
         "monthly_wind_speed": "Monthly bars show mean wind speed by calendar month. Compare seasonal peaks against ventilation and exposure needs before relying on wind as a passive resource.",
         "wind_speed_frequency_distribution": "The histogram shows how often each wind-speed class occurs, with the fitted curve summarizing the annual distribution. A right-shifted tail indicates stronger exposure and greater outdoor comfort sensitivity.",
@@ -7875,61 +7830,14 @@ def _build_additional_pdf_figures(cdf: Optional[pd.DataFrame]) -> Dict[str, obje
                 p_col = get_metric_column(df, ["atmos_pressure", "pressure", "barometric"])
                 if p_col:
                     p_med = pd.to_numeric(df[p_col], errors="coerce").dropna().median()
-                    if pd.notna(p_med) and p_med > 20000:
+                    if pd.notna(p_med) and 30000 <= p_med <= 120000:
                         pressure_kpa = float(p_med) / 1000.0
-                sat_kpa = 0.61078 * np.exp((17.2694 * ps["temp"]) / (ps["temp"] + 237.3))
-                vapor_kpa = (ps["rh"].clip(0, 100) / 100.0) * sat_kpa
-                ps["humidity_ratio"] = (0.621945 * vapor_kpa / (pressure_kpa - vapor_kpa)).clip(lower=0, upper=0.035) * 1000.0
-                ps["temp_display"] = _display_temp_values(ps["temp"])
-
-                def _display_temp_list(values: List[float]) -> List[float]:
-                    return [convert_threshold_for_display(v) for v in values]
-
-                fig_psy = go.Figure()
-                overlays = [
-                    ("Solar gain", [10, 20, 20, 10], [3, 3, 9, 9], "#facc15"),
-                    ("Thermal mass", [20, 34, 34, 20], [3, 3, 10, 10], "#a78bfa"),
-                    ("Natural ventilation", [18, 30, 30, 18], [4, 4, 14, 14], "#34d399"),
-                    ("Evaporative cooling", [28, 40, 40, 28], [4, 4, 12, 12], "#60a5fa"),
-                    ("ASHRAE comfort zone", [20, 27, 27, 20], [4, 4, 12, 12], "#f8fafc"),
-                ]
-                for name, xs, ys, color in overlays:
-                    xs_display = _display_temp_list(xs)
-                    fig_psy.add_trace(
-                        go.Scatter(
-                            x=xs_display + [xs_display[0]],
-                            y=ys + [ys[0]],
-                            mode="lines",
-                            fill="toself",
-                            name=name,
-                            line=dict(color=color, width=1.4),
-                            fillcolor=color,
-                            opacity=0.16 if name != "ASHRAE comfort zone" else 0.24,
-                        )
-                    )
-                fig_psy.add_trace(
-                    go.Scatter(
-                        x=ps["temp_display"],
-                        y=ps["humidity_ratio"],
-                        mode="markers",
-                        name="Hourly outdoor state",
-                        marker=dict(
-                            size=3,
-                            color=ps["month"],
-                            colorscale="Turbo",
-                            opacity=0.38,
-                            colorbar=dict(title="Month"),
-                        ),
-                    )
-                )
-                fig_psy.update_layout(
-                    title="Psychrometric Chart",
-                    xaxis_title=f"Dry-bulb temperature ({temp_unit})",
-                    yaxis_title="Humidity ratio (g/kg dry air)",
-                    height=720,
-                    legend=dict(orientation="h", y=-0.18),
-                )
-                extra["Psychrometric Chart"] = fig_psy
+                hourly = ps.rename(columns={"temp": "drybulb", "rh": "relhum"})
+                points = psh.prepare_hourly(hourly, pressure_kpa)
+                if not points.empty:
+                    zones, _ = psh.strategy_screening(points, pressure_kpa, 20.)
+                    extra["Psychrometric Chart"] = psh.strategy_figure(
+                        points, pressure_kpa, zones, ["Reference band", "High Thermal Mass"])
 
         # Required wind figures, with explicit all-zero placeholder.
         wind = _clean_col(w_col, "wind")
@@ -9641,8 +9549,14 @@ def build_cover_page(pdf: ClimateReportPDF, location_label: str, source: str, lo
     pdf.set_line_width(0.25)
     pdf.line(x0 - 2, pdf.h - (84 if large_page else 65), min(pdf.w - x0, x0 + content_w), pdf.h - (84 if large_page else 65))
 
-    include_branding = bool(st.session_state.get("export_include_branding", True))
-    white_label = bool(st.session_state.get("export_white_label", False))
+    include_branding = True
+    white_label = False
+    logo_x = x0
+    for logo_path in _pdf_logo_paths():
+        if logo_path.exists():
+            logo_w = _pdf_image_width_for_height(logo_path, 12, 44)
+            pdf.image(str(logo_path), x=logo_x, y=14, w=logo_w, h=12)
+            logo_x += logo_w + 7
     report_title = str(st.session_state.get("export_report_title") or "Climate Analysis Report").strip()
     if white_label:
         eyebrow = "TECHNICAL CLIMATE REPORT"
@@ -10171,6 +10085,9 @@ def build_climate_pdf() -> bytes:
     if y + 40 > pdf.h - 22:
         y = _add_glossary_page(with_heading=False)
     y = _render_glossary_entry(disclaimer_item[0], disclaimer_item[1], y)
+
+    from psychrometric_studio import append_report_pages, current_report_cases
+    figure_count += append_report_pages(pdf, current_report_cases())
 
     out = pdf.output(dest="S")
 
@@ -10846,35 +10763,35 @@ def render_overview_page():
 
         if "drybulb" in cdf:
             temp = pd.to_numeric(cdf["drybulb"], errors="coerce")
-            metric_cols[0].metric("Mean dry bulb", format_temperature(temp.mean()))
+            metric_cols[0].metric("Mean dry bulb", format_temperature(temp.mean()), help="Average dry-bulb air temperature across the weather file.")
             hot_hours = int((temp > focus_threshold).sum())
-            metric_cols[1].metric(f"Hours > {format_temperature(focus_threshold, digits=0)}", f"{hot_hours:,} h")
+            metric_cols[1].metric(f"Hours > {format_temperature(focus_threshold, digits=0)}", f"{hot_hours:,} h", help="Number of hours warmer than the threshold in this label.")
         else:
             metric_cols[0].metric("Mean dry bulb", "--")
             metric_cols[1].metric("Hot hours", "--")
 
         if "relhum" in cdf:
             rh = pd.to_numeric(cdf["relhum"], errors="coerce")
-            metric_cols[2].metric("Mean humidity", f"{rh.mean():.0f} %")
+            metric_cols[2].metric("Mean humidity", f"{rh.mean():.0f} %", help="Average relative humidity: moisture in the air relative to saturation at its temperature.")
         else:
             metric_cols[2].metric("Mean humidity", "--")
 
         if "windspd" in cdf:
             wind = pd.to_numeric(cdf["windspd"], errors="coerce")
-            metric_cols[3].metric("Mean wind", f"{wind.mean():.1f} m/s")
+            metric_cols[3].metric("Mean wind", f"{wind.mean():.1f} m/s", help="Average wind speed. The wind rose shows how directions and speeds vary.")
         else:
             metric_cols[3].metric("Mean wind", "--")
 
         if "glohorrad" in cdf:
             ghi = pd.to_numeric(cdf["glohorrad"], errors="coerce").clip(lower=0)
-            metric_cols[4].metric("Annual GHI", f"{ghi.sum() / 1000:.0f} kWh/m2")
+            metric_cols[4].metric("Annual GHI", f"{ghi.sum() / 1000:.0f} kWh/m2", help="Annual solar energy received by a horizontal surface (Global Horizontal Irradiance).")
         else:
             metric_cols[4].metric("Annual GHI", "--")
 
         if "drybulb" in cdf:
             comfort_temp = pd.to_numeric(cdf["drybulb"], errors="coerce")
             comfort_share = ((comfort_temp >= 18) & (comfort_temp <= 26)).mean() * 100
-            metric_cols[5].metric("18-26 C hours", f"{comfort_share:.0f} %")
+            metric_cols[5].metric("18-26 C hours", f"{comfort_share:.0f} %", help="Share of hours with air temperature between 18 and 26°C; a temperature-only screen.")
         else:
             metric_cols[5].metric("18-26 C hours", "--")
 
@@ -11541,130 +11458,44 @@ def render_raw_data_workspace_page():
 def render_export_page():
     cdf = st.session_state.get("cdf")
     header = st.session_state.get("header")
-    has_data = cdf is not None and header is not None
-    captured_figures = _merged_pdf_figures()
+    has_data = cdf is not None and not cdf.empty and bool(header)
+    st.markdown("<section class='cc-page-intro' id='cc-tour-report'><h1>Climate Report</h1></section>", unsafe_allow_html=True)
+    st.write("Download your climate summary, analysis charts, data notes, and saved psychrometric cases in one PDF.")
+    st.caption("BEVL and University at Buffalo logos are included.")
 
-    st.markdown(
-        """
-        <section class="cc-page-intro" id="cc-tour-report">
-            <p class="cc-eyebrow">Report</p>
-            <h1>Reporting Center</h1>
-        </section>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    left, right = st.columns([1.25, 1])
-    with left:
-        st.markdown(
-            """
-            <section class="cc-panel cc-export-panel">
-                <div class="cc-panel-head">
-                    <h3>Full Climate Report</h3>
-                    <p>Generate one PDF with the climate summary, analysis charts, data notes, and glossary. Report charts are included even if you have not opened every analysis section.</p>
-                </div>
-            </section>
-            """,
-            unsafe_allow_html=True,
-        )
-        with st.container(key="tour_report_options"):
+    with st.container(key="tour_report_options"):
+        with st.expander("Report settings", expanded=False):
             st.text_input("Report title", value=st.session_state.get("export_report_title", "Climate Analysis Report"), key="export_report_title")
-            page_size_options = ["A4 Landscape", "A4 Portrait", "A3 Landscape", "A2 Landscape"]
-            st.selectbox(
-                "PDF page size",
-                options=page_size_options,
-                index=page_size_options.index(_pdf_page_choice()),
-                key="export_pdf_page_size",
-                help="A4 landscape keeps report text readable while giving charts a wider frame.",
-            )
-            st.toggle("Include research branding", value=st.session_state.get("export_include_branding", True), key="export_include_branding")
-            st.toggle("Presentation / white-label mode", value=st.session_state.get("export_white_label", False), key="export_white_label")
+            sizes = ["A4 Landscape", "A4 Portrait", "A3 Landscape", "A2 Landscape"]
+            st.selectbox("PDF page size", sizes, index=sizes.index(_pdf_page_choice()), key="export_pdf_page_size")
 
-        export_options_sig = "|".join([
-            str(st.session_state.get("export_report_title", "")),
-            str(st.session_state.get("export_pdf_page_size", "")),
-            str(st.session_state.get("export_include_branding", True)),
-            str(st.session_state.get("export_white_label", False)),
-        ])
-        if st.session_state.get("_export_options_sig") != export_options_sig:
-            st.session_state["_export_options_sig"] = export_options_sig
-            st.session_state["pdf_download_bytes"] = None
-            st.session_state["pdf_download_name"] = None
-            st.session_state["pdf_download_error"] = None
-            st.session_state["pdf_download_figure_count"] = None
+    signature = (st.session_state.get("export_report_title", ""), st.session_state.get("export_pdf_page_size", ""), "report-v3")
+    if st.session_state.get("_export_options_sig") != signature:
+        st.session_state["_export_options_sig"] = signature
+        for key in ["pdf_download_bytes", "pdf_download_name", "pdf_download_error", "pdf_download_figure_count"]:
+            st.session_state[key] = None
 
-        if st.button("Generate Full PDF Report", key="generate_full_pdf_report", type="primary", use_container_width=True, disabled=not has_data):
-            try:
-                with st.spinner("Preparing PDF report..."):
-                    pdf_bytes = build_climate_pdf()
-                loc_name = _safe_location_label(st.session_state.get("header") or {})
-                safe_name = str(loc_name).replace(" ", "_").replace(",", "")
-                st.session_state["pdf_download_bytes"] = pdf_bytes
-                st.session_state["pdf_download_name"] = f"{safe_name}_Report.pdf"
-                st.session_state["pdf_download_error"] = None
-                st.session_state["pdf_dashboard_autobuild_pending"] = False
-            except Exception as exc:
-                st.session_state["pdf_download_bytes"] = None
-                st.session_state["pdf_download_name"] = None
-                st.session_state["pdf_download_error"] = f"PDF generation failed: {exc}"
-                st.session_state["pdf_download_figure_count"] = None
+    if not has_data:
+        st.info("Load a weather file to create your report.")
+    if st.button("Generate Full PDF Report", key="generate_full_pdf_report", type="primary", use_container_width=True, disabled=not has_data):
+        try:
+            with st.spinner("Preparing your climate report..."):
+                pdf_bytes = build_climate_pdf()
+            safe_name = _safe_location_label(header).replace(" ", "_").replace(",", "")
+            st.session_state.update(pdf_download_bytes=pdf_bytes, pdf_download_name=f"{safe_name}_Report.pdf",
+                                    pdf_download_error=None, pdf_dashboard_autobuild_pending=False)
+        except Exception as exc:
+            st.session_state.update(pdf_download_bytes=None, pdf_download_name=None,
+                                    pdf_download_error=f"PDF generation failed: {exc}", pdf_download_figure_count=None)
 
-        with st.container(key="tour_report_download"):
-            pdf_error = st.session_state.get("pdf_download_error")
-            pdf_bytes_ready = st.session_state.get("pdf_download_bytes")
-            pdf_name_ready = st.session_state.get("pdf_download_name")
-            if pdf_bytes_ready and pdf_name_ready:
-                st.download_button(
-                    label="Download PDF Report",
-                    data=pdf_bytes_ready,
-                    file_name=pdf_name_ready,
-                    mime="application/pdf",
-                    use_container_width=True,
-                )
-                figure_count = st.session_state.get("pdf_download_figure_count")
-                st.success(f"PDF ready with {figure_count} visualization(s)." if figure_count is not None else "PDF ready to download.")
-            elif pdf_error:
-                st.error(pdf_error)
-            elif has_data:
-                st.caption("Generate the report to capture the complete chart set.")
-            else:
-                st.info("Load a weather file before exporting reports.")
-
-    with right:
-        st.markdown(
-            f"""
-            <section class="cc-panel">
-                <div class="cc-panel-head">
-                    <h3>Chart Export Status</h3>
-                    <p>{len(captured_figures)} Plotly figure(s) currently captured for reporting.</p>
-                </div>
-            </section>
-            """,
-            unsafe_allow_html=True,
-        )
-        if captured_figures:
-            for title in list(captured_figures.keys())[:10]:
-                st.caption(f"- {format_figure_title(title)}")
-            if len(captured_figures) > 10:
-                st.caption(f"- {len(captured_figures) - 10} more captured figure(s)")
-        else:
-            st.caption("Visit analysis sections or generate a full report to capture figures.")
-        debug_missing_cols = st.session_state.get("debug_missing_cols", {})
-        if debug_missing_cols:
-            with st.expander("Column alias debug", expanded=False):
-                for alias_group, columns in debug_missing_cols.items():
-                    st.caption(f"{alias_group}: get_metric_column could not match the current aliases.")
-                    st.code("\n".join(map(str, columns)), language="text")
-
-        st.markdown(
-            """
-            <div class="cc-export-note">
-                <strong>Per-chart exports</strong>
-                <span>SVG, HTML, and CSV actions stay inside each chart panel so exported artifacts remain tied to their context.</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    with st.container(key="tour_report_download"):
+        pdf_bytes = st.session_state.get("pdf_download_bytes")
+        if pdf_bytes:
+            st.download_button("Download PDF Report", pdf_bytes, st.session_state["pdf_download_name"],
+                               "application/pdf", use_container_width=True)
+            st.caption("Your report is ready.")
+        elif st.session_state.get("pdf_download_error"):
+            st.error(st.session_state["pdf_download_error"])
 
 
 # ========== MAIN TABS WITH IMPROVED ORGANIZATION ==========
@@ -16102,7 +15933,7 @@ def build_fig_g_seasonal_psychrometric(df, utci_baseline, station_name):
             marker=dict(size=2, opacity=0.3, color=utci_baseline[mask], colorscale='RdYlBu_r', cmin=9, cmax=32, showscale=(r==1 and c==1)),
             name=name
         ), row=r, col=c)
-        fig.add_trace(go.Scatter(x=ashrae_x, y=ashrae_y, mode='lines', line=dict(color='black', dash='dash'), name='ASHRAE', showlegend=False), row=r, col=c)
+        fig.add_trace(go.Scatter(x=ashrae_x, y=ashrae_y, mode='lines', line=dict(color='black', dash='dash'), name='Illustrative reference band', showlegend=False), row=r, col=c)
 
     fig.update_layout(height=600, margin=dict(l=40, r=40, t=60, b=40), showlegend=False)
     fig.update_xaxes(title_text="Dry-Bulb (°C)", row=2)
@@ -16112,7 +15943,7 @@ def build_fig_g_seasonal_psychrometric(df, utci_baseline, station_name):
     comfort_mask = (utci_baseline > 9) & (utci_baseline < 26)
     summer_comfort_pct = round((comfort_mask & summer_mask).sum() / summer_mask.sum() * 100, 1) if summer_mask.sum() > 0 else 0
     
-    caption_template = "Seasonal psychrometric scatter plots show the joint distribution of dry-bulb temperature and humidity ratio for all hours in each season, with the ASHRAE comfort zone overlaid and points colored by UTCI thermal stress category. For {station}, {summer_comfort_pct}% of summer hours fall within the comfort zone before conditioning — with winter points concentrated below 0°C — confirming heating as the dominant seasonal mechanical load."
+    caption_template = "Seasonal psychrometric scatter plots show the joint distribution of dry-bulb temperature and humidity ratio for all hours in each season, with an illustrative 18-26 C / 4-12 g/kg reference band overlaid and points colored by UTCI thermal stress category. For {station}, {summer_comfort_pct}% of summer hours fall in the UTCI 9-26 C band. This outdoor stress measure is separate from the rectangular reference band and does not predict building loads."
     caption = safe_format_caption(caption_template, {"station": station_name, "summer_comfort_pct": summer_comfort_pct})
     
     return fig, caption
@@ -16160,14 +15991,14 @@ def build_fig_h_hourly_psychrometric_paths(df, station_name):
 
     ashrae_x = [18, 26, 26, 18, 18]
     ashrae_y = [4, 4, 12, 12, 4]
-    fig.add_trace(go.Scatter(x=ashrae_x, y=ashrae_y, mode='lines', line=dict(color='black', dash='dash'), name='Comfort Zone'))
+    fig.add_trace(go.Scatter(x=ashrae_x, y=ashrae_y, mode='lines', line=dict(color='black', dash='dash'), name='Illustrative reference band'))
     
     fig.update_layout(title="Monthly Mean 24-Hour Psychrometric Paths", xaxis_title="Dry-Bulb (°C)", yaxis_title="Humidity Ratio (g/kg)", height=600)
     
     comfort_months_str = ", ".join(comfort_months_list) if comfort_months_list else "no"
     comfort_hours = "09:00–17:00"
     
-    caption_template = "Monthly mean 24-hour psychrometric paths trace the typical daily cycle of temperature and humidity for each calendar month, with arrowheads at 14:00 showing the direction of the daily loop. For {station}, {comfort_months} paths pass through the comfort zone near midday, with the natural ventilation opportunity window open approximately {comfort_hours} — the primary passive cooling scheduling target."
+    caption_template = "Monthly mean 24-hour psychrometric paths trace the typical daily cycle of temperature and humidity for each calendar month, with arrowheads at 14:00 showing the direction of the daily loop. For {station}, the 14:00 monthly mean lies inside the illustrative 18-26 C / 4-12 g/kg band in {comfort_months} months. Monthly mean paths do not establish an hourly ventilation schedule."
     caption = safe_format_caption(caption_template, {"station": station_name, "comfort_months": comfort_months_str, "comfort_hours": comfort_hours})
     
     return fig, caption
@@ -16250,815 +16081,107 @@ def build_fig_k_diurnal_comfort_humidity(df, utci_dict, station_name):
     return fig, cap
 
 
-@st.fragment
 def render_psychrometrics_interactive_section(
-    dfp: pd.DataFrame,
-    P_kPa: float,
-    location_label: str,
-    active_ds: str,
-    overlay_mode: str,
-    mean_outdoor_t: float,
-    auto_zoom: bool,
-    show_rh: bool,
-    show_enthalpy: bool,
-    show_volume: bool,
-    show_wetbulb: bool
+    dfp, P_kPa, location_label, active_ds=None, overlay_mode=None,
+    mean_outdoor_t=20., auto_zoom=True, show_rh=True, show_enthalpy=False,
+    show_volume=False, show_wetbulb=False,
 ):
-    from matplotlib.path import Path
+    points = psh.prepare_hourly(dfp, P_kPa)
+    if points.empty:
+        st.info("No valid temperature and humidity records in this period.")
+        return
+    zones, masks = psh.strategy_screening(points, P_kPa, mean_outdoor_t)
+    labels = list(zones)
+    selected = st.multiselect("Show strategy regions", labels, default=["Reference band", "High Thermal Mass"],
+                              key="psy_selected_regions_v2", help="Choose a few regions to compare. Their areas may overlap.")
+    cols = st.columns(3)
+    cols[0].metric("Valid weather hours", f"{len(points):,}")
+    reference_hours = int(masks["Reference band"].sum())
+    cols[1].metric("Within reference band", f"{100*reference_hours/len(points):.1f}%",
+                   help="Outdoor points within the illustrated temperature and humidity band; this is not an indoor comfort assessment.")
+    union = np.zeros(len(points), dtype=bool)
+    for name in selected:
+        union |= masks[name]
+    cols[2].metric("Within selected regions", f"{100*union.sum()/len(points):.1f}%",
+                   help="Each weather hour is counted once, even where selected regions overlap. This is not predicted comfortable time or energy savings.")
 
-    T_pts = dfp["drybulb"].to_numpy(float)
-    RH_pts = dfp["relhum"].to_numpy(float)
-    Pv_pts = (RH_pts / 100.0) * psh.p_ws_kPa(T_pts)
-    w_pts = psh.w_from_Pv_kPa(Pv_pts, P_kPa)
-    Y_gpkg = psh.gpkg(w_pts)
-    pts = np.column_stack([T_pts, Y_gpkg])
-    dp_pts = psh.dew_point_C(T_pts, RH_pts)
-    tw_pts = psh.wet_bulb_C(T_pts, RH_pts)
-    h_pts = psh.enthalpy_kJkg(T_pts, w_pts)
-    # Unified strategy zones (16 design strategies)
-    all_zones = psh.get_all_strategy_zones(P_kPa, mean_outdoor_t)
-    centroids = psh.compute_centroids(all_zones)
-    strategy_polygons = {info["name"]: info["polygon"] for info in all_zones.values()}
+    fig = psh.strategy_figure(points, P_kPa, zones, selected, fit=auto_zoom,
+                              show_rh=show_rh, show_enthalpy=show_enthalpy,
+                              show_volume=show_volume, show_wetbulb=show_wetbulb)
+    _st_plotly_chart(fig, use_container_width=True, theme=None, config={"displaylogo": False})
+    st.caption(f"{location_label} · {P_kPa:.2f} kPa chart pressure · humidity ratio in g/kg of dry air. Hover over a point for its properties.")
+    excluded = len(dfp) - len(points)
+    if excluded:
+        st.caption(f"Excluded {excluded:,} missing or invalid temperature/humidity records.")
+    st.caption("Strategy regions are illustrative screening aids. Region membership does not establish comfort, achievable savings, or equipment performance.")
 
-    total_hrs = len(T_pts)
-    v_pts = psh.specific_vol(T_pts, w_pts, P_kPa)
+    stats = pd.DataFrame([{"Region": name, "Hours": int(masks[name].sum()),
+                           "% of valid hours": round(100*masks[name].mean(), 1)} for name in labels])
+    with st.expander("Strategy results and assumptions", expanded=False):
+        st.dataframe(stats, hide_index=True, use_container_width=True)
+        st.write("Regions can overlap, so their percentages should not be added. Shading, thermal mass, night flushing, and ventilation also depend on solar exposure, night temperatures, airflow, and the building design; these polygons do not model those effects.")
+        st.write(f"The reference temperature band is 0.31 × {mean_outdoor_t:.1f} + 17.8 ± 3.5 °C. The 4–12 g/kg humidity bounds are separate screening assumptions. Applying this band to outdoor dry-bulb values is not an ASHRAE 55 compliance check.")
+        st.write("Use Interactive chart for HVAC processes and comfort models with explicit activity, clothing, air-speed, and radiant-temperature inputs.")
+        st.markdown("Properties use [ASHRAE equations documented by PsychroLib](https://psychrometrics.github.io/psychrolib/api_docs.html): saturation over ice/water, pressure-aware wet bulb, W = 0.621945 Pv/(P − Pv), and h = 1.006 T + W(2501 + 1.86 T).")
 
-    # ── Climate Consultant color palette for the 16 strategies ──
-    cc_colors = {
-        "Comfort": "#0000ff",
-        "Sun Shading of Windows": "#ff0000",
-        "High Thermal Mass": "#ff9900",
-        "High Thermal Mass Night Flushed": "#ff7a00",
-        "Direct Evaporative Cooling": "#0066ff",
-        "Two-Stage Evaporative Cooling": "#0033cc",
-        "Adaptive Comfort Ventilation": "#008000",
-        "Fan-Forced Ventilation Cooling": "#00a000",
-        "Internal Heat Gain": "#cc6600",
-        "Passive Solar Direct Gain Low Mass": "#ff00ff",
-        "Passive Solar Direct Gain High Mass": "#9900ff",
-        "Wind Protection of Outdoor Spaces": "#555500",
-        "Humidification Only": "#00cccc",
-        "Dehumidification Only": "#00a6ff",
-        "Cooling, add Dehumidification if needed": "#ff0000",
-        "Heating, add Humidification if needed": "#ff0000",
-    }
-
-    # ── Compute hours/pct for each zone ──
-    zone_stats = {}
-    for zid, info in all_zones.items():
-        verts = info["polygon"]
-        poly_path = Path(verts + [verts[0]])
-        inside = poly_path.contains_points(pts)
-        hrs = int(inside.sum())
-        pct = (hrs / total_hrs * 100) if total_hrs > 0 else 0
-        zone_stats[zid] = {"name": info["name"], "hrs": hrs, "pct": pct, "color": info["color"]}
-
-    # ── Strategy toggle checkboxes via session state ──
-    # Initialize all strategies as ON
-    for zid in all_zones:
-        key = f"psy_strat_{zid}"
-        st.session_state.setdefault(key, True)
-
-    # Also track comfort zone
-    st.session_state.setdefault("psy_strat_comfort", True)
-
-    # ── CSS for Climate Consultant-style layout ──
-    st.markdown(
-        """
-        <style>
-        /* Professional, minimal styling - Climate Consultant inspired */
-        .cc-psy-topbar {
-            display: grid;
-            grid-template-columns: 1.1fr 1.9fr;
-            gap: 0.75rem;
-            align-items: end;
-            padding: 0.4rem 0.6rem 0.45rem;
-            margin: 0.2rem 0 0.45rem;
-            background: #f5f5f5;
-            border: 2px solid #9ca3af;
-            border-bottom-color: #555;
-            color: #111827;
-            font-family: Arial, Helvetica, sans-serif;
-        }
-        .cc-psy-top-title {
-            font-size: 0.82rem;
-            font-weight: 900;
-            letter-spacing: 0.03em;
-            line-height: 1.1;
-        }
-        .cc-psy-top-title span {
-            display: block;
-            font-size: 0.78rem;
-            letter-spacing: 0;
-        }
-        .cc-psy-top-meta {
-            display: grid;
-            grid-template-columns: auto 1fr;
-            gap: 0.15rem 0.45rem;
-            font-size: 0.68rem;
-            line-height: 1.2;
-        }
-        .cc-psy-top-meta strong {
-            font-weight: 900;
-        }
-        .cc-psy-panel-title {
-            text-align: center;
-            font-size: 0.86rem;
-            font-weight: 900;
-            letter-spacing: 0.28em;
-            color: #111827;
-            margin: 0.15rem 0 0.45rem;
-        }
-        .cc-psy-legend-box {
-            border: 1px solid #b9b9b9;
-            background: #fbfbfb;
-            padding: 0.5rem 0.6rem;
-            margin-bottom: 0.85rem;
-            text-align: center;
-            font-size: 0.68rem;
-            color: #111827;
-        }
-        .cc-psy-legend-box strong {
-            display: block;
-            margin-bottom: 0.2rem;
-            font-weight: 900;
-            letter-spacing: 0.02em;
-        }
-        .cc-psy-swatch-row {
-            display: grid;
-            grid-template-columns: 2.6rem 0.8rem 1fr;
-            align-items: center;
-            gap: 0.25rem;
-            max-width: 12rem;
-            margin: 0.04rem auto;
-            text-align: left;
-        }
-        .cc-psy-swatch {
-            width: 0.62rem;
-            height: 0.62rem;
-            display: inline-block;
-            border: 1px solid rgba(0,0,0,0.25);
-        }
-        .cc-psy-form-label {
-            margin: 0.5rem 0 0.15rem;
-            font-size: 0.68rem;
-            font-weight: 800;
-            color: #111827;
-        }
-        .cc-psy-legend-item {
-            display: flex;
-            align-items: center;
-            gap: 0.4rem;
-            font-size: 0.72rem;
-            line-height: 1.4;
-            padding: 0.15rem 0;
-            cursor: pointer;
-            transition: opacity 0.2s;
-        }
-        .cc-psy-legend-item:hover {
-            opacity: 0.8;
-        }
-        .cc-psy-legend-pct {
-            font-weight: 700;
-            min-width: 3.2rem;
-            text-align: right;
-        }
-        .cc-psy-legend-num {
-            font-weight: 700;
-            min-width: 1.2rem;
-        }
-        .cc-psy-legend-name {
-            font-weight: 600;
-        }
-        .cc-psy-legend-hrs {
-            color: #6b7280;
-            font-weight: 400;
-        }
-        .cc-psy-comfortable-summary {
-            font-size: 0.78rem;
-            font-weight: 600;
-            color: #1e293b;
-            padding: 0.5rem 0;
-            border-top: 1px solid #e5e7eb;
-            margin-top: 0.4rem;
-        }
-        .cc-psy-click-hint {
-            font-size: 0.72rem;
-            font-weight: 600;
-            color: #6b7280;
-            text-align: center;
-            padding: 0.6rem 0;
-            border-top: 1px solid #e5e7eb;
-            margin-top: 0.25rem;
-        }
-        div[data-testid="stVerticalBlockBorder"] {
-            background: #ffffff !important;
-            border: 1px solid #d1d5db !important;
-            border-radius: 6px !important;
-            padding: 1rem !important;
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
-        }
-        .stCheckbox {
-            margin: 0.1rem 0 !important;
-        }
-        .stCheckbox > label {
-            padding-top: 0px !important;
-            padding-bottom: 0px !important;
-        }
-        .stCheckbox > label p {
-            color: #374151 !important;
-            font-size: 0.75rem !important;
-            font-weight: 500 !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
-    start_month = pd.to_datetime(dfp.index[0]).strftime('%B').upper() if len(dfp) > 0 else "JANUARY"
-    end_month = pd.to_datetime(dfp.index[-1]).strftime('%B').upper() if len(dfp) > 0 else "DECEMBER"
-    cz_verts = psh._comfort_zone(mean_outdoor_t)
-    cz_path = Path(cz_verts + [cz_verts[0]])
-    cz_inside = cz_path.contains_points(pts)
-    cz_hrs = int(cz_inside.sum())
-    cz_pct = (cz_hrs / total_hrs * 100) if total_hrs > 0 else 0
-
-    current_selected = {"Comfort Zone": st.session_state.get("psy_strat_comfort", True)}
-    for zid, info in all_zones.items():
-        current_selected[info["name"]] = st.session_state.get(f"psy_strat_{zid}", True)
-
-    total_accommodated = np.zeros(len(T_pts), dtype=bool)
-    if current_selected.get("Comfort Zone", True):
-        total_accommodated |= cz_inside
-    for zid, info in all_zones.items():
-        if current_selected.get(info["name"], True):
-            verts = info["polygon"]
-            poly_path = Path(verts + [verts[0]])
-            total_accommodated |= poly_path.contains_points(pts)
-
-    comfortable_hrs = int(total_accommodated.sum())
-    comfortable_pct = (comfortable_hrs / total_hrs * 100) if total_hrs > 0 else 0
-    uncomfortable_pct = max(0.0, 100.0 - comfortable_pct)
-    uncomfortable_hrs = max(0, total_hrs - comfortable_hrs)
-
-    header = st.session_state.get("header", {}) or {}
-    loc_meta = header.get("location", {}) if isinstance(header, dict) else {}
-    lat = header.get("Latitude", loc_meta.get("latitude", "-")) if isinstance(header, dict) else "-"
-    lon = header.get("Longitude", loc_meta.get("longitude", "-")) if isinstance(header, dict) else "-"
-    elevation = header.get("Elevation", loc_meta.get("elevation_m", "-")) if isinstance(header, dict) else "-"
-    wmo = header.get("WMO Station ID", loc_meta.get("wmo", "-")) if isinstance(header, dict) else "-"
-    data_source = st.session_state.get("source_label") or header.get("data_source") or header.get("Data Source") or "EPW"
-    timezone_label = loc_meta.get("timezone", header.get("Time Zone", "-")) if isinstance(header, dict) else "-"
-    climate_zone = _header_climate_zone(header)
-    climate_zone_label = f" | Climate Zone {climate_zone}" if climate_zone != "--" else ""
-    st.markdown(
-        f"""
-        <div class="cc-psy-topbar">
-            <div class="cc-psy-top-title">PSYCHROMETRIC CHART<span>Adaptive Comfort</span></div>
-            <div class="cc-psy-top-meta">
-                <strong>LOCATION:</strong><span>{_ui_escape(location_label)}</span>
-                <strong>Latitude/Longitude:</strong><span>{_ui_escape(lat)}, {_ui_escape(lon)} | Time Zone from Greenwich { _ui_escape(timezone_label) }</span>
-                <strong>Data Source:</strong><span>{_ui_escape(data_source)} | WMO { _ui_escape(wmo) } | Elevation { _ui_escape(elevation) } m{_ui_escape(climate_zone_label)}</span>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # ── Layout: Legend sidebar + Chart ──
-    legend_col, chart_col = st.columns([1.2, 3.8])
-
-    # ── LEFT: Strategy Legend with checkboxes ──
-    with legend_col:
-        st.markdown(
-            f"""
-            <div class="cc-psy-panel-title">LEGEND</div>
-            <div class="cc-psy-legend-box">
-                <strong>COMFORT INDOORS</strong>
-                <div class="cc-psy-swatch-row"><span>{comfortable_pct:.0f}%</span><span class="cc-psy-swatch" style="background:#008000;"></span><span>COMFORTABLE</span></div>
-                <div class="cc-psy-swatch-row"><span>{uncomfortable_pct:.0f}%</span><span class="cc-psy-swatch" style="background:#ff0000;"></span><span>NOT COMFORTABLE</span></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.markdown("<div class='cc-psy-form-label'>MODEL:</div>", unsafe_allow_html=True)
-        st.selectbox(
-            "Psychrometric comfort model",
-            ["PLUS ASHRAE Standard 55"],
-            key="psy_model_display",
-            label_visibility="collapsed",
-        )
-        st.markdown("<div class='cc-psy-form-label'>PLOT:</div>", unsafe_allow_html=True)
-        st.selectbox(
-            "Psychrometric plot",
-            ["COMFORT INDOORS"],
-            key="psy_plot_display",
-            label_visibility="collapsed",
-        )
-
-        # Month range label
-        start_month = pd.to_datetime(dfp.index[0]).strftime('%B').upper() if len(dfp) > 0 else "JANUARY"
-        end_month = pd.to_datetime(dfp.index[-1]).strftime('%B').upper() if len(dfp) > 0 else "DECEMBER"
-
-        st.markdown(
-            f"<div style='font-size: 0.78rem; font-weight: 700; color: #1e293b; margin-bottom: 0.6rem;'>DESIGN STRATEGIES:<br>{start_month} through {end_month}</div>",
-            unsafe_allow_html=True,
-        )
-
-        # Comfort zone checkbox
-        cz_verts = psh._comfort_zone(mean_outdoor_t)
-        cz_path = Path(cz_verts + [cz_verts[0]])
-        cz_inside = cz_path.contains_points(pts)
-        cz_hrs = int(cz_inside.sum())
-        cz_pct = (cz_hrs / total_hrs * 100) if total_hrs > 0 else 0
-
-        comfort_on = st.checkbox(
-            f"{cz_pct:.1f}%  **1 Comfort**({cz_hrs} hrs)",
-            value=st.session_state.get("psy_strat_comfort", True),
-            key="psy_strat_comfort",
-        )
-
-        # Strategy checkboxes
-        checked_strategies = {"Comfort Zone": comfort_on}
-        for zid, info in all_zones.items():
-            stats = zone_stats[zid]
-            color = cc_colors.get(info["name"], info["color"])
-            is_on = st.checkbox(
-                f"{stats['pct']:.1f}%  **{zid} {info['name']}**({stats['hrs']} hrs)",
-                value=st.session_state.get(f"psy_strat_{zid}", True),
-                key=f"psy_strat_{zid}",
-            )
-            checked_strategies[info["name"]] = is_on
-
-        # Calculate comfortable hours (union of all enabled strategies + comfort)
-        total_accommodated = np.zeros(len(T_pts), dtype=bool)
-        if checked_strategies.get("Comfort Zone", True):
-            total_accommodated |= cz_inside
-        for zid, info in all_zones.items():
-            if checked_strategies.get(info["name"], True):
-                verts = info["polygon"]
-                poly_path = Path(verts + [verts[0]])
-                total_accommodated |= poly_path.contains_points(pts)
-
-        comfortable_hrs = int(total_accommodated.sum())
-        comfortable_pct = (comfortable_hrs / total_hrs * 100) if total_hrs > 0 else 0
-
-        st.markdown(
-            f"<div class='cc-psy-comfortable-summary'>{comfortable_pct:.1f}% Comfortable Hours using Selected Strategies<br>({comfortable_hrs} out of {total_hrs} hrs)</div>",
-            unsafe_allow_html=True,
-        )
-
-        # Display Design Strategies checkbox
-        show_strategies = st.checkbox("Display Design Strategies", value=True, key="psy_show_strategies")
-
-    # ── RIGHT: Build chart ──
-    fig_psy = go.Figure()
-
-    # Axis ranges
-    if auto_zoom:
-        x_min = max(-15, float(np.nanmin(T_pts)) - 3)
-        x_max = min(40, float(np.nanmax(T_pts)) + 3)
-        y_min = max(0, float(np.nanmin(Y_gpkg)) - 1)
-        y_max = min(28, float(np.nanmax(Y_gpkg)) + 2)
-    else:
-        x_min, x_max, y_min, y_max = -10.0, 40.0, 0.0, 28.0
-
-    T_axis = np.linspace(x_min, x_max, 500)
-    y_sat = psh.gpkg(psh.w_sat(T_axis, P_kPa))
-
-    for t_val in np.arange(np.ceil(x_min / 5.0) * 5.0, x_max + 0.1, 5.0):
-        y_top = float(psh.gpkg(psh.w_sat(np.array([t_val]), P_kPa))[0])
-        y_top = max(y_min, min(y_max, y_top))
-        fig_psy.add_trace(go.Scatter(
-            x=[t_val, t_val], y=[y_min, y_top], mode="lines",
-            line=dict(width=0.6, color="rgba(90,90,90,0.35)"),
-            showlegend=False, hoverinfo="skip",
-        ))
-
-    for w_val in np.arange(max(4.0, y_min), y_max + 0.1, 4.0):
-        valid = y_sat >= w_val
-        if valid.any():
-            fig_psy.add_trace(go.Scatter(
-                x=T_axis[valid], y=np.full(int(valid.sum()), w_val), mode="lines",
-                line=dict(width=0.6, color="rgba(90,90,90,0.35)"),
-                showlegend=False, hoverinfo="skip",
-            ))
-
-    # ── Strategy zone polygons (drawn behind dots) ──
-    if show_strategies:
-        # Comfort Zone
-        if checked_strategies.get("Comfort Zone", True):
-            cz = psh._comfort_zone(mean_outdoor_t)
-            xs = [v[0] for v in cz] + [cz[0][0]]
-            ys = [v[1] for v in cz] + [cz[0][1]]
-            fig_psy.add_trace(go.Scatter(
-                x=xs, y=ys, mode="lines",
-                line=dict(width=3.5, color="#0000ff"),
-                fill="toself", fillcolor="rgba(0, 0, 255, 0.04)",
-                name="Comfort Zone", showlegend=False, hoverinfo="name",
-            ))
-            cx = np.mean([v[0] for v in cz])
-            cy = np.mean([v[1] for v in cz])
-            fig_psy.add_annotation(
-                x=cx, y=cy, text="<b>1</b>", showarrow=False,
-                font=dict(family="Arial Black, Arial, sans-serif", size=16, color="#0000ff"),
-                bgcolor="rgba(255, 255, 255, 0.0)",
-                borderwidth=0,
-            )
-
-        # All other strategy zones
-        for zid, info in all_zones.items():
-            if not checked_strategies.get(info["name"], True):
-                continue
-            verts = info["polygon"]
-            xs = [v[0] for v in verts] + [verts[0][0]]
-            ys = [v[1] for v in verts] + [verts[0][1]]
-            zcolor = cc_colors.get(info["name"], info["color"])
-            r, g, b = int(zcolor[1:3], 16), int(zcolor[3:5], 16), int(zcolor[5:7], 16)
-            fillcolor = f"rgba({r},{g},{b},0.035)"
-            fig_psy.add_trace(go.Scatter(
-                x=xs, y=ys, mode="lines",
-                line=dict(width=2.4 if zid in {"7", "8"} else 1.8, color=zcolor),
-                fill="toself", fillcolor=fillcolor,
-                name=info["name"].replace("\n", " "),
-                showlegend=False, hoverinfo="name",
-            ))
-            # Numbered label at centroid
-            cx = np.mean([v[0] for v in verts])
-            cy = np.mean([v[1] for v in verts])
-            fig_psy.add_annotation(
-                x=cx, y=cy, text=f"<b>{zid}</b>", showarrow=False,
-                font=dict(family="Arial Black, Arial, sans-serif", size=15, color=zcolor),
-                bgcolor="rgba(255, 255, 255, 0.0)",
-                borderwidth=0,
-            )
-
-    # ── Saturation curve ──
-    fig_psy.add_trace(go.Scatter(
-        x=T_axis, y=y_sat, mode="lines",
-        line=dict(width=2.5, color="#333333"),
-        name="Saturation", showlegend=False,
-        hovertemplate="100%% RH<br>T: %{x:.1f}°C<br>W: %{y:.2f} g/kg<extra></extra>",
-    ))
-
-    # ── RH isolines ──
-    if show_rh:
-        for rh_val in [10, 20, 30, 40, 50, 60, 70, 80, 90]:
-            y_rh = psh.rh_curve(T_axis, rh_val, P_kPa)
-            fig_psy.add_trace(go.Scatter(
-                x=T_axis, y=y_rh, mode="lines",
-                line=dict(width=0.7, dash="dot", color="rgba(100,100,100,0.5)"),
-                showlegend=False, hoverinfo="skip",
-            ))
-
-    # ── Enthalpy lines ──
-    if show_enthalpy:
-        for h_val in [10, 20, 30, 40, 50, 60, 70, 80, 100]:
-            y_h = psh.enthalpy_w_line(T_axis, h_val)
-            valid = (y_h >= y_min) & (y_h <= y_max * 1.1)
-            if valid.any():
-                fig_psy.add_trace(go.Scatter(
-                    x=T_axis[valid], y=np.clip(y_h[valid], y_min, y_max), mode="lines",
-                    line=dict(width=0.6, dash="dash", color="rgba(180,120,0,0.4)"),
-                    showlegend=False, hoverinfo="skip",
-                ))
-
-    # ── Specific volume lines ──
-    if show_volume:
-        for v_val in [0.78, 0.80, 0.82, 0.84, 0.86, 0.88, 0.90]:
-            y_v = psh.volume_w_line(T_axis, v_val, P_kPa)
-            valid = (y_v >= y_min) & (y_v <= y_max)
-            if valid.any():
-                fig_psy.add_trace(go.Scatter(
-                    x=T_axis[valid], y=y_v[valid], mode="lines",
-                    line=dict(width=0.6, dash="dot", color="rgba(60,100,200,0.4)"),
-                    showlegend=False, hoverinfo="skip",
-                ))
-
-    # ── Wet-bulb temperature lines ──
-    if show_wetbulb:
-        for twb in [5, 10, 15, 20, 25, 30]:
+    clean_loc = re.sub(r"[^\w-]+", "_", location_label)
+    with st.expander("Download chart and data", expanded=False):
+        a, b = st.columns(2)
+        a.download_button("Chart (HTML)", fig.to_html(include_plotlyjs="cdn").encode(),
+                          f"{clean_loc}_psychrometric.html", "text/html", key="psy_download_html")
+        b.download_button("Strategy results (CSV)", stats.to_csv(index=False).encode(),
+                          f"{clean_loc}_strategies.csv", "text/csv", key="psy_download_stats")
+        st.download_button("Hourly properties (CSV)", points.to_csv(index=True).encode(),
+                           f"{clean_loc}_psychrometric_hours.csv", "text/csv", key="psy_download_hours")
+        if st.button("Prepare SVG chart", key="psy_prepare_svg"):
             try:
-                t_wb, w_wb = psh.wetbulb_curve(T_axis, twb, P_kPa)
-                if len(t_wb) > 1:
-                    valid = (w_wb >= y_min) & (w_wb <= y_max)
-                    if valid.any():
-                        fig_psy.add_trace(go.Scatter(
-                            x=t_wb[valid], y=w_wb[valid], mode="lines",
-                            line=dict(width=0.6, dash="dashdot", color="rgba(0,100,180,0.4)"),
-                            showlegend=False, hoverinfo="skip",
-                        ))
-            except Exception:
-                pass
-
-    # ── Hourly dots — GREEN for Climate Consultant style ──
-    custom = np.c_[RH_pts, Pv_pts * 1000, h_pts, v_pts, dp_pts, tw_pts]
-    hover_tpl = ("<b>%{text}</b><br>Tdb %{x:.1f}°C<br>W %{y:.2f} g/kg<br>"
-                 "RH %{customdata[0]:.1f}%<br>h %{customdata[2]:.1f} kJ/kg<br>"
-                 "Tdp %{customdata[4]:.1f}°C<br>Twb %{customdata[5]:.1f}°C<extra></extra>")
-
-    if total_accommodated.any():
-        fig_psy.add_trace(go.Scatter(
-            x=T_pts[total_accommodated], y=Y_gpkg[total_accommodated], mode="markers",
-            marker=dict(size=3, color="#008000", opacity=0.72),
-            name="Comfortable",
-            showlegend=False,
-            customdata=custom[total_accommodated],
-            text=["Comfortable"] * int(total_accommodated.sum()),
-            hovertemplate=hover_tpl,
-        ))
-
-    uncomfortable_mask = ~total_accommodated
-    if uncomfortable_mask.any():
-        fig_psy.add_trace(go.Scatter(
-            x=T_pts[uncomfortable_mask], y=Y_gpkg[uncomfortable_mask], mode="markers",
-            marker=dict(size=3, color="#ff0000", opacity=0.58),
-            name="Not Comfortable",
-            showlegend=False,
-            customdata=custom[uncomfortable_mask],
-            text=["Not Comfortable"] * int(uncomfortable_mask.sum()),
-            hovertemplate=hover_tpl,
-        ))
-
-    # ── RH labels on right margin ──
-    for rh_val in [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]:
-        y_at_xmax = float(psh.gpkg(psh.w_from_Pv_kPa(
-            np.array([(rh_val / 100.0) * psh.p_ws_kPa(np.array([x_max]))[0]]), P_kPa))[0])
-        if y_min < y_at_xmax < y_max:
-            fig_psy.add_annotation(
-                x=x_max, y=y_at_xmax, text=f"{rh_val}%", xanchor="left",
-                showarrow=False, font=dict(size=9, color="#555555"),
-            )
-
-    # ── "RELATIVE HUMIDITY" label at top ──
-    fig_psy.add_annotation(
-        x=0.5, y=1.04, text="RELATIVE HUMIDITY", xref="paper", yref="paper",
-        showarrow=False, font=dict(size=11, color="#333", family="Arial Black, Arial, sans-serif"),
-        xanchor="center",
-    )
-    # RH % markers along top
-    for rh_pct_label in [100, 80, 60]:
-        t_mid = (x_min + x_max) / 2
-        y_rh_at_mid = float(psh.gpkg(psh.w_from_Pv_kPa(
-            np.array([(rh_pct_label / 100.0) * psh.p_ws_kPa(np.array([t_mid]))[0]]), P_kPa))[0])
-        if y_min < y_rh_at_mid < y_max:
-            fig_psy.add_annotation(
-                x=t_mid, y=y_rh_at_mid + 0.8, text=f"{rh_pct_label}%",
-                showarrow=False, font=dict(size=9, color="#888"),
-            )
-
-    if show_strategies:
-        strategy_entries = [("1", "Comfort", cz_pct, cz_hrs, "#0000ff")]
-        for zid, info in all_zones.items():
-            stats = zone_stats[zid]
-            strategy_entries.append(
-                (zid, info["name"], stats["pct"], stats["hrs"], cc_colors.get(info["name"], info["color"]))
-            )
-        list_top = 0.965
-        line_step = 0.026
-        list_bottom = max(0.43, list_top - line_step * (len(strategy_entries) + 1))
-        fig_psy.add_shape(
-            type="rect",
-            xref="paper",
-            yref="paper",
-            x0=0.02,
-            y0=list_bottom - 0.012,
-            x1=0.66,
-            y1=0.995,
-            fillcolor="rgba(255,255,255,0.82)",
-            line=dict(color="rgba(0,0,0,0)"),
-            layer="above",
-        )
-        fig_psy.add_annotation(
-            x=0.032,
-            y=list_top,
-            xref="paper",
-            yref="paper",
-            text=f"<b>DESIGN STRATEGIES:</b> {start_month} through {end_month}",
-            showarrow=False,
-            xanchor="left",
-            align="left",
-            font=dict(size=9, color="#111827", family="Arial, Helvetica, sans-serif"),
-        )
-        for idx, (zid, name, pct, hrs, color) in enumerate(strategy_entries, start=1):
-            fig_psy.add_annotation(
-                x=0.032,
-                y=list_top - line_step * idx,
-                xref="paper",
-                yref="paper",
-                text=f"<b>{pct:.1f}%</b>&nbsp;&nbsp;{zid} {name}({hrs} hrs)",
-                showarrow=False,
-                xanchor="left",
-                align="left",
-                font=dict(size=8.8, color=color, family="Arial, Helvetica, sans-serif"),
-            )
-
-    fig_psy.add_annotation(
-        x=0.72,
-        y=0.56,
-        xref="paper",
-        yref="paper",
-        text="WET BULB TEMPERATURE, DEG. C",
-        textangle=-63,
-        showarrow=False,
-        font=dict(size=10, color="#444"),
-    )
-    fig_psy.add_annotation(
-        x=0.88,
-        y=0.35,
-        xref="paper",
-        yref="paper",
-        text="DEW POINT TEMPERATURE, DEG. C",
-        textangle=-76,
-        showarrow=False,
-        font=dict(size=10, color="#444"),
-    )
-
-    y_ticks = [v for v in range(0, 29, 4) if y_min <= v <= y_max]
-    y_ticktext = ["0" if v == 0 else f".{v:03d}" for v in y_ticks]
-    fig_psy.update_xaxes(
-        range=[x_min, x_max],
-        dtick=5,
-        title_text="DRY-BULB TEMPERATURE, DEG. C",
-        title_font=dict(size=11, color="#111827"),
-        tickfont=dict(size=10, color="#111827"),
-        showgrid=False,
-        zeroline=False,
-        showline=True,
-        linecolor="#333",
-        mirror=True,
-        ticks="outside",
-        ticklen=4,
-    )
-    fig_psy.update_yaxes(
-        range=[y_min, y_max],
-        tickmode="array",
-        tickvals=y_ticks,
-        ticktext=y_ticktext,
-        title_text="HUMIDITY RATIO",
-        title_font=dict(size=11, color="#111827"),
-        tickfont=dict(size=10, color="#111827"),
-        side="right",
-        showgrid=False,
-        zeroline=False,
-        showline=True,
-        linecolor="#333",
-        mirror=True,
-        ticks="outside",
-        ticklen=4,
-    )
-
-    fig_psy.update_layout(
-        height=650,
-        margin=dict(l=35, r=72, t=35, b=58),
-        showlegend=False,
-        hovermode="closest",
-        paper_bgcolor="rgba(255,255,255,1)",
-        plot_bgcolor="rgba(255,255,255,1)",
-        font=dict(family="Arial, Helvetica, sans-serif", color="#1f2937"),
-        title=dict(text="", x=0.01, xanchor="left", yanchor="top"),
-    )
-
-    clean_loc = location_label.replace(" ", "_").replace(",", "").replace("__", "_")
-
-    # ── Render Chart Column with Climate Consultant style header ──
-    with chart_col:
-        header = st.session_state.get("header", {})
-        lat = header.get("Latitude", "")
-        lon = header.get("Longitude", "")
-        elevation = header.get("Elevation", "")
-        wmo = header.get("WMO Station ID", "")
-
-        st.markdown(
-            f"""
-            <div style="display: none; justify-content: space-between; align-items: flex-end; gap: 0.8rem; padding: 0.25rem 0 0.65rem 0; border-bottom: 2px solid #333; margin-bottom: 0.5rem;">
-                <div style="font-size: 0.9rem; font-weight: 800; letter-spacing: 0.08em; color: #1f2937; text-transform: uppercase;">PSYCHROMETRIC CHART</div>
-                <div style="text-align: right; font-size: 0.7rem; line-height: 1.35; color: #374151;">
-                    <div style="font-weight: 700; color: #1f2937;">{location_label}</div>
-                    <div>Lat/Long: {lat}°, {lon}° | Elev: {elevation}m | WMO: {wmo}</div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        _st_plotly_chart(fig_psy, use_container_width=True, config={"displaylogo": False, "modeBarButtonsToRemove": ["select2d","lasso2d"], "toImageButtonOptions": {"filename": f"{clean_loc}_psychrometric_chart", "format": "png", "scale": 2}})
-
-        # Click hint
-        st.markdown(
-            "<div class='cc-psy-click-hint'>Click on Design Strategy to select or deselect.</div>",
-            unsafe_allow_html=True,
-        )
-
-        export_svg_col, export_html_col = st.columns(2)
-        try:
-            svg_bytes = fig_psy.to_image(format="svg", width=1400, height=850, scale=2)
-            export_svg_col.download_button(
-                "Download Psychrometric Chart (SVG)",
-                svg_bytes,
-                f"{clean_loc}_psychrometric_chart.svg",
-                "image/svg+xml",
-                key="psy_download_svg",
-                use_container_width=True,
-            )
-        except Exception as e:
-            export_svg_col.download_button(
-                "Download Psychrometric Chart (SVG)",
-                b"",
-                f"{clean_loc}_psychrometric_chart.svg",
-                "image/svg+xml",
-                key="psy_download_svg_unavailable",
-                use_container_width=True,
-                disabled=True,
-                help=f"SVG export failed. Requires a working Kaleido installation. Error: {str(e)[:80]}",
-            )
-
-        html_bytes = fig_psy.to_html(include_plotlyjs="cdn").encode("utf-8")
-        export_html_col.download_button(
-            "Download Psychrometric Chart (HTML)",
-            html_bytes,
-            f"{clean_loc}_psychrometric_chart.html",
-            "text/html",
-            key="psy_download_html",
-            use_container_width=True,
-        )
-
-    _add_manual_pdf_figure("Psychrometric Chart", fig_psy)
+                svg = fig.to_image(format="svg", width=1200, height=760)
+                st.download_button("Chart (SVG)", svg, f"{clean_loc}_psychrometric.svg",
+                                   "image/svg+xml", key="psy_download_svg")
+            except Exception as exc:
+                st.error(f"SVG export unavailable: {exc}")
+    _add_manual_pdf_figure("Psychrometric Chart", fig)
 
 
 def render_psychrometrics_page():
-    _render_tour_step("Psychrometrics")
     cdf = st.session_state.get("cdf")
-    if cdf is None:
+    if cdf is None or cdf.empty:
         return
-    location_label = _safe_location_label(st.session_state.get("header") or {})
-    needed = ["drybulb", "relhum"]
-    if not all(k in cdf.columns for k in needed):
-        st.info("This EPW is missing required fields for the psychrometric plot.")
+    workspace = st.radio("Psychrometric workspace", ["Interactive chart", "Climate Strategies"], horizontal=True, key="psy_workspace")
+    header = st.session_state.get("header") or {}
+    if workspace == "Interactive chart":
+        from psychrometric_studio import render_studio, weather_text_from_frame
+        st.caption("Build air-handling processes, explore comfort and weather, and export your design. Your loaded station is connected automatically.")
+        raw = st.session_state.get("raw_epw_bytes")
+        epw_text = bytes(raw).decode("utf-8-sig", errors="replace") if isinstance(raw, (bytes, bytearray)) and bytes(raw).lstrip().startswith(b"LOCATION") else weather_text_from_frame(cdf, header)
+        pressure = pd.to_numeric(cdf.get("atmos_pressure", pd.Series(dtype=float)), errors="coerce")
+        pressure = pressure[pressure.between(30000, 120000)]
+        pressure_kpa = float(pressure.median()/1000) if not pressure.empty else 101.325
+        session_key = st.session_state.setdefault(ONBOARDING_TOUR_SESSION_KEY, os.urandom(8).hex())
+        with st.container(key="tour_psychrometric_studio"):
+            render_studio(epw_text, _safe_location_label(header), pressure_kpa, session_key)
         return
-
-    # Pressure
-    if "atmos_pressure" in cdf and cdf["atmos_pressure"].notna().any():
-        P_kPa = float(np.nanmedian(cdf["atmos_pressure"].values)) / 1000.0
-    else:
-        P_kPa = 101.325
-
-    # ── Controls ──
-    ctrl_cols = st.columns([3, 3, 2])
-    month_range = ctrl_cols[0].slider("Month range", 1, 12, (1, 12), key="psy_month_range", help="Filter the chart to the season or months you want to study.")
-
-    mean_outdoor_t = 20.0
-    if "drybulb" in cdf.columns:
-        daily_mean = cdf["drybulb"].resample("1D").mean()
-        daily_mean_filtered = daily_mean[(daily_mean.index.month >= month_range[0]) & (daily_mean.index.month <= month_range[1])]
-        if not daily_mean_filtered.empty:
-            running_mean = daily_mean_filtered.rolling(30, min_periods=1).mean()
-            mean_outdoor_t = float(running_mean.median())
-
-    current_month_range = month_range
-    last_month_range = st.session_state.get("_psy_last_month_range")
-    if last_month_range != current_month_range:
-        st.session_state["_psy_last_month_range"] = current_month_range
-        _psy_trm_initial = float(round(mean_outdoor_t, 1))
-    else:
-        _psy_trm_initial = float(st.session_state.get("psy_trm", round(mean_outdoor_t, 1)))
-    _psy_trm_initial = max(5.0, min(35.0, _psy_trm_initial))
-
-    mean_outdoor_t = ctrl_cols[1].slider("Comfort reference temp (°C)", 5.0, 35.0, value=_psy_trm_initial, step=0.5, key="psy_trm", help="This shifts the comfort band to reflect the site's seasonal baseline.")
-    auto_zoom = ctrl_cols[2].toggle("Fit to data", value=False, key="psy_autozoom")
-
-    rf1, rf2, rf3, rf4 = st.columns(4)
-    show_rh = rf1.checkbox("RH", True, key="psy_rh")
-    show_enthalpy = rf2.checkbox("Enthalpy", True, key="psy_enth")
-    show_volume = rf3.checkbox("Volume", False, key="psy_vol")
-    show_wetbulb = rf4.checkbox("Wet-bulb", True, key="psy_twb")
-
-    # ── Data prep ──
-    dfp = cdf[["drybulb", "relhum"]].dropna().copy()
-    dfp = dfp[(dfp.index.month >= month_range[0]) & (dfp.index.month <= month_range[1])]
-    if dfp.empty:
-        st.info("No data points in selected range.")
+    if not {"drybulb", "relhum"}.issubset(cdf.columns):
+        st.info("Temperature and relative humidity are required for this chart.")
         return
-
-    # Call the interactive chart section
-    render_psychrometrics_interactive_section(
-        dfp=dfp,
-        P_kPa=P_kPa,
-        location_label=location_label,
-        active_ds="Natural Ventilation",
-        overlay_mode="Single Strategy",
-        mean_outdoor_t=mean_outdoor_t,
-        auto_zoom=auto_zoom,
-        show_rh=show_rh,
-        show_enthalpy=show_enthalpy,
-        show_volume=show_volume,
-        show_wetbulb=show_wetbulb
-    )
-
-
-
-
-
+    with st.container(key="tour_psychrometric_strategies"):
+        st.caption("Compare weather patterns with design regions to identify options for further study.")
+        month_range = st.slider("Month range", 1, 12, (1, 12), key="psy_month_range")
+        selected = cdf.loc[(cdf.index.month >= month_range[0]) & (cdf.index.month <= month_range[1])]
+        pressure = pd.to_numeric(selected.get("atmos_pressure", pd.Series(dtype=float)), errors="coerce")
+        pressure = pressure[pressure.between(30000, 120000)]
+        P_kPa = float(pressure.median()/1000) if not pressure.empty else 101.325
+        if pressure.empty:
+            st.caption("Station pressure is unavailable; using 101.325 kPa.")
+        with st.expander("Chart settings", expanded=False):
+            mean_outdoor_t = st.slider("Outdoor reference temperature (°C)", 10., 33.5, 20., .5,
+                                      key="psy_reference_v2", help="An explicit reference for the illustrative band; not an annual comfort result.")
+            auto_zoom = st.checkbox("Fit all weather points", True, key="psy_fit_v2")
+            lines = st.multiselect("Reference lines", ["Relative humidity", "Enthalpy", "Specific volume", "Wet bulb"],
+                                   default=["Relative humidity"], key="psy_lines_v2")
+        render_psychrometrics_interactive_section(selected, P_kPa, _safe_location_label(header),
+            mean_outdoor_t=mean_outdoor_t, auto_zoom=auto_zoom, show_rh="Relative humidity" in lines,
+            show_enthalpy="Enthalpy" in lines, show_volume="Specific volume" in lines, show_wetbulb="Wet bulb" in lines)
 
 
 WIND_DIRECTION_LABELS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]

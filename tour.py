@@ -53,7 +53,7 @@ _PARENT_SCRIPT = r'''
 
   // Replace the old single-page runtime when Streamlit hot-reloads this file.
   const previous = host[runtimeKey];
-  if (previous && previous.version !== 8) {
+  if (previous && previous.version !== 10) {
     if (previous.timer) host.clearInterval(previous.timer);
     previous.hide();
     for (const id of ["cc-guided-tour", "cc-guided-tour-ring", "cc-guided-tour-style"]) {
@@ -125,7 +125,7 @@ _PARENT_SCRIPT = r'''
     doc.body.append(ring, card);
 
     const runtime = {
-      version: 8, progress: {}, scope: null, steps: [],
+      version: 10, progress: {}, scope: null, steps: [],
       config: null, key: null, stage: null, index: 0,
       dismissed: false, completed: false, target: null,
       renderedStep: null, scrollPending: true, missingSince: 0, timer: null,
@@ -191,6 +191,17 @@ _PARENT_SCRIPT = r'''
             return;
           }
           const elements = [...doc.querySelectorAll(base.selector)].filter(el => this.isVisible(el));
+          if (base.group) {
+            if (!elements.length) return;
+            // One explanation per content group, regardless of card/chart count.
+            // A compact shared row can be highlighted as a whole; tall sections
+            // use their first visible item so the tooltip stays near its anchor.
+            let element = elements[0];
+            const row = element.closest("[data-testid='stHorizontalBlock']");
+            if (row && this.isVisible(row) && row.getBoundingClientRect().height <= 320) element = row;
+            result.push({...base, element, id: `group-${baseIndex}`, optional: true});
+            return;
+          }
           elements.forEach((element, itemIndex) => {
             let title;
             if (base.expand === "charts") {
@@ -331,6 +342,8 @@ _PARENT_SCRIPT = r'''
         if (card.hidden || !this.target) return;
         const rect = this.target.getBoundingClientRect();
         const vw = doc.documentElement.clientWidth, vh = host.innerHeight;
+        // Wide groups need a shorter card so the explanation fits above or below.
+        card.style.width = rect.width > vw / 2 ? "420px" : "330px";
         const pad = 12, gap = 16, width = card.offsetWidth, height = card.offsetHeight;
         const clamp = (value, low, high) => Math.max(low, Math.min(value, Math.max(low, high)));
         let x = rect.right + gap, y = rect.top;

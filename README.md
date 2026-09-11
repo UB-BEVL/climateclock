@@ -1,7 +1,42 @@
 # Climate Analysis Pro - Detailed Documentation
 =============================================
 
+## Run locally on Windows
+
+From the project folder, run:
+
+```powershell
+py run_app.py
+```
+
+The launcher finds Python 3.12 or 3.11, creates `.venv-climateclock`, installs
+`requirements.txt` on first use, and starts Streamlit using that environment.
+First setup needs internet access. Later launches reuse the environment.
+Use Ctrl+C in the terminal to stop the app. Install Python 3.12 first if the
+launcher cannot find a supported interpreter.
+
+Avoid launching this project with `py -m streamlit run app.py`: the default
+Python launcher may select a different environment without the required UTCI
+and PMV packages. The existing `.venv` folder may also refer to another machine.
+
+## Interactive psychrometrics and tours
+
+Overview now has five tour steps; all six climate cards share one explanation,
+with individual help available on hover. Detail sections keep their own guides.
+Edit the step lists in `app.py::_onboarding_steps`; `tour.py` handles positioning,
+Next/Back, navigation, and reset behavior.
+
+Open **Detail View > Psychrometrics > Interactive chart** for the integrated
+equipment builder, weather overlays, comfort tools, teaching guide, and exports.
+Use **Focus chart** for more drawing space. **Climate Strategies** contains the
+existing passive-design analysis. The studio saves edits while switching pages
+in the current browser tab; use JSON export for permanent storage. Wait for the
+studio's saved-report status before opening **Report** to include its operating
+cases in the full climate PDF. **Reset Session** starts a new location/design.
+See [the studio guide](psychrometric_studio/README.md) for features and editing.
+
 ## Purpose
+
 Climate Analysis Pro is a comprehensive, Streamlit-based web application designed for built-environment professionals, architects, and researchers. It allows users to explore hourly weather data (EPW files) through interactive visualizations, thermal comfort metrics, and solar analysis. 
 
 The application provides a "Research-grade sandbox" to evaluate climates globally, either by searching a live database of over 30,000 WMO weather stations or by uploading custom `.epw` / `.zip` files.
