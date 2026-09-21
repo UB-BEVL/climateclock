@@ -37,6 +37,7 @@ from metrics import comfort_energy as ce
 import live_sensors as ls
 import psychro_helpers as psh
 from tour import run_onboarding_tour
+from pdf_chart_renderer import report_chart_session, render_chart_png, save_chart_png
 
 # Patch platform processor to avoid Windows WMI KeyError during h5py/pvlib import
 import platform as _platform
@@ -57,8 +58,9 @@ try:
         for arg in ("--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"):
             if arg not in chromium_args:
                 chromium_args.append(arg)
-        _kaleido_scope.chromium_args = chromium_args
-        if hasattr(_kaleido_scope, "mathjax"):
+        if tuple(chromium_args) != tuple(_kaleido_scope.chromium_args):
+            _kaleido_scope.chromium_args = chromium_args
+        if getattr(_kaleido_scope, "mathjax", None) is not None:
             _kaleido_scope.mathjax = None
 except Exception:
     pass
@@ -6283,21 +6285,17 @@ def _fig_to_tmp_png(fig, width: int = REPORT_EXPORT_WIDTH, height: int = REPORT_
     last_error = None
     for attempt_width, attempt_height, attempt_scale in export_attempts:
         try:
-            img_bytes = pio.to_image(
+            img_bytes = render_chart_png(
                 fig_for_export,
-                format="png",
                 width=attempt_width,
                 height=attempt_height,
                 scale=attempt_scale,
-                validate=False,
             )
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".kaleido.png")
-            tmp.write(img_bytes)
-            tmp.close()
+            image_path = save_chart_png(img_bytes)
             # Free the raw bytes immediately to reduce peak memory.
             del img_bytes
             gc.collect()
-            return tmp.name
+            return image_path
         except Exception as exc:
             last_error = exc
             gc.collect()  # reclaim memory before retry
@@ -9453,7 +9451,6 @@ def render_figure_page(
     pdf.set_xy(margin, title_y)
     pdf.multi_cell(content_w, 8.6 if large_page else 6.8, _pdf_safe_text(f"Figure {fig_no}. {clean_title}"))
 
-    export_err = ""
     img_path = None
     try:
         if large_page:
@@ -9465,7 +9462,7 @@ def render_figure_page(
         img_path = _fig_to_tmp_png(fig, width=export_w, height=export_h, scale=export_scale)
         temp_images.append(img_path)
     except Exception as exc:
-        export_err = str(exc)
+        raise RuntimeError(f'Could not render "{clean_title}". PDF generation stopped. {exc}') from exc
 
     image_box_x = margin
     image_box_y = 68 if large_page else (54 if landscape_page else 60)
@@ -9484,16 +9481,6 @@ def render_figure_page(
         draw_x = image_box_x + (image_box_w - draw_w) / 2
         draw_y = image_box_y + (image_box_h - draw_h) / 2
         pdf.image(img_path, x=draw_x, y=draw_y, w=draw_w, h=draw_h)
-    else:
-        pdf.set_xy(image_box_x + 4, image_box_y + image_box_h / 2)
-        pdf.set_font("Helvetica", "I", 10)
-        pdf.set_text_color(*PDF_MUTED)
-        pdf.cell(image_box_w - 8, 6, "Visualization rendering unavailable.", ln=1)
-        if export_err:
-            pdf.set_xy(image_box_x + 4, image_box_y + image_box_h / 2 + 8)
-            pdf.set_font("Helvetica", "", 7)
-            pdf.set_text_color(*PDF_MUTED)
-            pdf.multi_cell(image_box_w - 8, 4, _pdf_safe_text(export_err[:240]))
 
     caption_y = image_box_y + image_box_h + 9
     pdf.set_font("Helvetica", "B", 8)
@@ -9560,6 +9547,7 @@ def build_climate_summary_pages(pdf: ClimateReportPDF, cdf: Optional[pd.DataFram
     pdf.multi_cell(166, 4.5, _pdf_safe_text(koppen["implication"]))
 
 
+@report_chart_session
 def build_climate_pdf() -> bytes:
     header = st.session_state.get("header", {})
     cdf = st.session_state.get("cdf")
@@ -11313,7 +11301,7 @@ def render_export_page():
             sizes = ["A4 Landscape", "A4 Portrait", "A3 Landscape", "A2 Landscape"]
             st.selectbox("PDF page size", sizes, index=sizes.index(_pdf_page_choice()), key="export_pdf_page_size")
 
-    signature = (st.session_state.get("export_report_title", ""), st.session_state.get("export_pdf_page_size", ""), "report-v3")
+    signature = (st.session_state.get("export_report_title", ""), st.session_state.get("export_pdf_page_size", ""), "report-v4-renderer")
     if st.session_state.get("_export_options_sig") != signature:
         st.session_state["_export_options_sig"] = signature
         for key in ["pdf_download_bytes", "pdf_download_name", "pdf_download_error", "pdf_download_figure_count"]:
