@@ -53,7 +53,7 @@ _PARENT_SCRIPT = r'''
 
   // Replace the old single-page runtime when Streamlit hot-reloads this file.
   const previous = host[runtimeKey];
-  if (previous && previous.version !== 10) {
+  if (previous && previous.version !== 11) {
     if (previous.timer) host.clearInterval(previous.timer);
     previous.hide();
     for (const id of ["cc-guided-tour", "cc-guided-tour-ring", "cc-guided-tour-style"]) {
@@ -125,7 +125,7 @@ _PARENT_SCRIPT = r'''
     doc.body.append(ring, card);
 
     const runtime = {
-      version: 10, progress: {}, scope: null, steps: [],
+      version: 11, progress: {}, scope: null, steps: [],
       config: null, key: null, stage: null, index: 0,
       dismissed: false, completed: false, target: null,
       renderedStep: null, scrollPending: true, missingSince: 0, timer: null,

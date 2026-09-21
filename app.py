@@ -696,7 +696,7 @@ WORKSPACE_GUIDE_ITEMS = [
         "Overview",
         "Overview",
         "Read first",
-        "Climate vitals, takeaways, monthly patterns, and annual wind.",
+        "Annual resource heatmaps, station metadata, and climate statistics.",
     ),
     (
         "Detail View",
@@ -708,7 +708,7 @@ WORKSPACE_GUIDE_ITEMS = [
         "Short-Term Prediction",
         _SHORT_TERM_PAGE,
         "Next 10 days",
-        "Forecast heat risk, solar potential, and downloadable forecast EPW.",
+        "Temperature, near-term rainfall, solar potential, and forecast downloads.",
     ),
     (
         "Long-Term Prediction",
@@ -737,7 +737,7 @@ WORKSPACE_GUIDE_ITEMS = [
 ]
 
 DASHBOARD_SECTION_GUIDE = [
-    ("Overview & Stats", "Site metadata, climate summary, and quick takeaways."),
+    ("Overview", "Climate summary, monthly profiles, comfort snapshots, and wind."),
     ("Comfort & Loads", "Comfort compliance, stress hours, PMV/UTCI/DI, degree days."),
     ("Temp & Humidity", "Trends, heatmaps, monthly temperature, and moisture patterns."),
     ("Solar Analysis", "Sun path, irradiance, shading, and PV-facing context."),
@@ -4473,7 +4473,7 @@ def _enhanced_tour_steps(page: str) -> list:
             {
                 "icon": "3",
                 "title": "Analysis Flow",
-                "body": "Start with Overview & Stats, check Comfort & Loads, then use the specialist tabs that match your design question.",
+                "body": "Start with Overview, check Comfort & Loads, then use the specialist tabs that match your design question.",
                 "next": "Go to Report after visiting the sections you want captured.",
             },
         ]
@@ -4532,7 +4532,7 @@ def _enhanced_tour_steps(page: str) -> list:
             {
                 "icon": "1",
                 "title": "Upcoming Weather",
-                "body": "Use Short-Term Prediction for the next weather window: heat flags, forecast bias, solar potential, and a forecast EPW download.",
+                "body": "Use Short-Term Prediction for the next 10 days: temperature, rainfall, heat flags, forecast bias, solar potential, and a forecast EPW download.",
             },
         ]
     if page == _LONG_TERM_PAGE:
@@ -4793,20 +4793,17 @@ def _onboarding_steps(stage: str) -> List[Dict[str, object]]:
             },
         ]
     if stage == "overview":
-        # Keep this page a quick orientation; detailed explanations live in
-        # the section guides and the metric help text.
         return [
-            {"selector": "#cc-tour-overview", "title": "Your climate at a glance",
-             "description": "Check the station, climate zone, and weather source here. This short guide covers the main sections of Overview."},
-            {"selector": ".st-key-tour_overview_metrics", "title": "Your climate snapshot",
-             "description": "Read these cards together: average temperature, hot hours, humidity, wind, annual solar energy (GHI), and hours within 18–26°C. Key Takeaways below explains the main patterns."},
-            {"selector": ".st-key-tour_overview_weather", "title": "See how the year changes",
-             "description": "Hover over Weather by Month to compare temperature, humidity, rainfall, and sky cover. The charts below and the seasonal cards show when conditions are warmer, colder, or more comfortable."},
-            {"selector": ".st-key-tour_overview_stress", "title": "Look beyond air temperature",
-             "description": "The stress cards combine weather conditions into comfort indicators. Check UTCI’s valid-hour coverage, then use the wind rose below to see the most frequent wind directions and speeds."},
-            {"selector": ".st-key-nav_dashboard", "title": "Explore, save, or choose a new location",
-             "fallback_selectors": ["#cc-tour-overview"],
-             "description": "Detail View opens the individual analyses and their guides. Report creates the full PDF. When you want another location, download your report and use Reset Session in the sidebar."},
+            {"selector": "#cc-tour-overview", "title": "Read the annual resource patterns",
+             "description": "This is your starting view. Each heatmap compares months and hours for temperature, solar radiation, humidity, rainfall, or wind. Blank cells mean missing data."},
+            {"selector": ".st-key-tour_resource_heatmaps", "title": "Compare the heatmaps together",
+             "description": "Read months across and hours down. Hover for a range and use the legend beside each strip. The chart toolbar lets you zoom or save an image."},
+            {"selector": ".st-key-tour_resource_settings", "title": "Adjust the ranges",
+             "description": "Open Heatmap settings to change solar, humidity, and wind boundaries. Colors and hover labels use the same ranges. Reset thresholds restores the defaults."},
+            {"selector": ".st-key-tour_resource_statistics", "title": "Check the climate summary",
+             "description": "Below the heatmaps are key takeaways, station metadata, annual statistics, and a seasonal table. Read the values and units together."},
+            {"selector": ".st-key-nav_dashboard", "title": "Explore the detailed overview",
+             "description": "Detail View → Overview now contains the monthly weather charts, comfort snapshots, and wind rose. Use Report for a PDF, or Reset Session for another location."},
         ]
     if stage == "detail:Psychrometrics":
         return [
@@ -4821,7 +4818,7 @@ def _onboarding_steps(stage: str) -> List[Dict[str, object]]:
         ]
     if stage == "detail" or stage.startswith("detail:"):
         sections = [
-            ("Overview & Stats", "Site statistics and data quality", "Start here for station information, climate averages, distributions, data completeness, and hourly resource patterns."),
+            ("Overview", "Your climate summary", "Explore station information, key takeaways, monthly weather, seasonal snapshots, thermal stress, and the annual wind rose."),
             ("Comfort & Loads", "Comfort and heating or cooling demand", "Explore thermal-comfort indices, hours outside comfort ranges, and temperature-based heating and cooling indicators. The tabs and controls let you inspect different comfort models."),
             ("Temp & Humidity", "Temperature and moisture patterns", "Compare monthly averages, hourly spreads, and heatmaps to see daily swings, seasonal extremes, and humid or dry periods."),
             ("Solar Analysis", "Sun paths and solar energy", "Inspect the sun's position through the year and the available solar radiation. Use the controls to explore orientation, shading, and seasonal solar exposure."),
@@ -6072,366 +6069,7 @@ def get_color_scale_for_metric(metric_name: str) -> Tuple[List[str], List[str]]:
     return colors, labels
 
 
-def build_diurnal_heatmap_figure(heatmap_dict: Dict, cdf: pd.DataFrame, header: dict) -> Optional[go.Figure]:
-    """Build a multi-strip heatmap figure (subplots, one per metric).
-    
-    # Force reload to fix cache (Legends Update)
-    heatmap_dict: {"metric_name": (pivot_binned, info_dict), ...}
-    """
-    if not heatmap_dict or all("error" in v[1] for v in heatmap_dict.values()):
-        return None
-    
-    # Filter out metrics with errors
-    valid_strips = {k: v for k, v in heatmap_dict.items() if "error" not in v[1]}
-    if not valid_strips:
-        return None
-    
-    n_strips = len(valid_strips)
-    
-    # Use real dates for the X-axis (Year 2021 as standard non-leap year)
-    # pivot_binned has columns 1..365 (or 366). We map them to dates.
-    # We'll generate a date range for 365 days.
-    dates_2021 = pd.date_range(start="2021-01-01", periods=365, freq="D")
-    
-    fig = make_subplots(
-        rows=n_strips, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.04,
-        subplot_titles=[],  # We will add custom annotations below each plot
-    )
-    
-    heatmap_indices = []
 
-    for row, (strip_name, (pivot_binned, info)) in enumerate(valid_strips.items(), start=1):
-        if pivot_binned.empty:
-            continue
-        
-        # Ensure pivot aligns with our 365-day date range
-        if pivot_binned.shape[1] > 365:
-            pivot_plot_slice = pivot_binned.iloc[:, :365]
-        else:
-            pivot_plot_slice = pivot_binned.reindex(columns=range(1, 366))
-            
-        # Define discrete color scales and bins matching the printed style reference
-        # keys: metric_name -> (bounds, colors, tick_labels)
-        # Colors approximated from the user provided image
-        discrete_scales = {
-            "Dry Bulb Temperature": (
-                [-100, 10, 20, 26.6, 35, 100], 
-                # Blue -> Light Blue -> White -> Orange -> Red
-                ["#6baed6", "#bdd7e7", "#ffffff", "#fd8d3c", "#e31a1c"], 
-                ["<10°C", "<20°C", "Comf. Zone", ">26.6°C", ">35°C"]
-            ),
-            "Solar Radiation": (
-                [0, 100, 300, 500, 700, 9999], 
-                # Very Light Orange -> Light Orange -> Orange -> Dark Orange -> Brown
-                ["#feedde", "#fdbe85", "#fd8d3c", "#e6550d", "#a63603"],
-                ["<100 w/m²", "100-300 w/m²", "300-500 w/m²", "500-700 w/m²", ">700 w/m²"]
-            ),
-            # Approximate Absolute Humidity: Grey -> White -> Blue
-            "Absolute Humidity": ( 
-                [0, 5, 12, 100], # Guessing thresholds based on "occasional low moisture" & "standard"
-                ["#cccccc", "#ffffff", "#6baed6"], 
-                ["<?g/kg", "Comf. Zone", ">?g/kg"] 
-            ),
-            "Humidity": ( # Relative Humidity
-                [0, 30, 70, 100], 
-                # Orange -> White -> Blue
-                ["#fd8d3c", "#ffffff", "#6baed6"], 
-                ["<30%", "Comf. Zone", ">70%"]
-            ),
-            "Precipitation": (
-                [0, 0.1, 2.5, 10.0, 999],
-                ["#ffffff", "#93c5fd", "#2563eb", "#1e3a8a"],
-                ["Dry", "Light", "Moderate", "Heavy"]
-            ),
-            "Wind Speed": (
-                [0, 1.5, 4.5, 999], 
-                ["#bde0fe", "#ffffff", "#74c476"], 
-                ["<1.5 m/s", "1.5-4.5 m/s", ">4.5 m/s"] 
-            ),
-            "Wind Direction": (
-                list(range(9)), # 0..8 bounds for 8 categories
-                ["#4c6fff", "#3fb3ff", "#36d1a8", "#8bd36b", "#f6c445", "#f08c42", "#e15b9a", "#9d6bff"],
-                ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-            )
-        }
-
-        # Determine colorscale and colorbar settings
-        heatmap_colorscale = None
-        zmin, zmax = None, None
-        colorbar_dict = None
-        show_scale = False
-        active_tick_labels = []
-
-        if strip_name in discrete_scales:
-            bounds, colors, ticks = discrete_scales[strip_name]
-            active_tick_labels = ticks
-            
-            # Special handling for Categorical Bins (Wind Speed, Solar, Wind Direction, Dry Bulb)
-            if strip_name in ["Wind Speed", "Solar Radiation", "Wind Direction", "Dry Bulb Temperature", "Humidity", "Precipitation"]:
-                # Categorical Logic
-                n = len(colors)
-                zmin = 0
-                zmax = n 
-                
-                # Construct categorical colorscale
-                scale = []
-                for i, col in enumerate(colors):
-                    low = i / n
-                    high = (i + 1) / n
-                    scale.append([low, col])
-                    scale.append([high, col])
-                
-                heatmap_colorscale = scale
-                
-                # Tick placement: Center of each bin
-                tick_vals = [i + 0.5 for i in range(n)]
-                
-            else:
-                d_min = bounds[0]
-                d_max = bounds[-1]
-                zmin = d_min
-                zmax = d_max
-                
-                if strip_name == "Humidity":
-                    zmin, zmax = 0, 100
-                    d_min, d_max = 0, 100
-
-                # Build the stepped scale
-                scale = []
-                n_colors = len(colors)
-                # Ensure bounds length matches n_colors + 1
-                safe_bounds = bounds if len(bounds) == n_colors + 1 else np.linspace(d_min, d_max, n_colors+1)
-                
-                for i in range(n_colors):
-                    val_min = safe_bounds[i]
-                    val_max = safe_bounds[i+1]
-                    lower_frac = (val_min - d_min) / (d_max - d_min)
-                    upper_frac = (val_max - d_min) / (d_max - d_min)
-                    lower_frac = max(0.0, min(1.0, lower_frac))
-                    upper_frac = max(0.0, min(1.0, upper_frac))
-                    scale.append([lower_frac, colors[i]])
-                    scale.append([upper_frac, colors[i]])
-                
-                heatmap_colorscale = scale
-                
-                tick_vals = []
-                for i in range(n_colors):
-                   v1 = safe_bounds[i]
-                   v2 = safe_bounds[i+1]
-                   tick_vals.append((v1 + v2)/2)
-           
-            # Vertical Legend Position
-            space = 0.04
-            h = (1.0 - (n_strips - 1) * space) / n_strips
-            y_top = 1.0 - (row - 1) * (h + space)
-            y_center = y_top - h / 2
-            
-            # Adjust title for Wind Direction
-            cb_title = None
-
-            colorbar_dict = dict(
-                orientation="v",
-                x=1.01,
-                y=y_center,
-                yanchor="middle",
-                xanchor="left",
-                len=h,
-                thickness=25,
-                tickmode="array",
-                tickvals=tick_vals,
-                ticktext=ticks,
-                tickfont=dict(size=9),
-                title=cb_title
-            )
-            show_scale = True
-
-        #else:
-            # Fallback for Wind Direction or others: discrete interpolation
-        #    colors_default, labels_default = get_color_scale_for_metric(info["metric"])
-        #    colors = info.get("colors", colors_default[: len(info.get("labels", labels_default))])
-        #    heatmap_colorscale = list(zip([i / (len(colors) - 1) for i in range(len(colors))], colors))
-            
-            # Special Compass Legend for Wind Direction
-        #   if strip_name == "Wind Direction":
-        #        # Use a cyclic colorscale (HSV)
-        #        heatmap_colorscale = "HSV"
-        #        zmin, zmax = 0, 360 # Explicit degrees
-        #        # We need a separate legend for this maybe? 
-        #        # For now, standard colorbar 0-360
-        #        colorbar_dict = dict(
-        #           orientation="v", x=1.01, y=y_center, yanchor="middle", len=h, thickness=15,
-        #           tickmode="array", tickvals=[0, 90, 180, 270, 360], ticktext=["N", "E", "S", "W", "N"]
-        #        )
-        #        show_scale = True
-
-        # Gentle DOY smoothing 
-        if info["metric"] in {"Wind Direction", "Precipitation"}:
-             pivot_plot = pd.DataFrame(pivot_plot_slice).copy()
-        else:
-            pivot_plot = pd.DataFrame(pivot_plot_slice).copy().T.rolling(window=5, center=True, min_periods=1).mean().T
-
-        hover_labels = info.get("hover_labels")
-        if hover_labels is not None:
-             if hasattr(hover_labels, "shape") and hover_labels.shape[1] > 365:
-                 hover_labels = hover_labels[:, :365]
-        
-        customdata = hover_labels if hover_labels is not None else None
-        
-        # Updated Hover Template: Remove Year
-        hovertemplate = (
-            "<b>%{x|%b %d} %{y}:00</b><br>" +
-            f"{strip_name}: " +
-            "%{customdata}<extra></extra>"
-            if customdata is not None
-            else "<b>%{x|%b %d} %{y}:00</b><br>Value: %{z:.2f}<extra></extra>"
-        )
-
-        trace = go.Heatmap(
-            z=pivot_plot.values,
-            x=dates_2021,       # Real DatetimeIndex for positioning
-            y=pivot_plot.index, # HOD 0..23
-            colorscale=heatmap_colorscale,
-            showscale=show_scale,
-            colorbar=colorbar_dict,
-            zmin=zmin,
-            zmax=zmax,
-            customdata=customdata,
-            hovertemplate=hovertemplate,
-            showlegend=False,
-            zsmooth=False, # Disable smoothing for crisp blocks
-        )
-        fig.add_trace(trace, row=row, col=1)
-        heatmap_indices.append((len(fig.data) - 1, show_scale))
-        
-        # Configure y-axis (HOD)
-        # 12am, Noon, 11pm
-        fig.update_yaxes(
-            tickmode="array",
-            tickvals=[0, 12, 23],
-            ticktext=["12:00am", "noon", "11:59pm"],
-            gridcolor="rgba(128,128,128,0.1)",
-            gridwidth=0.5,
-            tickfont=dict(size=9, color="#666666"),
-            row=row, col=1,
-            autorange="reversed" # 0 at top (12am), 23 at bottom (11pm) matches image? 
-            # Image shows 12:00am at top, noon middle, 11:59pm bottom. 
-            # Plotly default: 0 at bottom. So "reversed" makes 0 top.
-        )
-        
-        # Calculate percentage stats for the description
-        total_valid_hours = float(np.sum(~np.isnan(pivot_plot_slice.values)))
-        description = ""
-        if total_valid_hours > 0:
-            def _category_distribution_text(labels: List[str], sort_desc: bool = False) -> str:
-                values = pd.to_numeric(pd.Series(np.ravel(pivot_plot_slice.values)), errors="coerce").dropna()
-                total = float(len(values))
-                if total <= 0 or not labels:
-                    return ""
-                rows = []
-                for idx, label in enumerate(labels):
-                    pct = float((values == idx).sum()) / total * 100.0
-                    rows.append((idx, label, pct))
-                if sort_desc:
-                    rows.sort(key=lambda item: (-item[2], item[0]))
-                return ", ".join(f"{label}: {pct:.1f}%" for _, label, pct in rows)
-
-            if strip_name == "Dry Bulb Temperature":
-                # Assuming Comfort Zone is 20°C to 26.6°C (bin index 2)
-                # The data is binned 0-4. Bin 2 is Comf. Zone.
-                comf_hours = np.sum(pivot_plot_slice.values == 2)
-                pct = (comf_hours / total_valid_hours) * 100
-                description = f"({pct:.1f}% of hours in Comf. Zone)"
-            elif strip_name == "Solar Radiation":
-                # Bin 3 is 500-700, Bin 4 is >700
-                high_rad_hours = np.sum(pivot_plot_slice.values >= 3)
-                pct = (high_rad_hours / total_valid_hours) * 100
-                description = f"({pct:.1f}% of hours > 500 W/m²)"
-            elif strip_name == "Wind Speed":
-                # Assuming >4.5 m/s is the highest bin (Bin 2 based on provided config)
-                high_wind_hours = np.sum(pivot_plot_slice.values == 2)
-                pct = (high_wind_hours / total_valid_hours) * 100
-                description = f"({pct:.1f}% of hours > 4.5 m/s)"
-            elif strip_name == "Humidity":
-                # RH comfort zone: 30-70% maps to bin index 1 (middle bin)
-                comf_rh_hours = np.sum(pivot_plot_slice.values == 1)
-                pct = (comf_rh_hours / total_valid_hours) * 100
-                comf_rh_hours_int = int(comf_rh_hours)
-                description = f"({comf_rh_hours_int} hours / {pct:.1f}% in Comfort Zone 30–70%)"
-
-            elif strip_name == "Precipitation":
-                description = f"({_category_distribution_text(active_tick_labels)})"
-            elif strip_name == "Wind Direction":
-                description = f"({_category_distribution_text(active_tick_labels, sort_desc=True)})"
-
-        # Add Title Annotation BELOW the heatmap
-        fig.add_annotation(
-            xref=f"x{row if row > 1 else ''} domain",
-            yref=f"y{row if row > 1 else ''} domain",
-            x=0.0, 
-            y=-0.15, # Position below, moved left
-            text=f"{strip_name.upper()}: {description}", 
-            showarrow=False,
-            font=dict(size=10, color="#d1d5db", weight="bold"),
-            xanchor="left",
-            yshift=0
-        )
-
-        # Configure x-axis for this row - HIDE TICKS primarily
-        fig.update_xaxes(
-            showticklabels=False, 
-            showgrid=False,
-            zeroline=False,
-            row=row, col=1,
-        )
-        
-        # Add Vertical Month Lines
-        month_starts = pd.date_range("2021-01-01", "2021-12-01", freq="MS")
-        for date_val in month_starts:
-            fig.add_vline(
-                x=date_val.timestamp() * 1000, # Plotly needs ms for date axes sometimes, or just date string
-                line_width=1, 
-                line_dash="solid", 
-                line_color="#333333", 
-                opacity=0.3,
-                row=row, col=1
-            )
-
-    # Add Month Initials ABOVE the top plot (Shared for all)
-    month_starts = pd.date_range("2021-01-01", "2021-12-01", freq="MS")
-    month_initials = list("JFMAMJJASOND")
-    
-    # Calculate mid-points for labels? Or just start? Image shows letter centered in month.
-    # Approximate centers: +15 days
-    month_centers = month_starts + pd.Timedelta(days=15)
-
-    for date_val, label in zip(month_centers, month_initials):
-        fig.add_annotation(
-            x=date_val,
-            y=1.02, 
-            xref="x", 
-            yref="paper",
-            text=label,
-            showarrow=False,
-            font=dict(size=12, color="black", weight="bold"), 
-            xanchor="center",
-            yanchor="bottom"
-        )
-
-    fig.update_layout(
-        autosize=False,
-        width=1200,
-        height=200 * n_strips + 80, 
-        showlegend=False,
-        title_text=None, # Clean look
-        font=dict(size=10, family="Arial"),
-        plot_bgcolor="rgba(0,0,0,0)",  # Transparent
-        paper_bgcolor="rgba(0,0,0,0)", # Transparent
-        margin=dict(l=50, r=150, t=60, b=40),
-    )
-    
-    return fig
 
 SOLAR_COLORSCALE = [
     [0.00, "#ffffff"],
@@ -6958,7 +6596,7 @@ def _render_all_visualizations_silently() -> None:
 
 
 REPORT_TAB_ORDER = [
-    "Overview & Stats",
+    "Overview",
     "Comfort & Loads",
     "Temp & Humidity",
     "Solar Analysis",
@@ -6971,11 +6609,14 @@ REPORT_TAB_ORDER = [
 
 REPORT_STRUCTURE = [
     {
-        "tab": "Overview & Stats",
-        "section": "Overview Metadata",
+        "tab": "Overview",
+        "section": "Climate Overview",
         "intro": "Site context and broad resource patterns are introduced before the report moves into thermal comfort, temperature, solar, psychrometric, and wind diagnostics.",
         "figures": [
             {"aliases": ["Annual Diurnal Resource Heatmap"], "title": "Annual Diurnal Resource Heatmap"},
+            {"aliases": ["Annual Diurnal Resource Heatmap — Rain and Wind"], "title": "Annual Diurnal Resource Heatmap — Rain and Wind"},
+            {"aliases": ["Overview Weather By Month"], "title": "Weather by Month"},
+            {"aliases": ["Overview Annual Wind Rose"], "title": "Overview Annual Wind Rose"},
         ],
     },
     {
@@ -9096,14 +8737,18 @@ def _forecast_precipitation_indicator_table(daily_df: Optional[pd.DataFrame], he
         return pd.DataFrame()
     work = daily_df.copy()
     work["date"] = pd.to_datetime(work.get("date"), errors="coerce")
-    work["rain_mm"] = pd.to_numeric(work.get("precip_sum"), errors="coerce").fillna(0).clip(lower=0)
+    work = work.dropna(subset=["date"]).sort_values("date").drop_duplicates("date")
+    if work.empty:
+        return pd.DataFrame()
+    work = work.set_index("date").asfreq("D").rename_axis("date").reset_index()
+    work["rain_mm"] = pd.to_numeric(work["precip_sum"], errors="coerce").mask(lambda value: value < 0)
     work["rain_in"] = (work["rain_mm"] / 25.4).round(3)
     work["precip_probability_pct"] = pd.to_numeric(work.get("precip_prob"), errors="coerce")
-    work["rolling_3day_rain_mm"] = work["rain_mm"].rolling(3, min_periods=1).sum().round(2)
-    work["rolling_7day_rain_mm"] = work["rain_mm"].rolling(7, min_periods=1).sum().round(2)
-    work["forecast_signal"] = "Balanced"
-    work.loc[work["rain_mm"] >= 25.0, "forecast_signal"] = "Flood-watch"
-    work.loc[(work["rain_mm"] < 1.0) & (work["rolling_7day_rain_mm"] <= 5.0), "forecast_signal"] = "Drought-watch"
+    work["rolling_3day_rain_mm"] = work["rain_mm"].rolling(3, min_periods=3).sum().round(2)
+    work["rolling_7day_rain_mm"] = work["rain_mm"].rolling(7, min_periods=7).sum().round(2)
+    work["forecast_signal"] = np.where(work["rain_mm"].notna(), "No threshold exceeded", "Unavailable")
+    work.loc[work["rain_mm"] >= 25.0, "forecast_signal"] = "Heavy rain"
+    work.loc[(work["rain_mm"] < 1.0) & (work["rolling_7day_rain_mm"] <= 5.0), "forecast_signal"] = "Dry spell"
     coords = _site_coordinates_from_header(header or {})
     lat, lon = coords if coords else (np.nan, np.nan)
     station = _safe_location_label(header or {})
@@ -9123,7 +8768,7 @@ def _forecast_precipitation_indicator_table(daily_df: Optional[pd.DataFrame], he
     return out
 
 
-def _render_precipitation_gis_exports(precip_info: Dict[str, object], header: Optional[dict]) -> None:
+def _render_precipitation_data_exports(precip_info: Dict[str, object], header: Optional[dict]) -> None:
     if not bool(precip_info.get("depth_available")):
         return
     monthly_table = _monthly_precipitation_indicator_table(precip_info, header)
@@ -9131,9 +8776,9 @@ def _render_precipitation_gis_exports(precip_info: Dict[str, object], header: Op
     station_slug = _download_slug(_safe_location_label(header or {}), "site")
     source_kind = str(precip_info.get("source_kind") or "Rainfall data")
 
-    st.markdown("#### GIS-ready rainfall data")
+    st.markdown("#### Rainfall data downloads")
     st.caption(
-        "These exports are rainfall hazard inputs for GIS screening. Use terrain, drainage, soil, stream gauge, and forecast layers before making final flood or drought predictions."
+        "These exports summarize rainfall for location-based screening. Use terrain, drainage, soil, stream gauge, and forecast layers before making final flood or drought predictions."
     )
     st.dataframe(monthly_table, use_container_width=True, hide_index=True)
 
@@ -9172,50 +8817,36 @@ def _daily_precipitation_screening_fig(precip_info: Dict[str, object]) -> Option
     return fig
 
 
-def _render_future_precipitation_forecast_exports(header: Optional[dict]) -> None:
-    coords = _site_coordinates_from_header(header or {})
+def _render_future_precipitation_forecast_exports(header: Optional[dict], daily_df: Optional[pd.DataFrame]) -> None:
     station_slug = _download_slug(_safe_location_label(header or {}), "site")
-    st.markdown("#### Near-term future rainfall for GIS")
-    st.caption("Fetches a 10-day Open-Meteo forecast. Flood-watch is based on daily rain >= 25 mm; drought-watch is a short-term dry-spell screen, not a full hydrologic drought model.")
-    if coords is None:
-        st.info("Latitude and longitude are required for the forecast rainfall lookup.")
-        return
-    lat, lon = coords
-    if st.button("Fetch 10-day rainfall forecast", key="precip_fetch_10day_forecast", use_container_width=True):
-        try:
-            import models.forecasting as fc
-            with st.spinner(f"Fetching 10-day rainfall forecast for {lat:.3f}, {lon:.3f}..."):
-                _, daily_df = fc.fetch_openmeteo_10day_forecast(float(lat), float(lon))
-            st.session_state["precip_forecast_daily"] = daily_df
-            st.session_state["precip_forecast_loaded_for"] = (round(float(lat), 5), round(float(lon), 5))
-            st.success("Forecast rainfall loaded.")
-        except Exception as exc:
-            st.error(f"Forecast rainfall lookup failed: {exc}")
-
-    daily_df = st.session_state.get("precip_forecast_daily")
+    st.markdown("#### Near-term rainfall")
+    st.caption("The same 10-day forecast supplies rainfall totals. Heavy-rain days have at least 25 mm; a dry spell requires seven complete days totaling at most 5 mm. These indicators do not predict flooding or hydrologic drought.")
     if daily_df is None or daily_df.empty:
+        st.info("Daily rainfall is unavailable for this forecast.")
         return
     forecast_table = _forecast_precipitation_indicator_table(daily_df, header)
     if forecast_table.empty:
         st.info("Forecast loaded, but no precipitation values were returned.")
         return
 
-    total_mm = float(forecast_table["rain_mm"].sum())
+    total_mm = float(forecast_table["rain_mm"].sum(min_count=1))
     peak_mm = float(forecast_table["rain_mm"].max())
     heavy_days = int((forecast_table["rain_mm"] >= 25.0).sum())
-    dry_watch_days = int((forecast_table["forecast_signal"] == "Drought-watch").sum())
+    dry_watch_days = int((forecast_table["forecast_signal"] == "Dry spell").sum())
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("10-day rain", f"{total_mm:.0f} mm", f"{total_mm / 25.4:.1f} in")
-    m2.metric("Peak daily rain", f"{peak_mm:.0f} mm", f"{peak_mm / 25.4:.1f} in")
-    m3.metric("Flood-watch days", f"{heavy_days} d", ">= 25 mm/day")
-    m4.metric("Drought-watch days", f"{dry_watch_days} d", "short dry screen")
+    m1.metric("Forecast rain", f"{total_mm:.0f} mm" if pd.notna(total_mm) else "Unavailable")
+    m2.metric("Peak daily rain", f"{peak_mm:.0f} mm" if pd.notna(peak_mm) else "Unavailable")
+    m3.metric("Heavy-rain days", f"{heavy_days} d")
+    m4.metric("Dry-spell days", f"{dry_watch_days} d")
+    st.caption(f"Rainfall available for {forecast_table['rain_mm'].notna().sum()} of {len(forecast_table)} forecast days.")
 
     fig = go.Figure()
     fig.add_bar(x=forecast_table["date"], y=forecast_table["rain_mm"], name="Forecast rain", marker_color="#38bdf8")
     fig.add_hline(y=25, line_dash="dash", line_color="#ef4444", annotation_text="Heavy rain screen")
     fig.update_layout(height=360, title="10-day forecast precipitation", yaxis_title="Rainfall (mm)", xaxis_title="Date", margin=dict(t=70, b=60))
     _st_plotly_chart(fig, use_container_width=True, key="precip_10day_forecast_chart")
-    st.dataframe(forecast_table, use_container_width=True, hide_index=True)
+    with st.expander("Rainfall forecast table", expanded=False):
+        st.dataframe(forecast_table, use_container_width=True, hide_index=True)
 
     forecast_csv = forecast_table.to_csv(index=False).encode("utf-8")
     forecast_geojson = _point_feature_collection(forecast_table, header, source_label="Open-Meteo 10-day forecast").encode("utf-8")
@@ -9238,8 +8869,7 @@ def render_precipitation_thermal_load_page() -> None:
     daily_precip_fig = _daily_precipitation_screening_fig(precip_info)
     if daily_precip_fig is not None:
         _st_plotly_chart(daily_precip_fig, use_container_width=True, key="precip_daily_screening")
-    _render_precipitation_gis_exports(precip_info, header)
-    _render_future_precipitation_forecast_exports(header)
+    _render_precipitation_data_exports(precip_info, header)
 
     fig_snow = _snowfall_profile_dashboard_fig(cdf)
     _st_plotly_chart(fig_snow, use_container_width=True, key="precip_context_snowfall")
@@ -9939,6 +9569,20 @@ def build_climate_pdf() -> bytes:
     source = _pdf_safe_text(st.session_state.get("source_label", "EPW File"))
     figs = _merged_pdf_figures()
     derived_figs = _build_additional_pdf_figures(cdf)
+    # Include the moved overview charts even when their pages were not visited.
+    if isinstance(cdf, pd.DataFrame) and not cdf.empty:
+        from resource_heatmaps import build_resource_report_figures
+        figs.update(build_resource_report_figures(cdf, st.session_state.get("heatmap_thresholds")))
+        if "Overview Weather By Month" not in figs:
+            precip_info = _overview_precipitation_summary(cdf, header)
+            derived_figs["Overview Weather By Month"] = _build_overview_weather_by_month_figure(cdf, location_label, precip_info)
+        if "Overview Annual Wind Rose" not in figs:
+            speed_col = get_metric_column(cdf, WIND_SPEED_ALIASES)
+            direction_col = get_metric_column(cdf, ["wind_direction", "winddir", "wd", "wdir", "wind_dir", "HourlyWindDirection"])
+            if speed_col and direction_col:
+                wind_fig = create_wind_rose(_clean_wind_frame(cdf, speed_col, direction_col))
+                if wind_fig is not None:
+                    derived_figs["Overview Annual Wind Rose"] = wind_fig
     existing_norms = set()
     existing_fingerprints = set()
     for existing_key, existing_fig in figs.items():
@@ -10711,6 +10355,206 @@ def _render_overview_precipitation_tracker(precip_info: Dict[str, object]) -> No
 
 
 def render_overview_page():
+    """Resource patterns first, followed by the former detail overview statistics."""
+    from resource_heatmaps import DEFAULT_THRESHOLDS, build_resource_heatmap_figure
+    cdf = st.session_state.get("cdf")
+    header = st.session_state.get("header") or {}
+    if cdf is None or cdf.empty:
+        st.info("Load a weather station to explore the annual resource patterns.")
+        return
+    loc = header.get("location", {})
+    st.markdown(
+        f'<section id="cc-tour-overview"><h2>Annual Diurnal Resource Heatmaps</h2>'
+        f'<p>{_ui_escape(_safe_location_label(header))}</p></section>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Read months from left to right and hours from top to bottom. Hover for each range; blank cells mean missing data. Temperature bands are a screening aid, not a comfort model.")
+
+    def reset_thresholds():
+        st.session_state.pop("heatmap_thresholds", None)
+        for prefix, values in (("solar_t", DEFAULT_THRESHOLDS["solar"]), ("hum_t", DEFAULT_THRESHOLDS["humidity"]), ("wind_t", DEFAULT_THRESHOLDS["wind"])):
+            for i in range(1, len(values) + 1):
+                st.session_state.pop(f"{prefix}{i}", None)
+
+    thresholds = {name: list(values) for name, values in DEFAULT_THRESHOLDS.items()}
+    with st.container(key="tour_resource_settings"):
+        with st.expander("Heatmap settings", expanded=False):
+            st.button("Reset thresholds", on_click=reset_thresholds)
+            for name, label, prefix, step, maximum in (
+                ("solar", "Solar radiation (W/m²)", "solar_t", 50.0, None),
+                ("humidity", "Relative humidity (%)", "hum_t", 5.0, 100.0),
+                ("wind", "Wind speed (m/s)", "wind_t", 0.5, None),
+            ):
+                st.caption(label)
+                cols = st.columns(len(thresholds[name]))
+                thresholds[name] = [col.number_input(f"{label} · boundary {i}", min_value=0.0, max_value=maximum,
+                    value=float(value), step=step, key=f"{prefix}{i}")
+                    for i, (col, value) in enumerate(zip(cols, thresholds[name]), 1)]
+    try:
+        fig = build_resource_heatmap_figure(cdf, thresholds)
+    except ValueError as exc:
+        st.error(str(exc))
+        fig = None
+    if fig is not None:
+        st.session_state["heatmap_thresholds"] = thresholds
+        with st.container(key="tour_resource_heatmaps"):
+            _st_plotly_chart(fig, use_container_width=True, key="overview_resource_heatmaps", config={"responsive": True})
+        _add_manual_pdf_figure("Annual Diurnal Resource Heatmap", fig)
+        with st.expander("Save heatmaps", expanded=False):
+            st.download_button("Download interactive heatmaps", fig.to_html(include_plotlyjs=True).encode("utf-8"),
+                f"{_download_slug(_safe_location_label(header), 'site')}_resource_heatmaps.html", "text/html")
+            st.caption("Use the chart toolbar for an image or Report for the complete PDF.")
+    else:
+        st.info("No resource chart is available. Check the thresholds and weather data.")
+    st.divider()
+    with st.container(key="tour_resource_statistics"):
+        _render_resource_statistics(cdf, loc, header)
+
+
+def _render_resource_statistics(cdf, loc, header):
+    # ── Key Takeaways (ELEVATED TO TOP) ──────────────────────────
+    def _month_name(m: int) -> str:
+        try:
+            return pd.Timestamp(2001, int(m), 1).strftime("%B")
+        except Exception:
+            return f"Month {m}"
+
+    highlights: List[str] = []
+    if "drybulb" in cdf and not cdf["drybulb"].dropna().empty:
+        temp_series = cdf["drybulb"].dropna()
+        monthly_means = temp_series.groupby(temp_series.index.month).mean()
+        daily_highs = temp_series.resample("1D").max().dropna()
+        monthly_highs = daily_highs.groupby(daily_highs.index.month).mean()
+        daily_lows = temp_series.resample("1D").min().dropna()
+        monthly_lows = daily_lows.groupby(daily_lows.index.month).mean()
+        daily_means = temp_series.resample("1D").mean().dropna()
+        hdd_daily = (18.0 - daily_means).clip(lower=0)
+        monthly_hdd = hdd_daily.groupby(hdd_daily.index.month).sum()
+
+        if not monthly_means.empty:
+            warm_month = int(monthly_means.idxmax())
+            warm_label = _month_name(warm_month)
+            warm_high = monthly_highs.get(warm_month, monthly_means.loc[warm_month])
+            highlights.append(
+                f"{warm_label} is the warmest month, with typical daytime highs near {format_temperature(warm_high)}."
+            )
+
+            cold_month = int(monthly_means.idxmin())
+            cold_label = _month_name(cold_month)
+            cold_low = monthly_lows.get(cold_month, monthly_means.loc[cold_month])
+            hdd_val = monthly_hdd.get(cold_month)
+            if pd.isna(hdd_val):
+                highlights.append(
+                    f"{cold_label} is when winters bite hardest, with overnight lows around {format_temperature(cold_low)}."
+                )
+            else:
+                highlights.append(
+                    f"{cold_label} brings overnight lows near {format_temperature(cold_low)} and roughly {hdd_val:.0f} heating degree days (base 18\u00a0°C)."
+                )
+
+    if "relhum" in cdf and not cdf["relhum"].dropna().empty:
+        rh_mean = cdf["relhum"].mean()
+        rh_desc = _humidity_description(rh_mean)
+        highlights.append(f"Annual mean humidity hovers around {rh_mean:.0f}% ({rh_desc}) — a {'moist' if rh_mean > 65 else 'moderate'} moisture profile.")
+
+    if "windspd" in cdf and not cdf["windspd"].dropna().empty:
+        w_mean = cdf["windspd"].mean()
+        w_desc = _wind_description(w_mean)
+        highlights.append(f"Mean wind speed is {w_mean:.1f} m/s ({w_desc}).")
+
+    if highlights:
+        li_items = "\n".join(f"<li>{_ui_escape(text)}</li>" for text in highlights)
+        st.markdown(
+            f"""
+            <div class="cc-key-takeaways">
+                <h4>💡 Key Takeaways</h4>
+                <ul>
+                    {li_items}
+                </ul>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # ── Location Metadata ─────────────────────────────────────────
+    c1, c2, c3 = st.columns(3)
+    c4, c5, c6 = st.columns(3)
+
+    def _fmt(val, f):
+        try:
+            return f(float(val))
+        except Exception:
+            return str(val)
+
+    c1.metric("🌐 Latitude", _fmt(loc.get("latitude"), lambda v: f"{v:.5f}°"))
+    c2.metric("🌐 Longitude", _fmt(loc.get("longitude"), lambda v: f"{v:.5f}°"))
+    c3.metric("🕐 TZ (hrs from UTC)", _fmt(loc.get("timezone"), lambda v: f"{v:+.1f}"))
+    c4.metric("⛰️ Elevation (m)", _fmt(loc.get("elevation_m"), lambda v: f"{v:.1f}"))
+    wmo_tip = _glossary_tip("WMO")
+    c5.metric("🏷️ WMO", str(loc.get("wmo")))
+    if wmo_tip:
+        c5.markdown(wmo_tip, unsafe_allow_html=True)
+    c6.metric("Climate Zone", _header_climate_zone(header))
+
+    # ── Annual Climate Statistics with Human-Readable Descriptors ──
+    st.markdown("### 📈 Annual Climate Statistics")
+    c1, c2, c3, c4 = st.columns(4)
+    if "drybulb" in cdf:
+        c1.metric("🌡️ Avg Temperature", format_temperature(cdf['drybulb'].mean()))
+    if "relhum" in cdf:
+        rh_val = cdf['relhum'].mean()
+        c2.metric("💧 Avg Humidity", f"{rh_val:.0f} %")
+        c2.markdown(f'<span class="cc-metric-descriptor">{_humidity_description(rh_val)}</span>', unsafe_allow_html=True)
+    if "windspd" in cdf:
+        wind_val = cdf['windspd'].mean()
+        c3.metric("💨 Avg Wind Speed", f"{wind_val:.1f} m/s")
+        c3.markdown(f'<span class="cc-metric-descriptor">{_wind_description(wind_val)}</span>', unsafe_allow_html=True)
+    if "glohorrad" in cdf:
+        ghi_wm2 = cdf['glohorrad'].mean()
+        ghi_annual_kwh = cdf['glohorrad'].clip(lower=0).sum() / 1000.0
+        c4.metric("☀️ Avg Solar Rad", f"{ghi_wm2:.0f} W/m²")
+        ghi_tip = _glossary_tip("GHI")
+        c4.markdown(f'<span class="cc-metric-descriptor">{_solar_description(ghi_annual_kwh)}</span>{ghi_tip}', unsafe_allow_html=True)
+
+    # Seasonal breakdown (Winter, Spring, Summer, Fall)
+    season_months = {
+        "Winter (Dec-Feb)": [12, 1, 2],
+        "Spring (Mar-May)": [3, 4, 5],
+        "Summer (Jun-Aug)": [6, 7, 8],
+        "Fall (Sep-Nov)": [9, 10, 11],
+    }
+
+    def _season_mean(series: pd.Series, months: List[int]):
+        if series is None or series.empty:
+            return np.nan
+        mask = series.index.month.isin(months)
+        if not mask.any():
+            return np.nan
+        return float(series.loc[mask].mean())
+
+    seasonal_rows = []
+    for season_label, months in season_months.items():
+        seasonal_rows.append({
+            "Season": season_label,
+            "Avg Temp (°C)": _season_mean(cdf.get("drybulb"), months),
+            "Avg Humidity (%)": _season_mean(cdf.get("relhum"), months),
+            "Avg Wind (m/s)": _season_mean(cdf.get("windspd"), months),
+            "Avg Solar (W/m²)": _season_mean(cdf.get("glohorrad"), months),
+        })
+
+    seasonal_df = pd.DataFrame(seasonal_rows).set_index("Season")
+    seasonal_df = seasonal_df.map(lambda v: "—" if pd.isna(v) else (f"{v:.1f}" if isinstance(v, float) else v))
+    st.markdown("#### Seasonal snapshot")
+    st.table(seasonal_df)
+
+    try:
+        n_hours = len(cdf)
+        st.caption(f"Records: **{n_hours:,}** hourly EPW values")
+    except Exception as e:
+        st.warning(f"Data window failed: {e}")
+
+
+def render_detail_overview_page():
     cdf = st.session_state.get("cdf")
     header = st.session_state.get("header") or {}
     if cdf is None:
@@ -10735,7 +10579,7 @@ def render_overview_page():
 
     st.markdown(
         f"""
-        <section class="cc-hero-panel" id="cc-tour-overview">
+        <section class="cc-hero-panel" id="cc-detail-overview">
             <div>
                 <p class="cc-eyebrow">Climate intelligence workspace</p>
                 <h1>{_ui_escape(location_label)}</h1>
@@ -10745,7 +10589,7 @@ def render_overview_page():
                 <div class="cc-hero-tag-row">
                     <span class="cc-hero-tag"><strong>Climate zone:</strong> <em>{_ui_escape(koppen['code'])} · {_ui_escape(koppen['name'])}</em></span>
                     <span class="cc-hero-tag"><strong>CRS:</strong> <em>{_ui_escape(crs_label)}</em></span>
-                    <span class="cc-hero-tag"><strong>Site:</strong> <em>{_ui_escape(lat_value)}N, {_ui_escape(lon_value)}E · {_ui_escape(elev_value)}</em></span>
+                    <span class="cc-hero-tag"><strong>Site:</strong> <em>{_ui_escape(lat_value)}°, {_ui_escape(lon_value)}° · {_ui_escape(elev_value)}</em></span>
                 </div>
             </div>
             <div class="cc-hero-meta">
@@ -10759,7 +10603,7 @@ def render_overview_page():
     )
 
     with st.container(key="tour_overview_metrics"):
-        metric_cols = st.columns(6)
+        metric_cols = [col for _ in range(2) for col in st.columns(3)]
 
         if "drybulb" in cdf:
             temp = pd.to_numeric(cdf["drybulb"], errors="coerce")
@@ -11136,7 +10980,7 @@ def render_overview_page():
     )
     flow_cols = st.columns(4)
     flow_items = [
-        ("🔬 Detail View", "Deep-dive into climate, comfort, solar, psychrometrics, wind, and raw data"),
+        ("🔬 Analysis tabs", "Use the tabs above for comfort, solar, psychrometrics, wind, and raw data"),
         ("📈 Predictions", "Short-term forecast and future climate scenarios (2050/2080)"),
         ("📡 Live Data", "Compare EPW baselines against real-time sensor readings"),
         ("📄 Report", "Generate PDF reports and download chart-level SVG, HTML, and CSV"),
@@ -11549,503 +11393,10 @@ def render_dashboard_page():
         return pdf_capture_mode or dashboard_section == section_name
 
 
-    if _render_dashboard_section("Overview & Stats"):
-        st.markdown("### 📊 Climate Overview")
-        st.markdown(f"## 📍 {loc.get('city')}, {loc.get('state_province')} — {loc.get('country')}")
-
-        # ── Key Takeaways (ELEVATED TO TOP) ──────────────────────────
-        def _month_name(m: int) -> str:
-            try:
-                return pd.Timestamp(2001, int(m), 1).strftime("%B")
-            except Exception:
-                return f"Month {m}"
-
-        highlights: List[str] = []
-        if "drybulb" in cdf and not cdf["drybulb"].dropna().empty:
-            temp_series = cdf["drybulb"].dropna()
-            monthly_means = temp_series.groupby(temp_series.index.month).mean()
-            daily_highs = temp_series.resample("1D").max().dropna()
-            monthly_highs = daily_highs.groupby(daily_highs.index.month).mean()
-            daily_lows = temp_series.resample("1D").min().dropna()
-            monthly_lows = daily_lows.groupby(daily_lows.index.month).mean()
-            daily_means = temp_series.resample("1D").mean().dropna()
-            hdd_daily = (18.0 - daily_means).clip(lower=0)
-            monthly_hdd = hdd_daily.groupby(hdd_daily.index.month).sum()
-
-            if not monthly_means.empty:
-                warm_month = int(monthly_means.idxmax())
-                warm_label = _month_name(warm_month)
-                warm_high = monthly_highs.get(warm_month, monthly_means.loc[warm_month])
-                highlights.append(
-                    f"{warm_label} is the warmest month, with typical daytime highs near {format_temperature(warm_high)}."
-                )
-
-                cold_month = int(monthly_means.idxmin())
-                cold_label = _month_name(cold_month)
-                cold_low = monthly_lows.get(cold_month, monthly_means.loc[cold_month])
-                hdd_val = monthly_hdd.get(cold_month)
-                if pd.isna(hdd_val):
-                    highlights.append(
-                        f"{cold_label} is when winters bite hardest, with overnight lows around {format_temperature(cold_low)}."
-                    )
-                else:
-                    highlights.append(
-                        f"{cold_label} brings overnight lows near {format_temperature(cold_low)} and roughly {hdd_val:.0f} heating degree days (base 18\u00a0°C)."
-                    )
-
-        if "relhum" in cdf and not cdf["relhum"].dropna().empty:
-            rh_mean = cdf["relhum"].mean()
-            rh_desc = _humidity_description(rh_mean)
-            highlights.append(f"Annual mean humidity hovers around {rh_mean:.0f}% ({rh_desc}) — a {'moist' if rh_mean > 65 else 'moderate'} moisture profile.")
-
-        if "windspd" in cdf and not cdf["windspd"].dropna().empty:
-            w_mean = cdf["windspd"].mean()
-            w_desc = _wind_description(w_mean)
-            highlights.append(f"Mean wind speed is {w_mean:.1f} m/s ({w_desc}).")
-
-        if highlights:
-            li_items = "\n".join(f"<li>{_ui_escape(text)}</li>" for text in highlights)
-            st.markdown(
-                f"""
-                <div class="cc-key-takeaways">
-                    <h4>💡 Key Takeaways</h4>
-                    <ul>
-                        {li_items}
-                    </ul>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        # ── Location Metadata ─────────────────────────────────────────
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-
-        def _fmt(val, f):
-            try:
-                return f(float(val))
-            except Exception:
-                return str(val)
-
-        c1.metric("🌐 Latitude", _fmt(loc.get("latitude"), lambda v: f"{v:.5f}°"))
-        c2.metric("🌐 Longitude", _fmt(loc.get("longitude"), lambda v: f"{v:.5f}°"))
-        c3.metric("🕐 TZ (hrs from UTC)", _fmt(loc.get("timezone"), lambda v: f"{v:+.1f}"))
-        c4.metric("⛰️ Elevation (m)", _fmt(loc.get("elevation_m"), lambda v: f"{v:.1f}"))
-        wmo_tip = _glossary_tip("WMO")
-        c5.metric("🏷️ WMO", str(loc.get("wmo")))
-        if wmo_tip:
-            c5.markdown(wmo_tip, unsafe_allow_html=True)
-        c6.metric("Climate Zone", _header_climate_zone(header))
-
-        # ── Annual Climate Statistics with Human-Readable Descriptors ──
-        st.markdown("### 📈 Annual Climate Statistics")
-        c1, c2, c3, c4 = st.columns(4)
-        if "drybulb" in cdf:
-            c1.metric("🌡️ Avg Temperature", format_temperature(cdf['drybulb'].mean()))
-        if "relhum" in cdf:
-            rh_val = cdf['relhum'].mean()
-            c2.metric("💧 Avg Humidity", f"{rh_val:.0f} %")
-            c2.markdown(f'<span class="cc-metric-descriptor">{_humidity_description(rh_val)}</span>', unsafe_allow_html=True)
-        if "windspd" in cdf:
-            wind_val = cdf['windspd'].mean()
-            c3.metric("💨 Avg Wind Speed", f"{wind_val:.1f} m/s")
-            c3.markdown(f'<span class="cc-metric-descriptor">{_wind_description(wind_val)}</span>', unsafe_allow_html=True)
-        if "glohorrad" in cdf:
-            ghi_wm2 = cdf['glohorrad'].mean()
-            ghi_annual_kwh = cdf['glohorrad'].clip(lower=0).sum() / 1000.0
-            c4.metric("☀️ Avg Solar Rad", f"{ghi_wm2:.0f} W/m²")
-            ghi_tip = _glossary_tip("GHI")
-            c4.markdown(f'<span class="cc-metric-descriptor">{_solar_description(ghi_annual_kwh)}</span>{ghi_tip}', unsafe_allow_html=True)
-
-        # Seasonal breakdown (Winter, Spring, Summer, Fall)
-        season_months = {
-            "Winter (Dec-Feb)": [12, 1, 2],
-            "Spring (Mar-May)": [3, 4, 5],
-            "Summer (Jun-Aug)": [6, 7, 8],
-            "Fall (Sep-Nov)": [9, 10, 11],
-        }
-
-        def _season_mean(series: pd.Series, months: List[int]):
-            if series is None or series.empty:
-                return np.nan
-            mask = series.index.month.isin(months)
-            if not mask.any():
-                return np.nan
-            return float(series.loc[mask].mean())
-
-        seasonal_rows = []
-        for season_label, months in season_months.items():
-            seasonal_rows.append({
-                "Season": season_label,
-                "Avg Temp (°C)": _season_mean(cdf.get("drybulb"), months),
-                "Avg Humidity (%)": _season_mean(cdf.get("relhum"), months),
-                "Avg Wind (m/s)": _season_mean(cdf.get("windspd"), months),
-                "Avg Solar (W/m²)": _season_mean(cdf.get("glohorrad"), months),
-            })
-
-        seasonal_df = pd.DataFrame(seasonal_rows).set_index("Season")
-        seasonal_df = seasonal_df.map(lambda v: "—" if pd.isna(v) else (f"{v:.1f}" if isinstance(v, float) else v))
-        st.markdown("#### Seasonal snapshot")
-        st.table(seasonal_df)
-
-        try:
-            n_hours = len(cdf)
-            st.caption(f"Records: **{n_hours:,}** hourly EPW values")
-        except Exception as e:
-            st.warning(f"Data window failed: {e}")
-
-        # ========== HEATMAPS (moved from former Heatmaps tab) ==========
-        st.divider()
-        st.divider()
-        
-        # Dynamic header with location
-
-
-        import json
-
-        # Default thresholds
-        default_thresholds = {
-            "solar": [100.0, 300.0, 500.0, 700.0],
-            "humidity": [40.0, 60.0, 80.0],
-            "wind": [1.5, 4.5],
-        }
-
-        # Initialize/persist thresholds in session_state
-        if "heatmap_thresholds" not in st.session_state:
-            st.session_state["heatmap_thresholds"] = default_thresholds.copy()
-
-        thresholds_state = st.session_state["heatmap_thresholds"]
-
-        def _labels_from_thresholds(ths: list[float], suffix: str) -> list[str]:
-            labels = []
-            if not ths:
-                return labels
-            labels.append(f"<{ths[0]:g}{suffix}")
-            for a, b in zip(ths, ths[1:]):
-                labels.append(f"{a:g}–{b:g}{suffix}")
-            labels.append(f">{ths[-1]:g}{suffix}")
-            return labels
-
-        invalid_thresholds = False
-
-        with st.expander("Legend & Thresholds", expanded=False):
-            c_reset = st.columns([3,1])[1]
-            if c_reset.button("Reset thresholds to defaults"):
-                st.session_state["heatmap_thresholds"] = default_thresholds.copy()
-                _rerun()
-
-            c_s1, c_s2, c_s3, c_s4 = st.columns(4)
-            solar_t1 = c_s1.number_input("Solar t1 (W/m²)", value=float(thresholds_state["solar"][0]), step=50.0, key="solar_t1")
-            solar_t2 = c_s2.number_input("Solar t2", value=float(thresholds_state["solar"][1]), step=50.0, key="solar_t2")
-            solar_t3 = c_s3.number_input("Solar t3", value=float(thresholds_state["solar"][2]), step=50.0, key="solar_t3")
-            solar_t4 = c_s4.number_input("Solar t4", value=float(thresholds_state["solar"][3]), step=50.0, key="solar_t4")
-            solar_thresholds = [solar_t1, solar_t2, solar_t3, solar_t4]
-
-            c_h1, c_h2, c_h3 = st.columns(3)
-            hum_t1 = c_h1.number_input("Humidity t1 (%)", value=float(thresholds_state["humidity"][0]), step=5.0, key="hum_t1")
-            hum_t2 = c_h2.number_input("Humidity t2", value=float(thresholds_state["humidity"][1]), step=5.0, key="hum_t2")
-            hum_t3 = c_h3.number_input("Humidity t3", value=float(thresholds_state["humidity"][2]), step=5.0, key="hum_t3")
-            humidity_thresholds = [hum_t1, hum_t2, hum_t3]
-
-            c_w1, c_w2 = st.columns(2)
-            wind_t1 = c_w1.number_input("Wind t1 (m/s)", value=float(thresholds_state["wind"][0]), step=0.5, key="wind_t1")
-            wind_t2 = c_w2.number_input("Wind t2", value=float(thresholds_state["wind"][1]), step=0.5, key="wind_t2")
-            wind_thresholds = [wind_t1, wind_t2]
-
-            def _is_strictly_increasing(vals):
-                return all(vals[i] < vals[i+1] for i in range(len(vals)-1))
-
-            if not (_is_strictly_increasing(solar_thresholds) and _is_strictly_increasing(humidity_thresholds) and _is_strictly_increasing(wind_thresholds)):
-                invalid_thresholds = True
-                st.error("Thresholds must be strictly increasing for each metric.")
-            else:
-                thresholds_state["solar"] = solar_thresholds
-                thresholds_state["humidity"] = humidity_thresholds
-                thresholds_state["wind"] = wind_thresholds
-
-        if invalid_thresholds:
-            st.info("Adjust thresholds to continue.")
-        else:
-            location_label = get_clean_city_name()
-            st.markdown(f"<h3>{location_label} – Annual Diurnal Resource Heatmaps</h3>", unsafe_allow_html=True)
-            st.caption("Adjust legend thresholds to explore how different performance ranges appear across the year.")
-            # Continuous heatmap helper: aggregate first (mean/median), keep thresholds for hover/legend only
-            def _build_pivot_with_thresholds(df: pd.DataFrame, col: str, metric_label: str, thresholds: list[float], units_suffix: str, palette_metric: str, agg: str = "mean", raw_col: str = None):
-                series = pd.to_numeric(df[col], errors="coerce")
-                series = series.dropna()
-                if series.empty:
-                    return pd.DataFrame(), {"error": f"No valid data for {metric_label}"}
-
-                work = pd.DataFrame({"val": series})
-                if raw_col:
-                    work["raw"] = pd.to_numeric(df[raw_col], errors="coerce")
-                else:
-                    work["raw"] = work["val"]
-                    
-                work["hod"] = work.index.hour
-                work["doy"] = work.index.dayofyear
-
-                if agg == "median":
-                    aggfunc = "median"
-                elif agg == "max":
-                    aggfunc = "max"
-                else:
-                    aggfunc = "mean"
-                pivot_raw = work.pivot_table(index="hod", columns="doy", values="val", aggfunc=aggfunc)
-                pivot_raw = pivot_raw.reindex(index=range(24), columns=range(1, 367))
-                
-                # For labels, we use the RAW values to bin against thresholds
-                # We need to aggregate raw values same way to match the grid cells?
-                # Or do we bin the aggregated raw values? 
-                # If we bin the raw values, we get mode? 
-                # Simpler: Aggregate the RAW values too, then bin.
-                pivot_val_for_labels = work.pivot_table(index="hod", columns="doy", values="raw", aggfunc=aggfunc)
-                pivot_val_for_labels = pivot_val_for_labels.reindex(index=range(24), columns=range(1, 367))
-
-                # Thresholds for interpretation (hover/legend), not for coloring
-                bins = [-np.inf] + thresholds + [np.inf]
-                labels = _labels_from_thresholds(thresholds, units_suffix)
-                
-                cat = pd.cut(pivot_val_for_labels.values.flatten(), bins=bins, labels=labels, right=False)
-                label_grid = pd.Series(cat).astype(object).values.reshape(pivot_raw.shape)
-
-                colors_default, _ = get_color_scale_for_metric(palette_metric)
-                colors = colors_default[: len(labels)]
-
-                info = {
-                    "metric": metric_label,
-                    "col": col,
-                    "labels": labels,
-                    "colors": colors,
-                    "thresholds": thresholds,
-                    "hover_labels": label_grid,
-                }
-                return pivot_raw, info
-
-            heatmap_dict = {}
-            
-            # Add Dry Bulb Temperature first
-            db_col = get_metric_column(cdf, ["dry_bulb_temperature", "drybulb", "temp", "db"])
-            if db_col:
-                # Note: We pass [] for thresholds to let defaults or custom thresholds handling kick in
-                # But _build_pivot_with_thresholds expects a list. 
-                # If thresholds_state has 'drybulb', use it, else empty.
-                # We will assume "Dry Bulb Temperature" uses the color scale "drybulb" or "thermal" which is standard.
-                # We pass agg="mean".
-                db_thresholds = [10.0, 20.0, 26.6, 35.0]
-                
-                # Prepare categorical bins for heatmap values (0, 1, 2...)
-                # Correct bin edges: -100, 10, 20, 26.6, 35, 100
-                db_bins = [-100, 10.0, 20.0, 26.6, 35.0, 100.0] 
-                db_series = cdf[db_col]
-                cdf["db_cat"] = pd.cut(db_series, bins=db_bins, labels=[0, 1, 2, 3, 4], include_lowest=True, right=False).astype(float)
-
-                pivot_binned, info = _build_pivot_with_thresholds(
-                    cdf, "db_cat", "Dry Bulb Temperature", db_thresholds, "°C", "drybulb", agg="mean", raw_col=db_col
-                )
-                if not pivot_binned.empty:
-                    heatmap_dict["Dry Bulb Temperature"] = (pivot_binned, info)
-
-            solar_col = get_metric_column(cdf, ["glohorrad", "global_horizontal_radiation", "solar"])
-            if solar_col:
-                # Bin Solar into categories 0..4 for discrete coloring
-                # 0:<100, 1:100-300, 2:300-500, 3:500-700, 4:>700
-                # Ensure we handle values >= 0
-                s_series = cdf[solar_col].clip(lower=0)
-                sb = [0.0, 100.0, 300.0, 500.0, 700.0, s_series.max() + 1.0]
-                # If max < 700, ensure bins cover it
-                if sb[-1] <= 700.0: sb[-1] = 9999.0
-                
-                cdf["solar_cat"] = pd.cut(s_series, bins=sb, labels=[0, 1, 2, 3, 4], include_lowest=True, right=False).astype(float)
-                
-                # Pass "solar_cat" for the heatmap values, but RAW solar_col for labels
-                pivot_binned, info = _build_pivot_with_thresholds(
-                    cdf, "solar_cat", "Solar Radiation", thresholds_state["solar"], " W/m²", "solar", agg="mean", raw_col=solar_col
-                )
-                if not pivot_binned.empty:
-                    heatmap_dict["Solar Radiation"] = (pivot_binned, info)
-
-            rh_col = get_metric_column(cdf, ["relative_humidity", "relhum", "rh"])
-            if rh_col:
-                # Pre-bin humidity into categories for consistent handling
-                rh_series = cdf[rh_col].clip(0, 100)
-                rh_bins = [0.0, 30.0, 70.0, 100.01]  # <30, 30-70, >70
-                cdf["rh_cat"] = pd.cut(rh_series, bins=rh_bins, labels=[0, 1, 2], include_lowest=True, right=False).astype(float)
-                pivot_binned, info = _build_pivot_with_thresholds(cdf, "rh_cat", "Humidity", thresholds_state["humidity"], "%", "humidity", agg="mean", raw_col=rh_col)
-                if not pivot_binned.empty:
-                    heatmap_dict["Humidity"] = (pivot_binned, info)
-
-            precip_col = _precip_depth_column(cdf)
-            if precip_col:
-                precip_series = pd.to_numeric(cdf[precip_col], errors="coerce").mask(lambda s: (s < 0) | (s > 900)).fillna(0)
-                cdf["precipdepthclean"] = precip_series
-                max_precip = float(precip_series.max()) if not precip_series.empty else 0.0
-                trace_threshold = 0.01 if max_precip < 0.1 else 0.1
-                precip_bins = [0.0, trace_threshold, 2.5, 10.0, max(max_precip + trace_threshold, 999.0)]
-                cdf["precipcat"] = pd.cut(
-                    precip_series,
-                    bins=precip_bins,
-                    labels=[0, 1, 2, 3],
-                    include_lowest=True,
-                    right=False,
-                ).astype(float)
-                pivot_binned, info = _build_pivot_with_thresholds(
-                    cdf,
-                    "precipcat",
-                    "Precipitation",
-                    [trace_threshold, 2.5, 10.0],
-                    " mm",
-                    "precipitation",
-                    agg="max",
-                    raw_col="precipdepthclean",
-                )
-                if not pivot_binned.empty:
-                    precip_labels = ["Dry", "Light", "Moderate", "Heavy"]
-                    info["labels"] = precip_labels
-                    info["hover_labels"] = pivot_binned.map(
-                        lambda v: precip_labels[int(v)] if pd.notna(v) and 0 <= int(v) < len(precip_labels) else np.nan
-                    ).values
-                    heatmap_dict["Precipitation"] = (pivot_binned, info)
-
-            wind_col = get_metric_column(cdf, ["windspd", "wind_speed", "wspd"])
-            if wind_col:
-                wb = [0.0, 1.5, 4.5, cdf[wind_col].max() + 1.0]
-                if wb[-1] <= 4.5: wb[-1] = 999.0
-                
-                cdf["wind_cat"] = pd.cut(cdf[wind_col], bins=wb, labels=[0, 1, 2], include_lowest=True, right=False).astype(float)
-                
-                # Pass "wind_cat" for heatmap, RAW wind_col for labels
-                pivot_binned, info = _build_pivot_with_thresholds(
-                    cdf, "wind_cat", "Wind Speed", thresholds_state["wind"], " m/s", "wind", agg="median", raw_col=wind_col
-                )
-                if not pivot_binned.empty:
-                    heatmap_dict["Wind Speed"] = (pivot_binned, info)
-            _wd_col = next((c for c in cdf.columns if "wind" in c.lower() and "dir" in c.lower()), None)
-            if _wd_col:
-                try:
-                    dir_col = _wd_col
-                    _COMPASS_TO_DEG = {
-                        "N": 0, "NNE": 22.5, "NE": 45, "ENE": 67.5,
-                        "E": 90, "ESE": 112.5, "SE": 135, "SSE": 157.5,
-                        "S": 180, "SSW": 202.5, "SW": 225, "WSW": 247.5,
-                        "W": 270, "WNW": 292.5, "NW": 315, "NNW": 337.5,
-                    }
-                    raw_dir = cdf[dir_col].astype(str).str.strip().str.upper()
-                    dir_series_num = pd.to_numeric(raw_dir, errors="coerce")
-                    dir_series_txt = raw_dir.map(_COMPASS_TO_DEG)
-                    dir_series = dir_series_num.fillna(dir_series_txt)
-                    dir_series = dir_series.mask(dir_series >= 999)
-                    dir_series = dir_series.dropna()
-
-                    if not dir_series.empty:
-                        work_dir = pd.DataFrame({"val": dir_series})
-                        work_dir["hod"] = work_dir.index.hour
-                        work_dir["doy"] = work_dir.index.dayofyear
-
-                        sector_names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-
-                        def dir_to_sector_code(deg: float) -> float:
-                            if pd.isna(deg): return np.nan
-                            d = deg % 360.0
-                            if d >= 337.5 or d < 22.5: return 0
-                            elif d < 67.5: return 1
-                            elif d < 112.5: return 2
-                            elif d < 157.5: return 3
-                            elif d < 202.5: return 4
-                            elif d < 247.5: return 5
-                            elif d < 292.5: return 6
-                            else: return 7
-
-                        work_dir["sector"] = work_dir["val"].apply(dir_to_sector_code)
-                        work_dir = work_dir.dropna(subset=["sector"])
-
-                        sector_mode_series = (
-                            work_dir.groupby(["hod", "doy"])["sector"]
-                            .agg(lambda s: s.mode().iat[0] if not s.mode().empty else np.nan)
-                        )
-                        pivot_dir = sector_mode_series.unstack("doy")
-                        pivot_dir = pivot_dir.reindex(index=range(24), columns=range(1, 366))
-
-                        dir_colors = ["#4c6fff", "#3fb3ff", "#36d1a8", "#8bd36b",
-                                    "#f6c445", "#f08c42", "#e15b9a", "#9d6bff"]
-                        label_grid = pivot_dir.map(
-                            lambda v: sector_names[int(v)] if pd.notna(v) else np.nan
-                        ).values
-
-                        info_dir = {
-                            "metric": "Wind Direction",
-                            "col": dir_col,
-                            "labels": sector_names,
-                            "colors": dir_colors,
-                            "thresholds": [],
-                            "hover_labels": label_grid,
-                            "show_colorscale": False,
-                            "colorbar": None,
-                        }
-                        heatmap_dict["Wind Direction"] = (pivot_dir, info_dir)
-
-                except Exception as e:
-                    st.warning(f"Wind direction heatmap failed: {e}")
-    
-
-            if not heatmap_dict:
-                st.info("No metric data available for heatmap generation.")
-            else:
-                fig = build_diurnal_heatmap_figure(heatmap_dict, cdf, header)
-                if fig:
-                    _st_plotly_chart(fig, use_container_width=False, config={"responsive": False})
-                    _add_manual_pdf_figure("Annual Diurnal Resource Heatmap", fig)
-                    # Downloads reflecting current thresholds
-                    city_clean = get_clean_city_name().replace(" ", "_").replace(",", "").replace("__", "_")
-                    clean_loc = city_clean
-                    c1d, c2d = st.columns(2)
-                    with c1d:
-                        try:
-                            svg_bytes = fig.to_image(format="svg", scale=2, width=1200, height=800)
-                            st.download_button(label="📥 Download heatmaps as SVG", data=svg_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.svg", mime="image/svg+xml")
-                        except Exception:
-                            html_bytes = fig.to_html(include_plotlyjs='cdn').encode('utf-8')
-                            st.download_button(label="📥 Download heatmaps (HTML)", data=html_bytes, file_name=f"{clean_loc}_diurnal_heatmaps.html", mime="text/html")
-
-                    with c2d:
-                        try:
-                            export_df = cdf.copy()
-                            long_records = []
-                            thresholds_json = json.dumps(thresholds_state)
-                            for strip_name, (pivot_binned, info) in heatmap_dict.items():
-                                col = info.get('col')
-                                if not col or col not in export_df.columns:
-                                    continue
-                                s = pd.to_numeric(export_df[col], errors="coerce").dropna()
-                                if s.empty:
-                                    continue
-                                thresholds_list = info.get("thresholds", [])
-                                bins = [-np.inf] + thresholds_list + [np.inf]
-                                labels = info.get("labels", [])
-                                if len(labels) != len(bins) - 1:
-                                    labels = _labels_from_thresholds(thresholds_list, "")
-                                assert len(labels) == len(bins) - 1, (len(labels), len(bins))
-                                cat = pd.cut(s, bins=bins, labels=labels, right=False)
-                                for ts, val, bl in zip(cat.index, s.values, cat.astype(object).values):
-                                    long_records.append({
-                                        'datetime': ts.isoformat(),
-                                        'variable': strip_name,
-                                        'value': float(val),
-                                        'bin_label': bl if pd.notna(bl) else None,
-                                        'month': int(ts.month),
-                                        'hour': int(ts.hour),
-                                        'thresholds': thresholds_json,
-                                    })
-
-                            if not long_records:
-                                st.caption("No long-format data available for CSV export.")
-                            else:
-                                long_df = pd.DataFrame(long_records)
-                                csv_bytes = long_df.to_csv(index=False).encode('utf-8')
-                                st.download_button(label="📥 Download heatmap data (CSV)", data=csv_bytes, file_name=f"{clean_loc}_diurnal_heatmaps_data.csv", mime="text/csv")
-                        except Exception as e:
-                            st.caption(f"CSV export failed: {str(e)[:80]}")
-                else:
-                    st.warning("Could not generate heatmap figure from available data.")
+    if _render_dashboard_section("Overview"):
+        if pdf_capture_mode:
+            render_overview_page()
+        render_detail_overview_page()
 
     if _render_dashboard_section("Comfort & Loads"):
         st.markdown("### 😌 Thermal Comfort & Loads")
@@ -18703,15 +18054,13 @@ def render_raw_data_page():
 
 def render_short_term_prediction_page():
     import models.forecasting as fc
-    import importlib
-    importlib.reload(fc)
     page = st.session_state.get("nav_page")
     cdf = st.session_state.get("cdf")
     
-    st.markdown("### 📈 Short-Term Prediction (10-Day NWP)")
+    st.markdown("### Short-Term Prediction")
     st.caption(
-        "Fetch a 10-day deterministic hourly weather forecast from the Open-Meteo external NWP API "
-        "(based on ECMWF/GFS models). You can evaluate upcoming heat events or download the forecast as an EPW file for immediate building simulations."
+        "Explore the next 10 days of temperature, rainfall, and solar conditions from Open-Meteo. "
+        "Compare against the weather-file baseline or download the forecast. Forecast times are in UTC."
     )
     _render_tour_step(_SHORT_TERM_PAGE)
 
@@ -18722,18 +18071,21 @@ def render_short_term_prediction_page():
         st.info("Please load an EPW file first to establish the geographic location for the forecast.")
         return
         
-    loc = base_header.get("location", {}) if isinstance(base_header, dict) else {}
-    lat = loc.get("latitude")
-    lon = loc.get("longitude")
-    if lat is None or lon is None:
-        st.error("EPW header is missing latitude/longitude coordinates required for the NWP lookup.")
+    coords = _site_coordinates_from_header(base_header)
+    if coords is None:
+        st.error("Valid latitude and longitude are required for a forecast.")
         return
+    lat, lon = coords
+    forecast_location = (round(lat, 5), round(lon, 5), str(st.session_state.get("last_parsed_epw_hash") or st.session_state.get("source_label") or ""))
+    if st.session_state.get("short_forecast_loaded_for") != forecast_location:
+        for key in ("short_forecast", "short_forecast_bias", "short_forecast_daily"):
+            st.session_state.pop(key, None)
 
     st.session_state.setdefault("short_forecast", None)
     st.session_state.setdefault("short_forecast_bias", None)
     st.session_state.setdefault("short_forecast_daily", None)
 
-    if st.button("Fetch 10-Day NWP Forecast", type="primary"):
+    if st.button("Fetch 10-day forecast", type="primary"):
         with st.spinner(f"Querying Open-Meteo API for {float(lat):.3f}, {float(lon):.3f}…"):
             try:
                 forecast_df, daily_df = fc.fetch_openmeteo_10day_forecast(float(lat), float(lon))
@@ -18742,7 +18094,9 @@ def render_short_term_prediction_page():
                 st.session_state["short_forecast"] = forecast_df
                 st.session_state["short_forecast_bias"] = bias_df
                 st.session_state["short_forecast_daily"] = daily_df
-                st.success("Successfully loaded 10-Day Forecast.")
+                st.session_state["short_forecast_loaded_for"] = forecast_location
+                st.session_state["short_forecast_fetched_at"] = pd.Timestamp.now(tz="UTC")
+                st.success("10-day forecast loaded.")
             except Exception as exc:
                 st.error(f"Failed to fetch forecast from Open-Meteo API: {exc}")
 
@@ -18753,6 +18107,9 @@ def render_short_term_prediction_page():
     if forecast_df is None or forecast_df.empty:
         st.info("Click the button above to generate a 10-day forecast.")
     else:
+        fetched_at = st.session_state.get("short_forecast_fetched_at")
+        if fetched_at is not None:
+            st.caption(f"Last updated {pd.Timestamp(fetched_at):%d %b %Y, %H:%M} UTC · {_safe_location_label(base_header)}")
         temp_series = pd.Series(forecast_df["temp_forecast"])
         max_temp = float(temp_series.max()) if not temp_series.empty else float("nan")
         overheating_hours = int((temp_series >= focus_threshold).sum())
@@ -18799,8 +18156,8 @@ def render_short_term_prediction_page():
             .weather-card {{
                 flex: 0 0 auto;
                 width: 100px;
-                background: rgba(30, 41, 59, 0.5);
-                border: 1px solid rgba(255,255,255,0.1);
+                background: var(--secondary-background-color, #f1f5f9);
+                border: 1px solid rgba(148,163,184,0.35);
                 border-radius: 12px;
                 padding: 12px 8px;
                 text-align: center;
@@ -18810,9 +18167,9 @@ def render_short_term_prediction_page():
                 justify-content: space-between;
                 min-height: 140px;
             }}
-            .wc-day {{ font-size: 0.9rem; font-weight: 600; color: #e2e8f0; margin-bottom: 4px; }}
+            .wc-day {{ font-size: 0.9rem; font-weight: 600; color: var(--text-color, #334155); margin-bottom: 4px; }}
             .wc-icon {{ font-size: 2rem; margin: 4px 0; }}
-            .wc-temps {{ font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-top: 4px; }}
+            .wc-temps {{ font-size: 0.95rem; font-weight: 700; color: var(--text-color, #334155); margin-top: 4px; }}
             .wc-temps span {{ color: #94a3b8; font-weight: 500; font-size: 0.85rem; margin-left: 6px; }}
             .wc-precip {{ font-size: 0.75rem; color: #60a5fa; margin-top: 6px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 2px; }}
             </style>
@@ -18820,18 +18177,21 @@ def render_short_term_prediction_page():
             """
             import datetime
             for _, row in daily_df.iterrows():
-                dt = pd.to_datetime(row['date'])
-                day_name = dt.strftime('%a') if dt.date() != datetime.datetime.now().date() else "Today"
-                emoji = row['emoji']
-                tmax = int(round(row['temp_max']))
-                tmin = int(round(row['temp_min']))
-                precip = int(row['precip_prob'])
-                precip_html = f"<div class='wc-precip'>💧 {precip}%</div>" if precip > 0 else "<div class='wc-precip' style='opacity:0'>💧 0%</div>"
+                dt = pd.to_datetime(row.get('date'), errors='coerce')
+                if pd.isna(dt):
+                    continue
+                day_name = dt.strftime('%a %d')
+                emoji = _ui_escape(row.get('emoji', '🌡️'))
+                tmax = format_temperature(row.get('temp_max'), digits=0) if pd.notna(row.get('temp_max')) else '—'
+                tmin = format_temperature(row.get('temp_min'), digits=0) if pd.notna(row.get('temp_min')) else '—'
+                precip = pd.to_numeric(row.get('precip_prob'), errors='coerce')
+                precip_label = f"{precip:.0f}%" if pd.notna(precip) else '—'
+                precip_html = f"<div class='wc-precip'>💧 {precip_label}</div>"
                 cards_html += f"""
                 <div class="weather-card">
                     <div class="wc-day">{day_name}</div>
                     <div class="wc-icon">{emoji}</div>
-                    <div class="wc-temps">{tmax}°<span>{tmin}°</span></div>
+                    <div class="wc-temps">{tmax}<span>{tmin}</span></div>
                     {precip_html}
                 </div>
                 """
@@ -18840,6 +18200,8 @@ def render_short_term_prediction_page():
                 st.html(cards_html)
             except AttributeError:
                 st.markdown(cards_html, unsafe_allow_html=True)
+
+        _render_future_precipitation_forecast_exports(base_header, daily_df)
 
         st.markdown("#### Hourly Detail")
         _st_plotly_chart(
@@ -18853,7 +18215,7 @@ def render_short_term_prediction_page():
             ts_label = "Peak hour" if pd.isna(ts) else pd.Timestamp(ts).strftime("%b %d %H:%M")
             st.caption(f"Peak around {ts_label}: {format_temperature(peak['temp'])}.")
 
-        st.info("Forecasts are sourced from Open-Meteo leveraging deterministic ECMWF/GFS outputs.")
+        st.info("Forecast source: Open-Meteo. Values can change as forecast models update.")
 
         st.markdown("#### Solar Potential & Irradiance")
         _st_plotly_chart(fc.plot_solar_potential(forecast_df), use_container_width=True)
@@ -18862,7 +18224,7 @@ def render_short_term_prediction_page():
         _st_plotly_chart(fc.plot_bias(bias_df if bias_df is not None else pd.DataFrame()), use_container_width=True)
 
         st.markdown("#### Overheating flags")
-        _st_plotly_chart(fc.plot_overheating(forecast_df), use_container_width=True)
+        _st_plotly_chart(fc.plot_overheating(forecast_df, threshold=focus_threshold), use_container_width=True)
 
         st.markdown("#### Forecast Data & EPW Export")
 
