@@ -1333,17 +1333,24 @@ def _capture_plotly_figure(fig_obj: Any) -> Any:
     except Exception:
         fig_json = ""
 
-    if fig_json and fig_json in fingerprints:
-        return fig
-
     title = _infer_title(fig, store)
+    planned_figure = _report_figure_spec(title)
+    if not planned_figure and fig_json and fig_json in fingerprints:
+        return fig
     title_low = title.lower()
     exclude_keywords = ["station", "location picker", "map picker", "select weather", "setup"]
     if any(keyword in title_low for keyword in exclude_keywords) or _is_map_figure(fig):
         return fig_obj
 
     key = title
-    if key in store:
+    if planned_figure:
+        # A rerun updates the current chart, rather than appending a numbered
+        # snapshot of the same analysis. Also clear old numbered snapshots.
+        for old_key in list(store):
+            base_key = re.sub(r"\s+\(\d+\)$", "", str(old_key))
+            if _normalize_report_key(base_key) == _normalize_report_key(title):
+                del store[old_key]
+    elif key in store:
         suffix = 2
         while f"{title} ({suffix})" in store:
             suffix += 1
@@ -6465,7 +6472,7 @@ def _remove_manual_pdf_captions(keys: Iterable[str]) -> None:
 
 
 def _merged_pdf_figures() -> Dict[str, object]:
-    """Return collected Plotly figures, perfectly deduplicated."""
+    """Merge captured charts, preferring the detailed version of each analysis."""
     manual_figs = _normalized_pdf_figures(st.session_state.get("pdf_figures", {}))
     auto_figs = _normalized_pdf_figures(st.session_state.get("pdf_figures_auto", {}))
 
@@ -6489,8 +6496,6 @@ def _merged_pdf_figures() -> Dict[str, object]:
         return f"{first_type.title()} chart" if first_type else "Chart"
 
     filtered: Dict[str, object] = {}
-    seen_fingerprints = set()
-    seen_report_norms = set()
 
     # Manual figs takes precedence (they provide better titles)
     for source in (manual_figs, auto_figs):
@@ -6498,32 +6503,14 @@ def _merged_pdf_figures() -> Dict[str, object]:
             if _is_map_figure(fig):
                 continue
             
-            # Smart deduplication by JSON fingerprint
-            try:
-                j = fig.to_json()
-                if j in seen_fingerprints:
-                    continue
-                seen_fingerprints.add(j)
-            except Exception:
-                pass
-
             clean_title = str(title).strip()
             if clean_title.lower() in {"", "undefined", "none", "nan"} or clean_title.lower().startswith("visualization"):
                 clean_title = _fallback_title(fig)
 
-            report_norms = _report_equivalent_norms(clean_title)
-            if report_norms and not report_norms.isdisjoint(seen_report_norms):
-                continue
-            seen_report_norms.update(report_norms)
+            # The explicitly captured chart wins when both stores use one key.
+            filtered.setdefault(clean_title, fig)
 
-            unique_title = clean_title
-            suffix = 2
-            while unique_title in filtered:
-                unique_title = f"{clean_title} ({suffix})"
-                suffix += 1
-            filtered[unique_title] = fig
-
-    return filtered
+    return _deduplicate_report_figures(filtered)
 
 
 def _request_dashboard_pdf_build() -> None:
@@ -6614,7 +6601,6 @@ REPORT_STRUCTURE = [
             {"aliases": ["Annual Diurnal Resource Heatmap"], "title": "Annual Diurnal Resource Heatmap"},
             {"aliases": ["Annual Diurnal Resource Heatmap — Rain and Wind"], "title": "Annual Diurnal Resource Heatmap — Rain and Wind"},
             {"aliases": ["Overview Weather By Month"], "title": "Weather by Month"},
-            {"aliases": ["Overview Annual Wind Rose"], "title": "Overview Annual Wind Rose"},
         ],
     },
     {
@@ -6642,10 +6628,10 @@ REPORT_STRUCTURE = [
         "intro": "Thermo-hygrometric plots are sequenced from broad annual summaries to monthly summaries, hourly point clouds, and annual heatmaps.",
         "figures": [
             {"aliases": ["Annual Climate Statistics"], "title": "Annual Temperature and Humidity Statistics"},
-            {"aliases": ["drybulb Monthly Bar"], "title": "Monthly Dry-Bulb Temperature"},
+            {"aliases": ["Monthly Average Temperature", "drybulb Monthly Bar"], "title": "Monthly Dry-Bulb Temperature"},
             {"aliases": ["drybulb Hourly Dot Plot"], "title": "Hourly Dry-Bulb Temperature Distribution"},
             {"aliases": ["drybulb Annual Heatmap", "Dry Bulb Heatmap", "Drybulb Temperature Matrix"], "title": "Dry-Bulb Temperature by Hour and Day"},
-            {"aliases": ["relhum Monthly Bar", "relhum_monthly_bar"], "title": "Monthly Relative Humidity"},
+            {"aliases": ["Monthly Avg Humidity", "relhum Monthly Bar", "relhum_monthly_bar"], "title": "Monthly Relative Humidity"},
             {"aliases": ["relhum Hourly Dot Plot", "relhum_hourly_dot_plot"], "title": "Hourly Relative Humidity Distribution"},
             {"aliases": ["relhum Annual Heatmap", "RH Heatmap", "relhum_annual_heatmap"], "title": "Relative Humidity by Hour and Day"},
         ],
@@ -6682,8 +6668,8 @@ REPORT_STRUCTURE = [
         "section": "Wind Data",
         "intro": "Wind directionality and magnitude are shown as rendered in the dashboard for exposure, ventilation, and outdoor comfort review.",
         "figures": [
-            {"aliases": ["Annual Wind Rose", "annual_wind_rose"], "title": "Annual Wind Rose"},
-            {"aliases": ["Monthly Wind Speed", "monthly_wind_speed"], "title": "Monthly Mean Wind Speed"},
+            {"aliases": ["Annual Wind Rose", "annual_wind_rose", "Overview Annual Wind Rose"], "title": "Annual Wind Rose"},
+            {"aliases": ["Monthly Avg Wind Speed", "Monthly Wind Speed", "monthly_wind_speed"], "title": "Monthly Mean Wind Speed"},
             {"aliases": ["Wind Speed Frequency Distribution", "wind_speed_frequency_distribution"], "title": "Wind Speed Frequency Distribution"},
             {"aliases": ["Wind Speed by Hour and Day", "Wind Speed Heatmap", "wind_speed_heatmap"], "title": "Wind Speed by Hour and Day"},
             {"aliases": ["Seasonal Wind Roses", "Seasonal Wind Roses (4-panel)", "seasonal_wind_roses"], "title": "Seasonal Wind Roses"},
@@ -6793,6 +6779,18 @@ def format_figure_title(raw_name: str) -> str:
     return titled
 
 
+def _report_figure_spec(name: str) -> Optional[dict]:
+    """Identify a planned analysis, including old numbered capture snapshots."""
+    candidates = {_normalize_report_key(name)}
+    candidates.add(_normalize_report_key(re.sub(r"\s+\(\d+\)$", "", str(name))))
+    for block in REPORT_STRUCTURE:
+        for spec in block.get("figures", []):
+            names = [spec.get("title", ""), *spec.get("aliases", [])]
+            if candidates.intersection(_normalize_report_key(value) for value in names):
+                return spec
+    return None
+
+
 def _report_equivalent_norms(name: str) -> set[str]:
     """Return all normalized report aliases that identify the same planned figure."""
     base_norms = {_normalize_report_key(name)}
@@ -6800,27 +6798,60 @@ def _report_equivalent_norms(name: str) -> set[str]:
     if formatted:
         base_norms.add(_normalize_report_key(formatted))
 
-    for block in REPORT_STRUCTURE:
-        for spec in block.get("figures", []):
-            spec_norms = {
-                _normalize_report_key(spec.get("title", "")),
-                *(_normalize_report_key(alias) for alias in spec.get("aliases", [])),
-            }
-            spec_norms.discard("")
-            if base_norms.intersection(spec_norms):
-                return base_norms | spec_norms
+    spec = _report_figure_spec(name)
+    if spec:
+        base_norms.add(_normalize_report_key(spec.get("title", "")))
+        base_norms.update(_normalize_report_key(alias) for alias in spec.get("aliases", []))
     return {norm for norm in base_norms if norm}
 
 
+def _deduplicate_report_figures(figs: Dict[str, object]) -> Dict[str, object]:
+    """Keep one chart per planned analysis, regardless of capture title/style.
+
+    Alias order in REPORT_STRUCTURE prefers charts with ranges or annotations.
+    Distinct unplanned charts are retained unless their full figure is identical.
+    """
+    def preference(item):
+        name, _ = item
+        spec = _report_figure_spec(name)
+        if not spec:
+            return (1000, 0)
+        base_name = re.sub(r"\s+\(\d+\)$", "", str(name))
+        aliases = [_normalize_report_key(alias) for alias in spec.get("aliases", [])]
+        norm = _normalize_report_key(base_name)
+        rank = aliases.index(norm) if norm in aliases else len(aliases)
+        suffix = re.search(r"\s+\((\d+)\)$", str(name))
+        return (rank, -int(suffix.group(1)) if suffix else -1)
+
+    result = {}
+    seen_norms = set()
+    seen_fingerprints = set()
+    for name, fig in sorted(figs.items(), key=preference):
+        norms = _report_equivalent_norms(name)
+        try:
+            fingerprint = fig.to_json()
+        except Exception:
+            fingerprint = None
+        if not norms.isdisjoint(seen_norms) or (fingerprint and fingerprint in seen_fingerprints):
+            continue
+        result[name] = fig
+        seen_norms.update(norms)
+        if fingerprint:
+            seen_fingerprints.add(fingerprint)
+    return result
+
+
 def _resolve_report_sections(figs: Dict[str, object]) -> List[Dict[str, object]]:
-    lookup = {_normalize_report_key(k): k for k in figs.keys()}
+    # Final guard after both captured and generated charts have been combined.
+    figs = _deduplicate_report_figures(figs)
+    lookup = {norm: key for key in figs for norm in _report_equivalent_norms(key)}
     used = set()
     sections: List[Dict[str, object]] = []
 
     for block in REPORT_STRUCTURE:
         items = []
         for spec in block.get("figures", []):
-            aliases = spec.get("aliases", [])
+            aliases = [spec.get("title", ""), *spec.get("aliases", [])]
             chosen = None
             for alias in aliases:
                 nk = _normalize_report_key(alias)
@@ -6867,7 +6898,10 @@ def _figure_caption_text(clean_title: str, raw_key: str, section_name: str) -> s
         "utci_index_annual_heatmap": "UTCI combines air temperature, humidity, wind, and radiation into outdoor thermal stress categories. Strong bands indicate periods when outdoor exposure requires shade, wind management, or schedule adaptation.",
         "pmv_index_annual_heatmap": "PMV translates hourly thermal conditions into a thermal sensation scale. The neutral band indicates hours closest to standard comfort assumptions, while warm and cool classes identify conditioning pressure.",
         "annual_climate_statistics": "The paired temperature and humidity trends show annual timing, daily variability, and comfort-band relationships. Range bars emphasize volatility; smoothed lines reveal the seasonal signal.",
-        "drybulb_monthly_bar": "Monthly dry-bulb bars summarize the selected statistic across the year, making seasonal peaks, troughs, and shoulder-period transitions visible at a glance.",
+        "drybulb_monthly_bar": "Monthly dry-bulb values summarize the temperature profile across the year, making seasonal peaks, troughs, and shoulder-period transitions visible at a glance.",
+        "monthly_average_temperature": "The line shows monthly mean dry-bulb temperature, while the shaded range spans each month's minimum and maximum. The 18-26 C reference band helps compare the seasonal profile with mild temperature conditions.",
+        "monthly_avg_humidity": "Monthly bars show mean relative humidity, with 30% and 70% reference lines highlighting drier and more humid periods. Compare the seasonal pattern for latent loads and envelope condensation risk.",
+        "monthly_avg_wind_speed": "Monthly bars show mean wind speed, with value labels for direct comparison of seasonal exposure and ventilation potential.",
         "drybulb_hourly_dot_plot": "Hourly dry-bulb points are faceted by month to show daily spread within each season. Dense vertical clouds indicate high intra-day variability and broader control requirements.",
         "drybulb_annual_heatmap": "Dry-bulb temperature is mapped by day of year and hour of day. Horizontal warm or cool bands reveal recurring diurnal timing, while vertical shifts show seasonal progression.",
         "relhum_monthly_bar": "Monthly relative humidity bars summarize the site's moisture profile. Compare high-humidity seasons against dry shoulder months to anticipate latent loads and envelope condensation risk.",
@@ -11301,7 +11335,7 @@ def render_export_page():
             sizes = ["A4 Landscape", "A4 Portrait", "A3 Landscape", "A2 Landscape"]
             st.selectbox("PDF page size", sizes, index=sizes.index(_pdf_page_choice()), key="export_pdf_page_size")
 
-    signature = (st.session_state.get("export_report_title", ""), st.session_state.get("export_pdf_page_size", ""), "report-v5-missing-utci")
+    signature = (st.session_state.get("export_report_title", ""), st.session_state.get("export_pdf_page_size", ""), "report-v6-unique-figures")
     if st.session_state.get("_export_options_sig") != signature:
         st.session_state["_export_options_sig"] = signature
         for key in ["pdf_download_bytes", "pdf_download_name", "pdf_download_error", "pdf_download_figure_count"]:
