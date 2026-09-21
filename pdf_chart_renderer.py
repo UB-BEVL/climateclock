@@ -171,6 +171,24 @@ def _decode_plotly_arrays(value):
     return value
 
 
+def _restore_numeric_marker_gaps(figure):
+    """Restore NaN colours encoded as JSON null by Plotly 5.
+
+    Plotly accepts numeric NaN as missing data, but rejects None in a colour
+    array when validating a figure reconstructed from JSON. Preserve gaps and
+    finite values without replacing unknown measurements with made-up numbers.
+    Leave categorical/invalid colour arrays to normal Plotly validation.
+    """
+    for trace in figure.get('data', []):
+        marker = trace.get('marker', {})
+        for container in (marker, marker.get('line', {})):
+            colors = container.get('color')
+            if (isinstance(colors, list) and any(value is None for value in colors)
+                    and all(value is None or isinstance(value, (int, float)) for value in colors)):
+                container['color'] = [float('nan') if value is None else value for value in colors]
+    return figure
+
+
 def _worker():
     import plotly.io as pio
     scope = getattr(pio.kaleido, 'scope', None)
@@ -180,7 +198,7 @@ def _worker():
         for line in sys.stdin:
             try:
                 request = json.loads(line)
-                figure = _decode_plotly_arrays(json.loads(request['figure']))
+                figure = _restore_numeric_marker_gaps(_decode_plotly_arrays(json.loads(request['figure'])))
                 # Invalid properties fail visibly instead of silently changing a chart.
                 png = pio.to_image(figure, format='png', width=request['width'],
                                    height=request['height'], scale=request['scale'])

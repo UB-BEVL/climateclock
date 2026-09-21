@@ -11301,7 +11301,7 @@ def render_export_page():
             sizes = ["A4 Landscape", "A4 Portrait", "A3 Landscape", "A2 Landscape"]
             st.selectbox("PDF page size", sizes, index=sizes.index(_pdf_page_choice()), key="export_pdf_page_size")
 
-    signature = (st.session_state.get("export_report_title", ""), st.session_state.get("export_pdf_page_size", ""), "report-v4-renderer")
+    signature = (st.session_state.get("export_report_title", ""), st.session_state.get("export_pdf_page_size", ""), "report-v5-missing-utci")
     if st.session_state.get("_export_options_sig") != signature:
         st.session_state["_export_options_sig"] = signature
         for key in ["pdf_download_bytes", "pdf_download_name", "pdf_download_error", "pdf_download_figure_count"]:
@@ -15265,25 +15265,62 @@ def build_fig_g_seasonal_psychrometric(df, utci_baseline, station_name):
     ashrae_x = [18, 26, 26, 18, 18]
     ashrae_y = [4, 4, 12, 12, 4]
     
+    valid_weather = (np.isfinite(T_pts) & np.isfinite(RH_pts) & np.isfinite(Y_gpkg)
+                     & (RH_pts >= 0) & (RH_pts <= 100) & (Y_gpkg >= 0))
+    valid_utci = np.isfinite(utci_baseline)
+    unknown_legend_shown = False
     for name, months, r, c in seasons:
-        mask = df.index.month.isin(months)
-        fig.add_trace(go.Scatter(
-            x=T_pts[mask], y=Y_gpkg[mask], mode='markers',
-            marker=dict(size=2, opacity=0.3, color=utci_baseline[mask], colorscale='RdYlBu_r', cmin=9, cmax=32, showscale=(r==1 and c==1)),
-            name=name
-        ), row=r, col=c)
+        mask = df.index.month.isin(months) & valid_weather
+        colored = mask & valid_utci
+        unknown = mask & ~valid_utci
+        if colored.any():
+            fig.add_trace(go.Scatter(
+                x=T_pts[colored], y=Y_gpkg[colored], mode='markers',
+                marker=dict(size=2, opacity=0.3, color=utci_baseline[colored], coloraxis='coloraxis'),
+                name=name, showlegend=False,
+                hovertemplate='Dry-bulb: %{x:.1f} °C<br>Humidity ratio: %{y:.1f} g/kg<br>UTCI: %{marker.color:.1f} °C<extra></extra>',
+            ), row=r, col=c)
+        if unknown.any():
+            fig.add_trace(go.Scatter(
+                x=T_pts[unknown], y=Y_gpkg[unknown], mode='markers',
+                marker=dict(size=2, opacity=0.4, color='#7b8794'),
+                name='UTCI unavailable', legendgroup='utci-unavailable', showlegend=not unknown_legend_shown,
+                hovertemplate='Dry-bulb: %{x:.1f} °C<br>Humidity ratio: %{y:.1f} g/kg<br>UTCI unavailable<extra></extra>',
+            ), row=r, col=c)
+            unknown_legend_shown = True
         fig.add_trace(go.Scatter(x=ashrae_x, y=ashrae_y, mode='lines', line=dict(color='black', dash='dash'), name='Illustrative reference band', showlegend=False), row=r, col=c)
 
-    fig.update_layout(height=600, margin=dict(l=40, r=40, t=60, b=40), showlegend=False)
+    fig.update_layout(
+        height=600, margin=dict(l=40, r=80, t=60, b=75), showlegend=unknown_legend_shown,
+        legend=dict(orientation='h', x=0, y=-0.16),
+        coloraxis=dict(colorscale='RdYlBu_r', cmin=9, cmax=32,
+                       showscale=bool((valid_weather & valid_utci).any()),
+                       colorbar=dict(title='UTCI (°C)', thickness=14)),
+    )
     fig.update_xaxes(title_text="Dry-Bulb (°C)", row=2)
     fig.update_yaxes(title_text="Humidity Ratio (g/kg)", col=1)
     
-    summer_mask = df.index.month.isin([6, 7, 8])
-    comfort_mask = (utci_baseline > 9) & (utci_baseline < 26)
-    summer_comfort_pct = round((comfort_mask & summer_mask).sum() / summer_mask.sum() * 100, 1) if summer_mask.sum() > 0 else 0
-    
-    caption_template = "Seasonal psychrometric scatter plots show the joint distribution of dry-bulb temperature and humidity ratio for all hours in each season, with an illustrative 18-26 C / 4-12 g/kg reference band overlaid and points colored by UTCI thermal stress category. For {station}, {summer_comfort_pct}% of summer hours fall in the UTCI 9-26 C band. This outdoor stress measure is separate from the rectangular reference band and does not predict building loads."
-    caption = safe_format_caption(caption_template, {"station": station_name, "summer_comfort_pct": summer_comfort_pct})
+    summer_mask = df.index.month.isin([6, 7, 8]) & valid_weather
+    summer_valid = summer_mask & valid_utci
+    comfort_mask = (utci_baseline >= 9) & (utci_baseline <= 26)
+    if summer_valid.any():
+        summer_comfort_pct = (comfort_mask & summer_valid).sum() / summer_valid.sum() * 100
+        summer_summary = (f"{summer_comfort_pct:.1f}% of summer hours with valid weather and UTCI "
+                          f"fall in the UTCI 9-26 C band ({summer_valid.sum():,} valid of "
+                          f"{summer_mask.sum():,} plotted summer hours).")
+    else:
+        summer_summary = "A summer comfort percentage is unavailable because no summer hours have valid weather and UTCI."
+    unknown_count = int((valid_weather & ~valid_utci).sum())
+    excluded_count = int((~valid_weather).sum())
+    caption = (
+        "Seasonal psychrometric scatter plots show dry-bulb temperature and humidity ratio, "
+        "with an illustrative 18-26 C / 4-12 g/kg reference band. Points are colored by UTCI; "
+        f"{unknown_count:,} hours without valid UTCI are shown in grey. "
+        f"{excluded_count:,} hours with invalid weather coordinates are omitted. "
+        f"For {station_name}, {summer_summary} "
+        "UTCI is an outdoor stress measure, separate from the rectangular reference band, "
+        "and does not predict building loads."
+    )
     
     return fig, caption
 
