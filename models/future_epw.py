@@ -6,9 +6,6 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-import live_sensors as ls
-
-
 EPW_COLUMNS = [
     "year","month","day","hour","minute","datasource",
     "drybulb","dewpoint","relhum","atmos_pressure",
@@ -217,26 +214,37 @@ def _compose_epw_text(header: dict, df: pd.DataFrame) -> bytes:
     loc = header.get("location", {})
     loc_line = ",".join([
         "LOCATION",
-        loc.get("city", ""),
-        loc.get("state_province", ""),
-        loc.get("country", ""),
-        loc.get("source", ""),
-        loc.get("wmo", ""),
+        _fmt(loc.get("city")),
+        _fmt(loc.get("state_province")),
+        _fmt(loc.get("country")),
+        _fmt(loc.get("source")),
+        _fmt(loc.get("wmo")),
         _fmt(loc.get("latitude"), 4),
         _fmt(loc.get("longitude"), 4),
         _fmt(loc.get("timezone"), 2),
         _fmt(loc.get("elevation_m"), 2),
     ])
-    header_lines = [
-        loc_line,
-        header.get("design_conditions", ""),
-        header.get("typical_extreme_periods", ""),
-        header.get("ground_temps", ""),
-        header.get("holidays_dst", ""),
-        header.get("data_periods", ""),
-        header.get("comments1", ""),
-        header.get("comments2", ""),
-    ]
+    # Raw records preserve EPW ordering and metadata from both loader paths.
+    raw_header = header.get("_epw_header_lines")
+    if (
+        isinstance(raw_header, (list, tuple))
+        and len(raw_header) == 8
+        and all(isinstance(line, str) for line in raw_header)
+    ):
+        header_lines = [line.rstrip("\r\n") for line in raw_header]
+    else:
+        header_fields = (
+            ("design_conditions", "DESIGN CONDITIONS,0"),
+            ("typical_extreme_periods", "TYPICAL/EXTREME PERIODS,0"),
+            ("ground_temps", "GROUND TEMPERATURES,0"),
+            ("holidays_dst", "HOLIDAYS/DAYLIGHT SAVINGS,No,0,0,0"),
+            ("comments1", "COMMENTS 1,"),
+            ("comments2", "COMMENTS 2,"),
+            ("data_periods", "DATA PERIODS,1,1,Data,Sunday,1/1,12/31"),
+        )
+        header_lines = [loc_line] + [
+            _fmt(header.get(key)) or default for key, default in header_fields
+        ]
     row_strings = []
     for _, row in df[EPW_COLUMNS].iterrows():
         row_strings.append(
