@@ -468,7 +468,7 @@ def _scenario_metrics(df: pd.DataFrame) -> pd.Series:
     parts = []
     if not comfort.empty:
         last = comfort.iloc[-1]
-        parts.append(last[[
+        parts.append(last.reindex([
             "fraction_in_comfort_band",
             "overheating_hours_26C",
             "overheating_hours_28C",
@@ -476,7 +476,7 @@ def _scenario_metrics(df: pd.DataFrame) -> pd.Series:
             "hours_utci_heat_stress",
             "hours_utci_cold_stress",
             "hours_di_discomfort",
-        ]].dropna())
+        ]).dropna())
     if not loads.empty:
         last_load = loads.iloc[-1]
         parts.append(last_load[[

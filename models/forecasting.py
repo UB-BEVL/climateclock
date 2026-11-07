@@ -41,7 +41,12 @@ def fetch_openmeteo_10day_forecast(lat: float, lon: float) -> tuple[pd.DataFrame
     params = {
         "latitude": lat,
         "longitude": lon,
-        "hourly": "temperature_2m,relative_humidity_2m,dew_point_2m,surface_pressure,wind_speed_10m,wind_direction_10m,shortwave_radiation,direct_normal_irradiance,diffuse_radiation",
+        "hourly": (
+            "temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,"
+            "surface_pressure,precipitation_probability,precipitation,wind_speed_10m,"
+            "wind_direction_10m,wind_gusts_10m,shortwave_radiation,"
+            "direct_normal_irradiance,diffuse_radiation"
+        ),
         "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max",
         "wind_speed_unit": "ms",
         "forecast_days": 10,
@@ -55,11 +60,15 @@ def fetch_openmeteo_10day_forecast(lat: float, lon: float) -> tuple[pd.DataFrame
     df = pd.DataFrame({
         "timestamp": pd.to_datetime(data["time"]),
         "temp_forecast": data["temperature_2m"],
+        "apparent_forecast": data["apparent_temperature"],
         "rh_forecast": data["relative_humidity_2m"],
         "dew_forecast": data["dew_point_2m"],
         "pressure_forecast": data["surface_pressure"],  # hPa
+        "precip_probability_forecast": data["precipitation_probability"],
+        "precip_forecast": data["precipitation"],       # mm
         "windspd_forecast": data["wind_speed_10m"],    # m/s
         "winddir_forecast": data["wind_direction_10m"],
+        "windgust_forecast": data["wind_gusts_10m"],   # m/s
         "ghi_forecast": data["shortwave_radiation"],
         "dni_forecast": data["direct_normal_irradiance"],
         "dhi_forecast": data["diffuse_radiation"],

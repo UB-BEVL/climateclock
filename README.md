@@ -19,6 +19,26 @@ Avoid launching this project with `py -m streamlit run app.py`: the default
 Python launcher may select a different environment without the required UTCI
 and PMV packages. The existing `.venv` folder may also refer to another machine.
 
+## Weather intelligence and team AI assistant
+
+Open the **AI Assistant** messenger bar at the bottom right of any page.
+It expands upward into a docked chat with suggested questions and conversation history.
+Click its header again to minimize it while keeping your conversation.
+The chatbot can use the loaded typical-year climate, future scenario summaries,
+and any forecast context already loaded by Short-Term Prediction. Select
+**Refresh context** inside the chatbot when you also want current apparent
+temperature, hourly precipitation, wind gusts, and air quality included.
+
+The assistant is optional. Copy `.streamlit/secrets.example.toml` to
+`.streamlit/secrets.toml`, then set your team's chat-completions endpoint, model
+name, and API key. The endpoint should accept an OpenAI-compatible JSON request
+with `model` and `messages`, and return either `choices[0].message.content` or a
+top-level `answer`, `response`, `text`, `content`, or `output` string. The app
+sends compact climate summaries rather than the complete hourly EPW dataset.
+The real secrets file is ignored by Git. Equivalent `SLM_API_URL`, `SLM_API_KEY`,
+`SLM_MODEL`, `SLM_AUTH_HEADER`, and `SLM_AUTH_SCHEME` environment variables are
+also supported.
+
 ## Interactive psychrometrics and tours
 
 Overview now has five tour steps; all six climate cards share one explanation,

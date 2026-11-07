@@ -991,6 +991,14 @@ def _apply_global_plot_style(fig_obj: object) -> object:
             except Exception:
                 pass
 
+        # Reserve real canvas space above the axes for titles and toolbars.
+        if getattr(fig_obj.layout.title, "text", None):
+            current_top = fig_obj.layout.margin.t or 0
+            fig_obj.update_layout(
+                margin=dict(t=max(65, current_top)),
+                title=dict(y=0.98, yanchor="top", automargin=True),
+            )
+
         # Plotly annotations, colorbars, selectors, and 3D scenes do not always
         # inherit template fonts/backgrounds, so normalize them explicitly.
         try:
@@ -5113,6 +5121,276 @@ def _render_sidebar_route_guide(epw_loaded: bool, current_page: str) -> None:
 
 
 
+
+
+def _slm_setting(name: str, default: str = "") -> str:
+    """Read a research-model setting from environment variables or Streamlit secrets."""
+    env_value = os.getenv(name)
+    if env_value:
+        return env_value
+    try:
+        section = st.secrets.get("slm", {})
+        section_key = name.removeprefix("SLM_").lower()
+        value = section.get(section_key) if hasattr(section, "get") else None
+        if value:
+            return str(value)
+        flat_value = st.secrets.get(name)
+        if flat_value:
+            return str(flat_value)
+    except Exception:
+        pass
+    return default
+
+
+def _render_climate_ai_conversation(epw_loaded: bool) -> None:
+    """Render the conversation inside the docked messenger."""
+    import models.forecasting as fc
+    import models.weather_intelligence as wi
+
+    with st.container():
+        if not epw_loaded:
+            st.caption("Load a station or EPW file to give the assistant climate context.")
+            return
+
+        config = wi.ResearchModelConfig(
+            api_url=_slm_setting("SLM_API_URL"),
+            api_key=_slm_setting("SLM_API_KEY"),
+            model=_slm_setting("SLM_MODEL"),
+            auth_header=_slm_setting("SLM_AUTH_HEADER", "Authorization"),
+            auth_scheme=_slm_setting("SLM_AUTH_SCHEME", "Bearer"),
+        )
+        if not config.configured:
+            st.info(
+                "Add your team's endpoint, model name, and API key to "
+                "`.streamlit/secrets.toml` to enable this chatbot."
+            )
+            return
+
+        header = st.session_state.get("header") or {}
+        climate_df = st.session_state.get("cdf")
+        coords = _site_coordinates_from_header(header)
+        location_key = (
+            tuple(round(float(value), 5) for value in coords) if coords else None,
+            str(st.session_state.get("last_parsed_epw_hash") or st.session_state.get("source_label") or ""),
+        )
+        if st.session_state.get("climate_ai_location") != location_key:
+            st.session_state["climate_ai_messages"] = []
+            st.session_state["climate_ai_location"] = location_key
+
+        st.session_state.setdefault("climate_ai_messages", [])
+
+        action_cols = st.columns(2)
+        refresh_context = action_cols[0].button(
+            "Refresh context",
+            key="climate_ai_refresh_context",
+            use_container_width=True,
+            help="Load the latest 10-day forecast and air-quality outlook for the assistant.",
+        )
+        if action_cols[1].button(
+            "Clear chat",
+            key="climate_ai_clear_chat",
+            use_container_width=True,
+        ):
+            st.session_state["climate_ai_messages"] = []
+            _rerun()
+
+        if refresh_context:
+            if coords is None:
+                st.warning("The loaded file does not contain valid coordinates for forecast context.")
+            else:
+                lat, lon = coords
+                with st.spinner("Updating forecast context…"):
+                    try:
+                        forecast_df, daily_df = fc.fetch_openmeteo_10day_forecast(float(lat), float(lon))
+                        epw_clim = fc.load_epw_climatology(climate_df)
+                        st.session_state["short_forecast"] = forecast_df
+                        st.session_state["short_forecast_daily"] = daily_df
+                        st.session_state["short_forecast_bias"] = fc.compare_forecast_to_epw(
+                            forecast_df, epw_clim
+                        )
+                        st.session_state["short_forecast_loaded_for"] = (
+                            round(float(lat), 5),
+                            round(float(lon), 5),
+                            location_key[1],
+                        )
+                        st.session_state["short_forecast_fetched_at"] = pd.Timestamp.now(tz="UTC")
+                        try:
+                            st.session_state["weather_air_quality"] = wi.fetch_air_quality(
+                                float(lat), float(lon)
+                            )
+                        except Exception:
+                            st.session_state["weather_air_quality"] = pd.DataFrame()
+                        st.session_state["weather_intelligence_loaded_for"] = (
+                            round(float(lat), 5),
+                            round(float(lon), 5),
+                            location_key[1],
+                        )
+                        st.success("Forecast context updated.")
+                    except Exception as exc:
+                        st.error(f"Could not refresh forecast context: {exc}")
+
+        st.caption(f"Context: {_safe_location_label(header)} · {st.session_state.get('dashboard_section_nav') or st.session_state.get('nav_page', 'Overview')}")
+        messages = st.session_state["climate_ai_messages"]
+        suggested_question = None
+        if not messages:
+            choices = [
+                ("Explain this view", "Explain the current analysis view, the metrics I should read, and what they mean for this location."),
+                ("Rainfall & GIS", "What rainfall evidence is available for this site, what is missing for flood and drought analysis, and what should my GIS teammate use?"),
+                ("Design advice", "Use this site's seasonal temperature, humidity and wind patterns to suggest building design strategies with supporting values."),
+            ]
+            for column, (label, prompt) in zip(st.columns(3), choices):
+                if column.button(label, key=f"climate_ai_suggest_{label}", use_container_width=True):
+                    suggested_question = prompt
+        transcript = st.container(height=260, border=False)
+        with transcript:
+            if not messages:
+                with st.chat_message("assistant"):
+                    st.markdown("Hi! I'm your climate assistant. Ask me about this location, a chart, rainfall, or design strategies.")
+            for message in messages[-8:]:
+                with st.chat_message(message.get("role", "assistant")):
+                    st.markdown(message.get("content", ""))
+
+        with st.form("climate_ai_question_form", clear_on_submit=True):
+            question = st.text_input(
+                "Your question",
+                placeholder="Message AI Assistant…",
+                label_visibility="collapsed",
+            )
+            submitted = st.form_submit_button("Send ↗", type="primary", use_container_width=True)
+
+        if submitted or suggested_question:
+            question = str(suggested_question or question or "").strip()
+            if not question:
+                st.warning("Enter a question first.")
+                return
+
+            messages.append({"role": "user", "content": question})
+            expected_forecast_key = (
+                round(float(coords[0]), 5),
+                round(float(coords[1]), 5),
+                location_key[1],
+            ) if coords else None
+            forecast_matches = st.session_state.get("short_forecast_loaded_for") == expected_forecast_key
+            air_quality_matches = (
+                st.session_state.get("weather_intelligence_loaded_for") == expected_forecast_key
+            )
+            context = wi.build_research_context(
+                climate_df,
+                header,
+                st.session_state.get("short_forecast") if forecast_matches else None,
+                st.session_state.get("short_forecast_daily") if forecast_matches else None,
+                st.session_state.get("weather_air_quality") if air_quality_matches else None,
+                st.session_state.get("future_ai_summary"),
+            )
+            context += (
+                f"\nCurrent application page: {st.session_state.get('nav_page', 'Overview')}."
+                f"\nCurrent detail section: {st.session_state.get('dashboard_section_nav', 'Overview')}."
+                f"\nPreferred response temperature unit: {temperature_unit_label()}."
+                f"\nSelected month range: {st.session_state.get('month_range', (1, 12))}."
+            )
+            with st.spinner("Climate AI is analyzing the data…"):
+                try:
+                    answer = wi.ask_research_model(config, messages, context)
+                except Exception:
+                    answer = (
+                        "I could not reach the configured research model. Check the API endpoint, "
+                        "model name, authentication settings, and service availability."
+                    )
+            messages.append({"role": "assistant", "content": answer})
+            st.session_state["climate_ai_messages"] = messages
+            with transcript:
+                with st.chat_message("user"):
+                    st.markdown(question)
+                with st.chat_message("assistant"):
+                    st.markdown(answer)
+
+
+@st.fragment
+def _render_climate_ai_launcher():
+    """Render a collapsible messenger anchored to the bottom-right of every page."""
+    st.markdown("""
+        <style>
+        .st-key-climate_ai_dock {
+            position: fixed; right: 24px; bottom: 0; z-index: 999990;
+            width: 390px; max-width: calc(100vw - 24px);
+            background: #fff; border: 1px solid #dbe3e8;
+            border-radius: 14px 14px 0 0;
+            box-shadow: 0 6px 32px #12334226;
+            overflow: hidden;
+        }
+        .st-key-climate_ai_dock > div { gap: 0 !important; }
+        .st-key-climate_ai_dock [data-testid="stVerticalBlock"] { gap: .55rem; }
+        .st-key-climate_ai_header {
+            background: linear-gradient(115deg, #103e50, #147a80);
+            padding: 6px 10px; border-bottom: 1px solid #368e96;
+            min-height: 76px; flex-shrink: 0;
+        }
+        .st-key-climate_ai_header [data-testid="stHorizontalBlock"] { align-items: center; gap: 6px; }
+        .st-key-climate_ai_header [data-testid="stColumn"] { min-width: 0 !important; }
+        .st-key-climate_ai_header [data-testid="stColumn"]:first-child { flex: 1 1 0 !important; }
+        .st-key-climate_ai_header [data-testid="stColumn"]:last-child { flex: 0 0 42px !important; width: 42px !important; }
+        .st-key-climate_ai_dock .st-key-climate_ai_launcher button {
+            min-height: 62px; border-radius: 8px; border: 0;
+            background: transparent !important; color: #fff !important; font-weight: 700;
+            text-align: left; box-shadow: none;
+            justify-content: flex-start; padding: 8px 10px;
+        }
+        .st-key-climate_ai_launcher button p { color: #fff !important; font-size: 16px; }
+        .st-key-climate_ai_launcher button p::after {
+            content: "AI-powered climate insights"; display: block;
+            font-size: 11px; font-weight: 400; color: #c5eeed; margin-top: 2px;
+        }
+        .st-key-climate_ai_dock .st-key-climate_ai_launcher button:hover {
+            background: #ffffff14 !important; color: #fff !important;
+        }
+        .st-key-climate_ai_header .st-key-climate_ai_collapse button {
+            width: 38px; min-height: 38px; padding: 0;
+            border-radius: 50%; background: #ffffff18 !important;
+            border: 1px solid #ffffff40; color: #fff !important;
+            box-shadow: none;
+        }
+        .st-key-climate_ai_collapse button p { color: #fff !important; font-size: 22px; }
+        .st-key-climate_ai_header .st-key-climate_ai_collapse button:hover {
+            background: #ffffff30 !important; border-color: #ffffff90;
+        }
+        .st-key-climate_ai_body { padding: 12px 14px 14px; max-height: calc(100dvh - 150px); overflow-y: auto; }
+        .st-key-climate_ai_body p { font-size: 13px; line-height: 1.55; }
+        .st-key-climate_ai_body [data-testid="stCaptionContainer"] p { font-size: 11px; color: #647785; }
+        .st-key-climate_ai_body [data-testid="stChatMessage"] { padding: 10px; border-radius: 12px; background: #f1f6f8; }
+        .st-key-climate_ai_body [data-testid="stForm"] { padding: 8px; border: 1px solid #dbe3e8; border-radius: 12px; }
+        .st-key-climate_ai_body button { font-size: 12px; min-height: 32px; }
+        .st-key-climate_ai_body input { background: #fff; font-size: 13px; }
+        @media (max-width: 640px) {
+            .st-key-climate_ai_dock { right: 8px; width: min(390px, calc(100vw - 16px)); }
+        }
+        @media print { .st-key-climate_ai_dock { display: none; } }
+        </style>
+    """, unsafe_allow_html=True)
+    def toggle_chat():
+        st.session_state["climate_ai_dock_open"] = not st.session_state.get("climate_ai_dock_open", False)
+
+    def collapse_chat():
+        st.session_state["climate_ai_dock_open"] = False
+
+    with st.container(key="climate_ai_dock"):
+        expanded = st.session_state.get("climate_ai_dock_open", False)
+        with st.container(key="climate_ai_header"):
+            title_column, control_column = st.columns([6, 1])
+            with title_column:
+                st.button(
+                    "✦  AI Assistant", key="climate_ai_launcher", use_container_width=True,
+                    on_click=toggle_chat,
+                    help="Minimize chat" if expanded else "Open your climate assistant",
+                )
+            with control_column:
+                st.button(
+                    "×" if expanded else "⌃", key="climate_ai_collapse",
+                    on_click=collapse_chat if expanded else toggle_chat,
+                    help="Collapse AI Assistant" if expanded else "Expand AI Assistant",
+                )
+        if expanded:
+            with st.container(key="climate_ai_body"):
+                _render_climate_ai_conversation(bool(st.session_state.get("header")))
 
 
 def render_sidebar():
@@ -18302,6 +18580,322 @@ def render_short_term_prediction_page():
             st.dataframe(forecast_df.set_index("timestamp"), use_container_width=True, height=260)
 
 
+def render_weather_intelligence_page():
+    """Render decision-focused weather signals and an optional research-model assistant."""
+    import models.forecasting as fc
+    import models.weather_intelligence as wi
+
+    st.markdown("### Weather Intelligence & AI")
+    st.caption(
+        "A decision-focused view of the loaded site's forecast: apparent temperature, precipitation timing, "
+        "wind gusts, air quality, transparent threshold signals, and an optional team research-model assistant."
+    )
+
+    base_header = st.session_state.get("header")
+    climate_df = st.session_state.get("cdf")
+    if base_header is None:
+        st.info("Load an EPW file first so the forecast and assistant use the correct site context.")
+        return
+
+    coords = _site_coordinates_from_header(base_header)
+    if coords is None:
+        st.error("Valid latitude and longitude are required for weather intelligence.")
+        return
+    lat, lon = coords
+    location_key = (
+        round(float(lat), 5),
+        round(float(lon), 5),
+        str(st.session_state.get("last_parsed_epw_hash") or st.session_state.get("source_label") or ""),
+    )
+
+    if st.session_state.get("weather_intelligence_loaded_for") not in (None, location_key):
+        st.session_state.pop("weather_air_quality", None)
+        st.session_state.pop("weather_ai_messages", None)
+
+    refresh = st.button("Refresh weather intelligence", type="primary")
+    if refresh:
+        with st.spinner(f"Loading forecast and air quality for {float(lat):.3f}, {float(lon):.3f}…"):
+            try:
+                forecast_df, daily_df = fc.fetch_openmeteo_10day_forecast(float(lat), float(lon))
+                epw_clim = fc.load_epw_climatology(climate_df)
+                bias_df = fc.compare_forecast_to_epw(forecast_df, epw_clim)
+                air_quality_df = wi.fetch_air_quality(float(lat), float(lon))
+
+                st.session_state["short_forecast"] = forecast_df
+                st.session_state["short_forecast_daily"] = daily_df
+                st.session_state["short_forecast_bias"] = bias_df
+                st.session_state["short_forecast_loaded_for"] = location_key
+                st.session_state["short_forecast_fetched_at"] = pd.Timestamp.now(tz="UTC")
+                st.session_state["weather_air_quality"] = air_quality_df
+                st.session_state["weather_intelligence_loaded_for"] = location_key
+                st.success("Weather intelligence updated.")
+            except Exception as exc:
+                st.error(f"Unable to update weather intelligence: {exc}")
+
+    forecast_df = st.session_state.get("short_forecast")
+    daily_df = st.session_state.get("short_forecast_daily")
+    air_quality_df = st.session_state.get("weather_air_quality")
+    forecast_matches = st.session_state.get("short_forecast_loaded_for") == location_key
+    if not forecast_matches:
+        forecast_df = None
+        daily_df = None
+    if st.session_state.get("weather_intelligence_loaded_for") != location_key:
+        air_quality_df = None
+
+    if forecast_df is None or not isinstance(forecast_df, pd.DataFrame) or forecast_df.empty:
+        st.info("Select **Refresh weather intelligence** to load the site's current 10-day forecast.")
+        return
+
+    required_forecast_fields = {
+        "timestamp",
+        "temp_forecast",
+        "apparent_forecast",
+        "precip_forecast",
+        "precip_probability_forecast",
+        "windgust_forecast",
+    }
+    missing_forecast_fields = sorted(required_forecast_fields.difference(forecast_df.columns))
+    if missing_forecast_fields:
+        st.info(
+            "The cached forecast predates the weather-intelligence fields. Select "
+            "**Refresh weather intelligence** once to reload the richer forecast."
+        )
+        return
+
+    if not isinstance(daily_df, pd.DataFrame):
+        daily_df = pd.DataFrame()
+    if not isinstance(air_quality_df, pd.DataFrame):
+        air_quality_df = pd.DataFrame()
+
+    fetched_at = st.session_state.get("short_forecast_fetched_at")
+    if fetched_at is not None:
+        st.caption(
+            f"Updated {pd.Timestamp(fetched_at):%d %b %Y, %H:%M} UTC · "
+            f"{_safe_location_label(base_header)} · Forecast and air-quality outlooks use UTC."
+        )
+
+    next_24 = forecast_df.head(24).copy()
+    first = forecast_df.iloc[0]
+    temperature = pd.to_numeric(first.get("temp_forecast"), errors="coerce")
+    apparent = pd.to_numeric(first.get("apparent_forecast"), errors="coerce")
+    rain_24 = pd.to_numeric(
+        next_24.get("precip_forecast", pd.Series(dtype=float)), errors="coerce"
+    ).sum(min_count=1)
+    rain_probability = pd.to_numeric(
+        next_24.get("precip_probability_forecast", pd.Series(dtype=float)), errors="coerce"
+    ).max()
+    peak_gust = pd.to_numeric(
+        next_24.get("windgust_forecast", pd.Series(dtype=float)), errors="coerce"
+    ).max()
+    aqi_24 = pd.to_numeric(
+        air_quality_df.get("us_aqi", pd.Series(dtype=float)), errors="coerce"
+    ).head(24)
+    peak_aqi = aqi_24.max() if isinstance(aqi_24, pd.Series) and aqi_24.notna().any() else np.nan
+
+    metric_cols = st.columns(5)
+    metric_cols[0].metric(
+        "Air temperature",
+        format_temperature(float(temperature)) if pd.notna(temperature) else "—",
+    )
+    metric_cols[1].metric(
+        "Apparent temperature",
+        format_temperature(float(apparent)) if pd.notna(apparent) else "—",
+    )
+    metric_cols[2].metric("Next 24 h precipitation", f"{float(rain_24):.1f} mm" if pd.notna(rain_24) else "—")
+    metric_cols[3].metric(
+        "Peak rain probability",
+        f"{float(rain_probability):.0f}%" if pd.notna(rain_probability) else "—",
+    )
+    metric_cols[4].metric(
+        "Peak 24 h air quality",
+        f"{float(peak_aqi):.0f} · {wi.aqi_category(peak_aqi)}" if pd.notna(peak_aqi) else "—",
+    )
+
+    st.markdown("#### Decision signals")
+    st.caption(
+        "These are transparent analytical screening thresholds, not official government warnings, flood forecasts, "
+        "drought declarations, or emergency guidance."
+    )
+    focus_threshold = float(st.session_state.get("custom_overheat_threshold", 30))
+    for alert in wi.build_screening_alerts(
+        forecast_df,
+        daily_df,
+        air_quality_df,
+        focus_threshold,
+        temperature_unit=_temp_unit(),
+    ):
+        message = f"**{alert['title']}** — {alert['detail']}"
+        if alert["severity"] == "high":
+            st.error(message)
+        elif alert["severity"] == "medium":
+            st.warning(message)
+        else:
+            st.success(message)
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("#### Next 24 hours: precipitation timing")
+        precip_fig = make_subplots(specs=[[{"secondary_y": True}]])
+        precip_fig.add_trace(
+            go.Bar(
+                x=next_24["timestamp"],
+                y=pd.to_numeric(next_24.get("precip_forecast", pd.Series(dtype=float)), errors="coerce"),
+                name="Precipitation depth",
+                marker_color="#38bdf8",
+                hovertemplate="%{x|%d %b %H:%M}<br>%{y:.1f} mm<extra></extra>",
+            ),
+            secondary_y=False,
+        )
+        precip_fig.add_trace(
+            go.Scatter(
+                x=next_24["timestamp"],
+                y=pd.to_numeric(
+                    next_24.get("precip_probability_forecast", pd.Series(dtype=float)), errors="coerce"
+                ),
+                name="Probability",
+                mode="lines+markers",
+                line=dict(color="#2563eb", width=2),
+                hovertemplate="%{x|%d %b %H:%M}<br>%{y:.0f}%<extra></extra>",
+            ),
+            secondary_y=True,
+        )
+        precip_fig.update_yaxes(title_text="Precipitation (mm)", secondary_y=False)
+        precip_fig.update_yaxes(title_text="Probability (%)", range=[0, 100], secondary_y=True)
+        precip_fig.update_layout(
+            height=350,
+            margin=dict(l=0, r=0, t=15, b=0),
+            hovermode="x unified",
+            legend=dict(orientation="h", y=1.12),
+            template=PLOTLY_TEMPLATE,
+            paper_bgcolor="#f8fbff",
+            plot_bgcolor="#f8fbff",
+            font=dict(color="#243447"),
+        )
+        _st_plotly_chart(precip_fig, use_container_width=True)
+
+    with right:
+        st.markdown("#### Next 24 hours: temperature and exposure")
+        air_temperature_display = convert_temperature_series_for_display(next_24["temp_forecast"])
+        apparent_temperature_display = convert_temperature_series_for_display(next_24["apparent_forecast"])
+        exposure_fig = go.Figure()
+        exposure_fig.add_trace(go.Scatter(
+            x=next_24["timestamp"], y=air_temperature_display, mode="lines", name="Air temperature",
+            line=dict(color="#f97316", width=2),
+        ))
+        exposure_fig.add_trace(go.Scatter(
+            x=next_24["timestamp"], y=apparent_temperature_display, mode="lines", name="Apparent temperature",
+            line=dict(color="#dc2626", width=2, dash="dot"),
+        ))
+        exposure_fig.update_layout(
+            height=350,
+            margin=dict(l=0, r=0, t=15, b=0),
+            yaxis_title=f"Temperature ({temperature_unit_label()})",
+            hovermode="x unified",
+            legend=dict(orientation="h", y=1.12),
+            template=PLOTLY_TEMPLATE,
+            paper_bgcolor="#f8fbff",
+            plot_bgcolor="#f8fbff",
+            font=dict(color="#243447"),
+        )
+        _st_plotly_chart(exposure_fig, use_container_width=True)
+        if pd.notna(peak_gust):
+            st.caption(f"Peak next-24-hour wind gust: {float(peak_gust):.1f} m/s.")
+
+    st.caption(
+        "Forecast source: Open-Meteo deterministic forecast. Air-quality source: Open-Meteo CAMS forecast. "
+        "Values can change as source models update."
+    )
+
+    st.markdown("#### Research assistant")
+    st.caption(
+        "The assistant receives compact summaries from the loaded EPW, forecast, air-quality outlook, and selected "
+        "future scenario. It does not receive the full hourly dataset and should not replace expert review."
+    )
+
+    def _model_setting(name: str, default: str = "") -> str:
+        env_value = os.getenv(name)
+        if env_value:
+            return env_value
+        try:
+            section = st.secrets.get("slm", {})
+            section_key = name.removeprefix("SLM_").lower()
+            value = section.get(section_key) if hasattr(section, "get") else None
+            if value:
+                return str(value)
+            flat_value = st.secrets.get(name)
+            if flat_value:
+                return str(flat_value)
+        except Exception:
+            pass
+        return default
+
+    model_config = wi.ResearchModelConfig(
+        api_url=_model_setting("SLM_API_URL"),
+        api_key=_model_setting("SLM_API_KEY"),
+        model=_model_setting("SLM_MODEL"),
+        auth_header=_model_setting("SLM_AUTH_HEADER", "Authorization"),
+        auth_scheme=_model_setting("SLM_AUTH_SCHEME", "Bearer"),
+    )
+    if not model_config.configured:
+        st.info(
+            "The weather signals above are active. To enable chat, copy `.streamlit/secrets.example.toml` to "
+            "`.streamlit/secrets.toml` and add your team's model endpoint, model name, and API key."
+        )
+        return
+
+    st.session_state.setdefault("weather_ai_messages", [])
+    header_cols = st.columns([4, 1])
+    with header_cols[1]:
+        if st.button("Clear chat", use_container_width=True):
+            st.session_state["weather_ai_messages"] = []
+            st.rerun()
+
+    prompt_cols = st.columns(3)
+    suggested_prompt = None
+    if prompt_cols[0].button("Summarize next 48 hours", use_container_width=True):
+        suggested_prompt = "Summarize the next 48 hours and identify the most important planning windows."
+    if prompt_cols[1].button("Explain heat and comfort risks", use_container_width=True):
+        suggested_prompt = "Explain the forecast heat and thermal-comfort risks using the EPW baseline."
+    if prompt_cols[2].button("Compare forecast with EPW", use_container_width=True):
+        suggested_prompt = "Compare the short-term forecast with the typical-year EPW climate baseline."
+
+    for message in st.session_state["weather_ai_messages"]:
+        with st.chat_message(message.get("role", "assistant")):
+            st.markdown(message.get("content", ""))
+
+    typed_prompt = st.chat_input("Ask about this site's climate, forecast, comfort, rainfall, or future scenario")
+    question = suggested_prompt or typed_prompt
+    if question:
+        user_message = {"role": "user", "content": question}
+        st.session_state["weather_ai_messages"].append(user_message)
+        with st.chat_message("user"):
+            st.markdown(question)
+
+        context = wi.build_research_context(
+            climate_df,
+            base_header,
+            forecast_df,
+            daily_df,
+            air_quality_df,
+            st.session_state.get("future_ai_summary"),
+        )
+        with st.chat_message("assistant"):
+            with st.spinner("Analyzing the available climate evidence…"):
+                try:
+                    answer = wi.ask_research_model(
+                        model_config,
+                        st.session_state["weather_ai_messages"],
+                        context,
+                    )
+                except Exception as exc:
+                    answer = (
+                        "I could not reach the configured research model. Check the endpoint, model name, "
+                        f"authentication settings, and server logs. Details: {exc}"
+                    )
+                st.markdown(answer)
+        st.session_state["weather_ai_messages"].append({"role": "assistant", "content": answer})
+
+
 def render_future_climate_page():
     import models.future_epw as fepw
 
@@ -18437,6 +19031,16 @@ def render_future_climate_page():
             else:
                 delta_rh = np.nan
             overheating_future = int((future_df["drybulb"] > focus_threshold).sum())
+            st.session_state["future_ai_summary"] = {
+                "scenario": scenario_label,
+                "target_year": int(target_year),
+                "annual_mean_temperature_change_c": round(float(delta_temp), 2),
+                "annual_mean_relative_humidity_change_pct": (
+                    None if np.isnan(delta_rh) else round(float(delta_rh), 2)
+                ),
+                "hours_above_threshold": overheating_future,
+                "threshold_c": focus_threshold,
+            }
 
             c1, c2, c3 = st.columns(3)
             c1.metric("ΔT annual mean", format_temperature_delta(delta_temp))
@@ -18472,15 +19076,12 @@ def render_future_climate_page():
             # ----- Comfort & load comparison -----
             st.markdown("#### Comfort & load outlook")
             scenario_frames: Dict[str, pd.DataFrame] = {}
-            scenario_frames[baseline_name] = baseline_frame.copy()
+            scenario_frames[baseline_name] = base_df.copy()
             for year, bundle in payloads.items():
                 frame = bundle.get("df")
                 if frame is None or frame.empty:
                     continue
-                try:
-                    scenario_frames[f"{year} · {scenario_label}"] = build_clima_dataframe(frame)
-                except Exception:
-                    scenario_frames[f"{year} · {scenario_label}"] = frame
+                scenario_frames[f"{year} · {scenario_label}"] = frame
 
             comfort_compare = ce.compare_comfort_across_scenarios(scenario_frames)
 
@@ -18703,8 +19304,10 @@ def render_future_climate_page():
 
             # UTCI diurnal heatmap
             try:
-                utci_future = ce.compute_utci_approx(build_clima_dataframe(future_df))
-                utci_base = ce.compute_utci_approx(baseline_frame)
+                utci_future = ce.compute_utci_approx(future_df)
+                utci_base = ce.compute_utci_approx(base_df)
+                if not utci_future.notna().any() or not utci_base.notna().any():
+                    raise ValueError("UTCI calculation returned no valid hours; check model dependencies and input coverage.")
                 tmp_uf = pd.DataFrame({"UTCI": utci_future}, index=future_df.index)
                 grid_utci = _build_diurnal_grid(tmp_uf, "UTCI")
                 st.markdown(f"#### Diurnal Heatmap — UTCI (Future {target_year})")
@@ -18724,9 +19327,10 @@ def render_future_climate_page():
                                              paper_bgcolor="#f8fbff", plot_bgcolor="#f8fbff", font=dict(color="#243447"),
                                              title=f"Future UTCI by Hour and Day ({target_year})")
                     _st_plotly_chart(fig_utci_h, use_container_width=True)
-            except Exception:
+            except Exception as utci_exc:
                 utci_future = None
                 utci_base = None
+                st.caption(f"UTCI could not be calculated: {utci_exc}")
 
             # ── ANNUAL DISTRIBUTION ───────────────────────────────
             st.markdown("#### Annual Temperature Distribution")
@@ -18734,11 +19338,11 @@ def render_future_climate_page():
             with ad1:
                 fig_dist = go.Figure()
                 fig_dist.add_trace(go.Histogram(
-                    x=base_df["drybulb"], nbinsx=60, name="Baseline",
+                    x=convert_temperature_series_for_display(base_df["drybulb"]), nbinsx=60, name="Baseline",
                     marker_color="rgba(148,163,184,0.5)", opacity=0.7,
                 ))
                 fig_dist.add_trace(go.Histogram(
-                    x=future_df["drybulb"], nbinsx=60, name=f"{target_year}",
+                    x=convert_temperature_series_for_display(future_df["drybulb"]), nbinsx=60, name=f"{target_year}",
                     marker_color="rgba(249,115,22,0.5)", opacity=0.7,
                 ))
                 base_mean = base_df["drybulb"].mean()
@@ -18747,34 +19351,33 @@ def render_future_climate_page():
                 future_p95 = future_df["drybulb"].quantile(0.95)
                 for val, clr, nm in [(base_mean, "#94a3b8", "Base mean"),
                                       (future_mean, "#f97316", f"{target_year} mean")]:
-                    fig_dist.add_vline(x=val, line_dash="dash", line_color=clr,
-                                       annotation_text=f"{nm}: {val:.1f}°C",
-                                       annotation_position="top right")
+                    fig_dist.add_vline(x=convert_threshold_for_display(val), line_dash="dash", line_color=clr)
                 fig_dist.update_layout(title="Future Temperature Distribution", barmode="overlay", height=340,
                                        margin=dict(l=0, r=0, t=30, b=0),
-                                       xaxis_title="Dry-Bulb Temperature (°C)",
+                                       xaxis_title=f"Dry-Bulb Temperature ({temperature_unit_label()})",
                                        yaxis_title="Hours", template=PLOTLY_TEMPLATE,
                                        paper_bgcolor="#f8fbff", plot_bgcolor="#f8fbff", font=dict(color="#243447"))
                 _st_plotly_chart(fig_dist, use_container_width=True)
+                st.caption(f"Baseline mean: {format_temperature(base_mean)} · {target_year} mean: {format_temperature(future_mean)}")
             with ad2:
                 if utci_future is not None and utci_base is not None:
                     fig_utci_dist = go.Figure()
                     fig_utci_dist.add_trace(go.Histogram(
-                        x=utci_base.values, nbinsx=60, name="Baseline UTCI",
+                        x=convert_temperature_series_for_display(utci_base), nbinsx=60, name="Baseline UTCI",
                         marker_color="rgba(148,163,184,0.5)", opacity=0.7,
                     ))
                     fig_utci_dist.add_trace(go.Histogram(
-                        x=utci_future.values, nbinsx=60, name=f"{target_year} UTCI",
+                        x=convert_temperature_series_for_display(utci_future), nbinsx=60, name=f"{target_year} UTCI",
                         marker_color="rgba(239,68,68,0.5)", opacity=0.7,
                     ))
                     fig_utci_dist.update_layout(title="Future UTCI Distribution", barmode="overlay", height=340,
                                                 margin=dict(l=0, r=0, t=30, b=0),
-                                                xaxis_title="UTCI (°C)",
+                                                xaxis_title=f"UTCI ({temperature_unit_label()})",
                                                 yaxis_title="Hours", template=PLOTLY_TEMPLATE,
                                                 paper_bgcolor="#f8fbff", plot_bgcolor="#f8fbff", font=dict(color="#243447"))
                     _st_plotly_chart(fig_utci_dist, use_container_width=True)
                 else:
-                    st.caption("UTCI distribution unavailable — missing wind speed data.")
+                    st.caption("UTCI distribution unavailable. See the calculation status above.")
 
             # ── SHIFT PLOT (MONTHLY BOX) ──────────────────────────
             st.markdown("#### Monthly Shift Plot — Temperature")
@@ -18794,7 +19397,7 @@ def render_future_climate_page():
             for sc_name in ["Baseline", "2050", "2080"]:
                 subset = shift_all[shift_all["scenario"] == sc_name]
                 fig_shift.add_trace(go.Box(
-                    x=subset["month_name"], y=subset["drybulb"],
+                    x=subset["month_name"], y=convert_temperature_series_for_display(subset["drybulb"]),
                     name=sc_name, marker_color=colors_shift[sc_name],
                     boxmean=True, line_width=1.2,
                 ))
@@ -18843,7 +19446,15 @@ def render_future_climate_page():
                                          margin=dict(l=0, r=0, t=10, b=0),
                                          xaxis_title="% of hours", template=PLOTLY_TEMPLATE,
                                          paper_bgcolor="#f8fbff", plot_bgcolor="#f8fbff", font=dict(color="#243447"))
+                    fig_di.update_yaxes(type="category", categoryorder="array", categoryarray=["Baseline", str(target_year)], automargin=True)
+                    fig_di.update_xaxes(range=[0, 100])
+                    fig_di.update_traces(textangle=0)
+                    for trace in fig_di.data:
+                        trace.text = [f"{v:.1f}%" if v >= 6 else "" for v in trace.x]
+                        trace.customdata = di_order
+                        trace.hovertemplate = "%{y}<br>%{customdata}: %{x:.1f}%<extra></extra>"
                     _st_plotly_chart(fig_di, use_container_width=True)
+                    st.caption("Green: comfortable · Yellow: slight discomfort · Orange: discomfort · Red: strong discomfort · Dark red: medical emergency. Hover for category shares.")
 
                 # UTCI breakdown
                 with sb2:
@@ -18875,6 +19486,9 @@ def render_future_climate_page():
                                                    margin=dict(l=0, r=0, t=10, b=0),
                                                    xaxis_title="% of hours", template=PLOTLY_TEMPLATE,
                                                    paper_bgcolor="#f8fbff", plot_bgcolor="#f8fbff", font=dict(color="#243447"))
+                        fig_utci_bar.update_yaxes(type="category", categoryorder="array", categoryarray=["Baseline", str(target_year)], automargin=True)
+                        fig_utci_bar.update_xaxes(range=[0, 100])
+                        fig_utci_bar.update_traces(textangle=0, customdata=utci_order, hovertemplate="%{y}<br>%{customdata}: %{x:.1f}%<extra></extra>")
                         _st_plotly_chart(fig_utci_bar, use_container_width=True)
                     else:
                         st.caption("UTCI breakdown unavailable.")
@@ -18976,7 +19590,7 @@ def main():
         
     elif effective_page == "Short-Term Prediction (24–72h)":
         render_short_term_prediction_page()
-        
+
     elif effective_page == "Future Climate (2050 / 2080 SSP)":
         render_future_climate_page()
         
@@ -18984,6 +19598,8 @@ def main():
         st.error(f"Page '{effective_page}' not found.")
 
     _finalize_dashboard_pdf_if_pending(effective_page)
+    if not st.session_state.get("pdf_dashboard_autobuild_pending"):
+        _render_climate_ai_launcher()
 
     # 6. Footer
     st.markdown(
