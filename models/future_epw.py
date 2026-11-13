@@ -102,7 +102,7 @@ def load_cmip6_deltas(latitude: Optional[float] = None) -> pd.DataFrame:
     reference = _load_reference_deltas(band)
     if reference is not None and not reference.empty:
         return reference
-    return _synthetic_cmip6_deltas()
+    raise RuntimeError("No reference delta table is installed. Use the official FWG engine for future weather generation.")
 
 
 def compute_sensor_bias(

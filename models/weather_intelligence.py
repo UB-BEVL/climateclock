@@ -19,6 +19,7 @@ class ResearchModelConfig:
     auth_header: str = "Authorization"
     auth_scheme: str = "Bearer"
     timeout_seconds: int = 60
+    local_managed: bool = False
 
     @property
     def configured(self) -> bool:
@@ -259,6 +260,10 @@ def ask_research_model(
     if not config.configured:
         raise ValueError("The research model API is not configured.")
 
+    if config.local_managed:
+        from models.local_ai import ensure_running
+        ensure_running(config.api_url, config.model)
+
     scheme = config.auth_scheme.strip()
     credential = f"{scheme} {config.api_key}".strip() if scheme else config.api_key
     headers = {config.auth_header: credential, "Content-Type": "application/json"}
@@ -282,17 +287,34 @@ def ask_research_model(
         for item in list(messages)[-12:]
         if str(item.get("content", "")).strip()
     ]
-    response = requests.post(
-        config.api_url,
-        headers=headers,
-        json={
-            "model": config.model,
-            "messages": [system_message, *clean_messages],
-            "temperature": 0.2,
-            "max_tokens": 900,
-            "stream": False,
-        },
-        timeout=config.timeout_seconds,
-    )
+    from urllib.parse import urlsplit, urlunsplit
+    endpoint = urlsplit(config.api_url.strip())
+    path = endpoint.path.rstrip("/")
+    if path in ("", "/v1"):
+        path = (path or "/v1") + "/chat/completions"
+    api_url = urlunsplit((endpoint.scheme, endpoint.netloc, path, endpoint.query, ""))
+    try:
+        response = requests.post(
+            api_url,
+            headers=headers,
+            json={
+                "model": config.model,
+                "messages": [system_message, *clean_messages],
+                "temperature": 0.2,
+                "max_tokens": 900,
+                "stream": False,
+            },
+            timeout=max(config.timeout_seconds, 180) if config.local_managed else config.timeout_seconds,
+        )
+    except requests.ConnectionError as exc:
+        local = endpoint.hostname in ("localhost", "127.0.0.1", "::1")
+        message = "Local Ollama is not reachable. Start Ollama on the same computer running ClimateClock and install the configured model." if local else "The model service is unreachable. Check its address and network availability."
+        raise RuntimeError(message) from exc
+    except requests.Timeout as exc:
+        raise RuntimeError("The model service timed out. It may still be loading the model; retry after it is ready.") from exc
+    if response.status_code == 404:
+        raise ValueError("The AI endpoint or selected model was not found. Check the chat endpoint and installed model name.")
+    if response.status_code in (401, 403):
+        raise ValueError("The model service rejected authentication. Check its API key and permissions.")
     response.raise_for_status()
     return _extract_answer(response.json())

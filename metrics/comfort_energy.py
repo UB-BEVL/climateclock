@@ -72,9 +72,29 @@ def compute_utci_values(tdb, tr, v, rh) -> np.ndarray:
     wind = np.maximum(wind, 0.5)
     humidity = np.where((humidity >= 0) & (humidity <= 100), humidity, np.nan)
     try:
-        result = utci(tdb=ta, tr=mrt, v=wind, rh=humidity, limit_inputs=True)
-        values = result.utci if hasattr(result, "utci") else result
-        return np.asarray(values, dtype=float)
+        from inspect import signature
+        # Older releases use **kwargs["round"]; current releases use round_output.
+        parameters = signature(utci).parameters
+        rounding = {}
+        if "round_output" in parameters:
+            rounding = {"round_output": False}
+        elif "round" in parameters or any(p.kind == p.VAR_KEYWORD for p in parameters.values()):
+            rounding = {"round": False}
+        elif not hasattr(np, "round_"):
+            # v2.5.3 has no rounding option. Give only this function a NumPy
+            # compatibility view; do not mutate NumPy for the rest of the app.
+            import types
+            if isinstance(utci, types.FunctionType) and utci.__globals__.get("np") is np:
+                class _NumpyCompatibility:
+                    def __getattr__(self, name):
+                        return np.round if name == "round_" else getattr(np, name)
+                namespace = dict(utci.__globals__, np=_NumpyCompatibility())
+                original = utci
+                utci = types.FunctionType(original.__code__, namespace, original.__name__, original.__defaults__, original.__closure__)
+                utci.__kwdefaults__ = original.__kwdefaults__
+        result = utci(tdb=ta, tr=mrt, v=wind, rh=humidity, limit_inputs=True, **rounding)
+        values = result.utci if hasattr(result, "utci") else result["utci"] if isinstance(result, dict) else result
+        return np.round(np.asarray(values, dtype=float), 1)
     except Exception as exc:
         raise RuntimeError(f"UTCI calculation failed: {exc}") from exc
 

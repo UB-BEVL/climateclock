@@ -2889,7 +2889,9 @@ hr.page-separator { border: 0; height: 1px; background: rgba(0, 0, 0, 0.08); mar
 @keyframes spinSlow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
 @media (max-width: 980px) {
-    .app-header { grid-template-columns: 1fr; text-align: center; }
+    .app-header { flex-direction: column; align-items: stretch; gap: 0.75rem; text-align: center; }
+    .header-left, .header-right { justify-content: center; }
+    .header-title { white-space: normal; }
     .header-left, .header-right { justify-content: center; }
     .hero-content { grid-template-columns: 1fr; }
 }
@@ -3083,7 +3085,7 @@ section[data-testid="stSidebar"] > div:first-child,
     padding: 0 !important;
 }
 
-@media (min-width: 769px) {
+@media (min-width: 0px) {
     [data-testid="stMain"],
     [data-testid="stAppViewContainer"] > .main,
     [data-testid="stAppViewContainer"] > section.main,
@@ -3369,6 +3371,8 @@ section[data-testid="stSidebar"] .stButton button[disabled] {
 }
 
 .cc-sidebar-brand-bottom {
+    flex-direction: column;
+    text-align: center;
     align-items: center;
     margin-top: 0.15rem;
 }
@@ -3382,8 +3386,8 @@ section[data-testid="stSidebar"] .stButton button[disabled] {
 }
 
 .cc-sidebar-footer-logo {
-    width: 24px;
-    height: 24px;
+    width: 64px;
+    height: 64px;
 }
 
 .cc-sidebar-mark {
@@ -3837,8 +3841,7 @@ div[role="radiogroup"][aria-label="Detail view"] label:has(input:checked) {
 }
 
 @media (max-height: 760px) {
-    .cc-sidebar-status,
-    .sidebar-brand {
+    .cc-sidebar-status {
         display: none !important;
     }
 
@@ -5007,7 +5010,8 @@ def render_header():
     logo_src = f"data:image/png;base64,{LOGO_PRIMARY}" if LOGO_PRIMARY else ""
     ub_src = f"data:image/png;base64,{LOGO_SECONDARY}" if LOGO_SECONDARY else ""
     
-    loc_label = get_location_label()
+    from html import escape
+    loc_label = escape(str(get_location_label()))
     st.markdown(
         f"""
         <div class="app-header">
@@ -5154,6 +5158,7 @@ def _render_climate_ai_conversation(epw_loaded: bool) -> None:
 
         config = wi.ResearchModelConfig(
             api_url=_slm_setting("SLM_API_URL"),
+            local_managed=_slm_setting("SLM_LOCAL_MANAGED", "false").lower() == "true",
             api_key=_slm_setting("SLM_API_KEY"),
             model=_slm_setting("SLM_MODEL"),
             auth_header=_slm_setting("SLM_AUTH_HEADER", "Authorization"),
@@ -5291,11 +5296,10 @@ def _render_climate_ai_conversation(epw_loaded: bool) -> None:
             with st.spinner("Climate AI is analyzing the data…"):
                 try:
                     answer = wi.ask_research_model(config, messages, context)
+                except (RuntimeError, ValueError) as exc:
+                    answer = str(exc)
                 except Exception:
-                    answer = (
-                        "I could not reach the configured research model. Check the API endpoint, "
-                        "model name, authentication settings, and service availability."
-                    )
+                    answer = "The model service returned an unexpected error. Check its server logs and configuration."
             messages.append({"role": "assistant", "content": answer})
             st.session_state["climate_ai_messages"] = messages
             with transcript:
@@ -9219,9 +9223,16 @@ def _koppen_classification(cdf: Optional[pd.DataFrame], header: Optional[dict] =
         if p_col:
             precip = _metric_series_from_hourly(cdf, p_col, "precip")
             p_month = pd.DataFrame({"m": months, "p": precip}).dropna().groupby("m")["p"].sum()
-            if not p_month.empty:
+            if len(p_month) == 12 and (precip > 0).any():
                 annual_precip = float(p_month.sum())
-                estimated = "computed from hourly EPW temperature and precipitation"
+                estimated = "screening estimate from hourly EPW temperature and precipitation"
+
+        if annual_precip is None:
+            return {
+                "code": "Unclassified", "name": "Rainfall data incomplete",
+                "implication": "Temperature analysis remains available. Verify monthly rainfall before assigning a climate class.",
+                "basis": "EPW rainfall is missing, all zero, or does not cover all twelve months",
+            }
 
         if annual_precip is not None and annual_precip < 350 and warmest > 10:
             code, name = "BSk", "Cold semi-arid climate"
@@ -12045,7 +12056,7 @@ def render_dashboard_page():
                         st.caption(f"{hi_text}\n\n{hum_text}")
 
         with loads_tab:
-            st.caption("**HDD (Heating Degree Days)** measures accumulated temperature departures below 18°C, approximating heating demand. **CDD (Cooling Degree Days)** measures departures above 18°C, approximating cooling demand.")
+            st.caption("**HDD (Heating Degree Days)** measures accumulated temperature departures below 18°C, approximating heating demand. **CDD (Cooling Degree Days)** in the summary uses a 26°C comfort threshold. The comparison chart and hourly table use an 18°C reference. Degree days are temperature indicators, not building energy use.")
             loads_latest = None
             dd_rows_df = None
             if loads_annual is not None and not loads_annual.empty:
@@ -12061,9 +12072,9 @@ def render_dashboard_page():
                             cooling_hours = int((temp_series > 18.0).sum())
                             neutral_hours = total_h - heating_hours - cooling_hours
                             dd_rows = [
-                                {"Condition": "Heating needed (< 18°C)", "Hours": f"{heating_hours:,}", "% of Year": f"{heating_hours / total_h * 100:.1f}%"},
-                                {"Condition": "Neutral (= 18°C)", "Hours": f"{neutral_hours:,}", "% of Year": f"{neutral_hours / total_h * 100:.1f}%"},
-                                {"Condition": "Cooling needed (> 18°C)", "Hours": f"{cooling_hours:,}", "% of Year": f"{cooling_hours / total_h * 100:.1f}%"},
+                                {"Condition": "Below 18°C reference", "Hours": f"{heating_hours:,}", "% of Year": f"{heating_hours / total_h * 100:.1f}%"},
+                                {"Condition": "At 18°C reference", "Hours": f"{neutral_hours:,}", "% of Year": f"{neutral_hours / total_h * 100:.1f}%"},
+                                {"Condition": "Above 18°C reference", "Hours": f"{cooling_hours:,}", "% of Year": f"{cooling_hours / total_h * 100:.1f}%"},
                             ]
                             dd_rows_df = pd.DataFrame(dd_rows)
                 except Exception:
@@ -12077,14 +12088,14 @@ def render_dashboard_page():
             if loads_latest is not None:
                 l1, l2 = st.columns(2)
                 l1.metric(
-                    "Heating degree days",
+                    "Heating degree days (18°C base)",
                     _fmt_value(loads_latest.get("heating_degree_days", np.nan)),
-                    delta=_fmt_value(loads_latest.get("heating_degree_hours", np.nan), " h")
+                    delta=_fmt_value(loads_latest.get("heating_degree_hours", np.nan), " °C·h")
                 )
                 l2.metric(
-                    "Cooling degree days",
+                    "Cooling degree days (26°C base)",
                     _fmt_value(loads_latest.get("cooling_degree_days", np.nan)),
-                    delta=_fmt_value(loads_latest.get("cooling_degree_hours", np.nan), " h")
+                    delta=_fmt_value(loads_latest.get("cooling_degree_hours", np.nan), " °C·h")
                 )
             if dd_rows_df is not None:
                 st.dataframe(dd_rows_df, use_container_width=True, hide_index=True, key="dd_hour_breakdown")
@@ -16639,7 +16650,6 @@ def render_live_data_page():
         # Consistent card styling
         with st.container(border=True):
             st.markdown("#### Ingested sensors")
-            st.caption("Overview of all data currently loaded into memory.")
             
             if sensors_store:
                 rows = []
@@ -17022,7 +17032,6 @@ def render_live_data_page():
         c4.metric("Diurnal range (°C)", f"{temp_stats['diurnal']:.1f}")
         c5.metric("Hours 18–26°C", f"{temp_stats['pct_comfort']:.0f} %")
         c6.metric("Hours >30°C", f"{temp_stats['pct_hot30']:.0f} %")
-        st.caption("Observed temperature range and comfort share on site. Higher diurnal range signals larger day–night swings; more hours >30°C indicate local overheating risk.")
 
         # Humidity KPIs (if available)
         if rh_stats:
@@ -17031,7 +17040,6 @@ def render_live_data_page():
             h2.metric("Mean RH (%)", f"{rh_stats['mean']:.0f}")
             h3.metric("Max RH (%)", f"{rh_stats['max']:.0f}")
             h4.metric("Hours >70% RH", f"{rh_stats['pct_rh70']:.0f} %")
-            st.caption("Humidity context: prolonged hours above 70% RH can feel muggy and reduce nighttime cooling.")
 
         # Sensor-only bar charts
         fig_temp_bar = go.Figure([
@@ -17040,7 +17048,6 @@ def render_live_data_page():
         fig_temp_bar.update_layout(title="Observed sensor temperature (entire period)", yaxis_title="Temperature (°C)", height=280, margin=dict(l=10,r=10,t=32,b=16))
         cname = get_clean_city_name().replace(" ", "_")
         _st_plotly_chart(fig_temp_bar, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_sensor_temp_bar", "format": "png", "scale": 2}, "displayModeBar": True})
-        st.caption("Sensor temperatures over the selected period. Shows the observed range and average conditions on site.")
 
         if rh_stats:
             fig_rh_bar = go.Figure([
@@ -17048,7 +17055,6 @@ def render_live_data_page():
             ])
             fig_rh_bar.update_layout(title="Observed sensor humidity (entire period)", yaxis_title="Relative Humidity (%)", height=280, margin=dict(l=10,r=10,t=32,b=16))
             _st_plotly_chart(fig_rh_bar, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_sensor_rh_bar", "format": "png", "scale": 2}, "displayModeBar": True})
-            st.caption("Sensor humidity over the selected period.")
 
     st.divider()
 
@@ -17094,11 +17100,6 @@ def render_live_data_page():
             m2.metric("Daytime bias (°C)", f"{day_bias:+.1f}")
             m3.metric("Nighttime bias (°C) 🌙", f"{night_bias:+.1f}")
             m4.metric("Overheating vs baseline", f"{pct_hot30_sensor - pct_hot30_epw:+.1f} pp")
-            st.caption(
-                "Mean bias: positive values mean the site is warmer than the long-term climate baseline. "
-                "Daytime bias highlights warm work/school hours. Nighttime bias 🌙 is a key urban heat island signal. "
-                "Overheating compares share of hours above 30°C versus typical climate."
-            )
 
             st.info(f"🌙 Nighttime bias {night_bias:+.1f}°C: warmer nights reduce cooling relief and are a hallmark of urban heat islands.")
 
@@ -17119,7 +17120,6 @@ def render_live_data_page():
                 margin=dict(l=10, r=10, t=46, b=20),
             )
             _st_plotly_chart(fig_hour, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_hourly_bias", "format": "png", "scale": 2}, "displayModeBar": True})
-            st.caption("Positive values mean the site is warmer than the climate baseline at that hour; nighttime bias suggests urban heat island effects.")
 
             # Monthly bias bar
             month_order = pd.date_range("2000-01-01", periods=12, freq="MS").strftime("%B")
@@ -17151,7 +17151,6 @@ def render_live_data_page():
             )
             cname = get_clean_city_name().replace(" ", "_")
             _st_plotly_chart(fig_hot, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_overheating_comparison", "format": "png", "scale": 2}, "displayModeBar": True})
-            st.caption("Higher values mean more hours above 30°C. Overheating elevates heat stress risk.")
 
             # Comfort comparison
             fig_comfort = go.Figure(data=[
@@ -17174,7 +17173,6 @@ def render_live_data_page():
 
     # ---------- Seasonal climatology diagnostics ----------
     st.markdown("#### Seasonal climatology: Live sensors vs EPW")
-    st.caption("Day-of-year climatology (mean by hour) lets you see how the on-site sensors track the long-term EPW seasonality across key variables.")
 
     if epw_df is None or len(epw_df) == 0:
         st.info("Load an EPW to build the climatology baseline.")
@@ -17580,13 +17578,10 @@ def render_live_data_page():
                 )
                 cname = get_clean_city_name().replace(" ", "_")
                 _st_plotly_chart(fig_hot, use_container_width=True, config={"toImageButtonOptions": {"filename": f"{cname}_overheating_detailed", "format": "png", "scale": 2}, "displayModeBar": True})
-                st.caption("Detailed thresholds let you inspect moderate heat (>26°C) versus high heat (>30°C) without crowding the main view.")
 
     st.divider()
 
     # ---------- Outputs & Next Steps ----------
-    st.markdown("#### Outputs & Next Steps")
-    st.info("Use the calibrated EPW download when sufficient coverage exists. Key insights above: mean and nighttime biases, monthly patterns, and overheating vs climate baseline.")
 
     calibrated_epw_bytes = st.session_state.get("calibrated_epw_bytes")
     calibrated_cdf = st.session_state.get("calibrated_cdf")
@@ -17629,33 +17624,7 @@ def render_live_data_page():
                 height=260,
             )
 
-        st.caption("This EPW keeps the original metadata but swaps the corrected hourly columns, ready for EnergyPlus/Ladybug workflows.")
 
-    st.markdown("#### What does this mean?")
-    st.info(
-        "Overall, the site appears warmer than the long-term climate baseline, especially at night, which aligns with urban heat island patterns. "
-        "Warm nights reduce cooling relief, and higher shares of hours above 30°C elevate discomfort and heat risk. "
-        "Monthly bias and hour-of-day charts above show when the differences are strongest, guiding mitigation or scheduling decisions."
-    )
-
-    st.markdown("#### Future climate roadmap")
-    with st.expander("Design blueprint", expanded=False):
-        st.markdown(
-            "- Placement: dedicated tab 'Future Scenarios' that lives to the right of the Live Data view.\n"
-            "- Controls: scenario (SSP1-2.6, SSP2-4.5, SSP5-8.5), horizon year (2050/2080), and a toggle to morph either the raw TMY or the calibrated EPW baseline.\n"
-            "- Outputs: temperature shift summary (delta mean/delta extremes), future comfort/overheating metrics, and a download button for each morphed EPW.\n"
-            "- Flow: user selects scenario -> app clones the calibrated EPW -> applies morphing deltas -> refreshes plots and download links."
-        )
-
-    st.markdown("#### Paper-ready notes")
-    st.markdown(
-        "- Data ingestion: CSV uploads and authenticated API pulls normalize fields into a local Parquet store with timezone-aware timestamps.\n"
-        "- Storage & processing: sensor histories persist under data/sensors.parquet, deduplicated by timestamp + sensor ID for reproducible analyses.\n"
-        "- Climatological alignment: both EPW and sensors collapse to DOY x hour means, enabling direct bias computation and smoothing of sparse data.\n"
-        "- Bias metrics: dashboards report average, day/night, and RH biases plus comfort coverage and overheating hours tied to UHI framing.\n"
-        "- Calibration pipeline: DOY x hour biases map back onto every EPW hour to emit a site-specific EPW download for EnergyPlus/Ladybug."
-    )
-    st.info("Capture screenshots of the Live Data tab, 7-day overlay, bias heatmap, and scatter plot for the Methods section.")
 
 
 def render_sensor_comparison_page():
@@ -18831,6 +18800,7 @@ def render_weather_intelligence_page():
 
     model_config = wi.ResearchModelConfig(
         api_url=_model_setting("SLM_API_URL"),
+        local_managed=_model_setting("SLM_LOCAL_MANAGED", "false").lower() == "true",
         api_key=_model_setting("SLM_API_KEY"),
         model=_model_setting("SLM_MODEL"),
         auth_header=_model_setting("SLM_AUTH_HEADER", "Authorization"),
@@ -18898,13 +18868,14 @@ def render_weather_intelligence_page():
 
 def render_future_climate_page():
     import models.future_epw as fepw
+    import models.fwg as fwg
 
     page = st.session_state.get("nav_page")
     cdf = st.session_state.get("cdf")
 
     st.markdown("### 🌍 Future Climate Scenarios")
     st.caption(
-        "Blend today's EPW (optionally bias-corrected by your sensors) with CMIP6 deltas to sketch how typical "
+        "Use the official Future Weather Generator with your EPW and CMIP6 climate data to explore how typical "
         "years shift under SSP scenarios. Pick a pathway and horizon below to see the temperature/comfort "
         "impacts and download morphed EPWs."
     )
@@ -18922,9 +18893,21 @@ def render_future_climate_page():
             list(fepw.SCENARIO_MAP.keys()),
             format_func=lambda key: f"{key} · {fepw.SCENARIO_DESCRIPTIONS.get(key, '')}"
         )
+        try:
+            model_options = fwg.available_models()
+        except Exception as exc:
+            st.error(f"FWG setup unavailable: {exc}")
+            return
+        selected_models = st.multiselect("Climate models", model_options,
+                                        default=[m for m in fwg.DEFAULT_MODELS if m in model_options],
+                                        key="fwg_climate_models")
+        st.caption("Default: CanESM5 + CNRM-CM6-1, a two-model ensemble. Select additional models for broader coverage; larger ensembles need more disk space and processing time.")
+        if len(selected_models) < 2:
+            st.info("Select at least two models to generate an ensemble.")
+            return
         target_year = st.selectbox("Reporting year", fepw.TARGET_YEARS, format_func=lambda y: f"{y}")
         use_sensor_baseline = st.toggle("Use sensor-calibrated baseline", value=True)
-        temp_only = st.toggle("Apply CMIP6 deltas to temperature only", value=False)
+
         st.caption(
             "CMIP6 deltas are monthly climate-change adjustments from global model ensembles. "
             "This feature keeps your EPW's hour-by-hour local weather pattern, then shifts temperature, "
@@ -18935,64 +18918,6 @@ def render_future_climate_page():
         baseline_frame = st.session_state.get("cdf")
         if baseline_frame is None or baseline_frame.empty:
             baseline_frame = base_df
-
-        current_lat = loc_meta.get("latitude")
-        cmip6_table = st.session_state.get("cmip6_deltas")
-        stored_lat = st.session_state.get("cmip6_latitude")
-        is_custom_deltas = st.session_state.get("cmip6_is_custom", False)
-        if (
-            cmip6_table is None
-            or (
-                not is_custom_deltas
-                and current_lat is not None
-                and stored_lat is not None
-                and abs(float(current_lat) - float(stored_lat)) > 5
-            )
-        ):
-            cmip6_table = fepw.load_cmip6_deltas(current_lat)
-            st.session_state["cmip6_deltas"] = cmip6_table
-            st.session_state["cmip6_latitude"] = current_lat
-            st.session_state["cmip6_is_custom"] = False
-
-        # Show CMIP6 Deltas table
-        if cmip6_table is not None:
-            s_map = fepw.SCENARIO_MAP.get(scenario_label, scenario_label)
-            active_deltas = cmip6_table[(cmip6_table["scenario"] == s_map) & (cmip6_table["year"] == target_year)]
-            if not active_deltas.empty:
-                with st.expander("ℹ️ Show applied monthly CMIP6 delta values", expanded=False):
-                    st.markdown(f"**Monthly Climate Deltas for {scenario_label} ({target_year})**")
-                    cols_to_show = ["month", "delta_temp", "delta_rh", "delta_wind", "delta_ghi"]
-                    available_cols = [c for c in cols_to_show if c in active_deltas.columns]
-                    display_deltas = active_deltas[available_cols].copy()
-                    
-                    rename_dict = {
-                        "month": "Month",
-                        "delta_temp": "Temp Delta (°C)",
-                        "delta_rh": "RH Delta (%)",
-                        "delta_wind": "Wind Delta (m/s)",
-                        "delta_ghi": "GHI Delta (W/m²)"
-                    }
-                    display_deltas = display_deltas.rename(columns=rename_dict)
-                    if "Month" in display_deltas.columns:
-                        import calendar
-                        display_deltas["Month"] = display_deltas["Month"].apply(lambda m: calendar.month_name[int(m)] if pd.notna(m) and 1 <= int(m) <= 12 else str(m))
-                    st.dataframe(display_deltas, use_container_width=True, hide_index=True)
-
-        with st.expander("Use custom CMIP6 delta CSV", expanded=False):
-            st.caption(
-                "Upload a CSV with columns scenario, year, month, delta_temp, delta_rh, "
-                "delta_wind, and delta_ghi, with optional lat_band. Each row tells the app how much to "
-                "shift one month for a scenario and reporting year."
-            )
-            custom_deltas = st.file_uploader("Custom delta table", type=["csv"], key="custom_delta_upload")
-            if custom_deltas is not None:
-                try:
-                    cmip6_table = pd.read_csv(custom_deltas)
-                    st.session_state["cmip6_deltas"] = cmip6_table
-                    st.session_state["cmip6_is_custom"] = True
-                    st.success("Loaded custom CMIP6 deltas.")
-                except Exception as exc:
-                    st.error(f"Failed to parse delta CSV: {exc}")
 
         sensor_df_full = ls.load_sensor_data()
         sensor_clim = ls.build_sensor_climatology(sensor_df_full)
@@ -19009,16 +18934,33 @@ def render_future_climate_page():
 
         st.info("These scenarios morph a typical year by applying average climate deltas for planning and design-weather review; they are not weather forecasts for a specific future date.")
 
-        with st.spinner("Morphing EPW datasets with CMIP6 deltas…"):
-            payloads = fepw.generate_download_payloads(
-                base_df,
-                header_meta,
-                scenario_label,
-                cmip6_table,
-                bias_payload if bias_payload is not None and not bias_payload.empty else None,
-                use_sensor_baseline,
-                temp_only,
-            )
+        baseline_for_fwg = fepw.sensor_informed_baseline(base_df, bias_payload) if use_sensor_baseline else base_df.copy()
+        raw_epw = st.session_state.get("raw_epw_bytes") if bias_payload is None or bias_payload.empty else None
+        run_key = hashlib.sha256(pd.util.hash_pandas_object(baseline_for_fwg, index=True).values.tobytes() + repr(header_meta).encode() + scenario_label.encode() + repr(sorted(selected_models)).encode()).hexdigest()
+        saved = st.session_state.get("official_fwg_results")
+        failed = st.session_state.get("official_fwg_failed_key") == run_key
+        retry = st.button("Retry generation", key="retry_official_fwg") if failed else False
+        if (not saved or saved[0] != run_key) and (not failed or retry):
+            st.session_state.pop("official_fwg_results", None)
+            st.session_state.pop("future_ai_summary", None)
+            try:
+                with st.spinner("Running official FWG CMIP6 ensemble for 2050 and 2080…"):
+                    results = fwg.generate(baseline_for_fwg, header_meta, scenario_label, raw_epw=raw_epw, models=selected_models)
+                st.session_state["official_fwg_results"] = (run_key, results)
+                st.session_state.pop("official_fwg_failed_key", None)
+                st.session_state.pop("official_fwg_error", None)
+            except Exception as exc:
+                st.session_state["official_fwg_failed_key"] = run_key
+                st.session_state["official_fwg_error"] = str(exc)
+        saved = st.session_state.get("official_fwg_results")
+        if not saved or saved[0] != run_key:
+            st.session_state.pop("future_ai_summary", None)
+            st.error("Future weather generation failed. " + st.session_state.get("official_fwg_error", "Please retry."))
+            st.caption("Powered by [Future Weather Generator](https://future-weather-generator.adai.pt/), Rodrigues, Carvalho and Fernandes. CMIP6 Global v5.2.0 · CC BY-NC-SA.")
+            return
+        payloads = saved[1]
+        base_df = baseline_for_fwg
+        st.caption(f"FWG CMIP6 Global v5.2.0 · {len(selected_models)}-model ensemble ({', '.join(selected_models)}) · 2050 and 2080.")
 
         active_bundle = payloads.get(target_year)
         if not active_bundle:
@@ -19302,35 +19244,44 @@ def render_future_climate_page():
                                                  title=f"Future Temperature Change vs Baseline ({target_year})")
                         _st_plotly_chart(fig_heat_d, use_container_width=True)
 
-            # UTCI diurnal heatmap
+            # Preserve valid UTCI data even if heatmap rendering fails.
+            utci_future = None
+            utci_base = None
+            utci_error = None
             try:
                 utci_future = ce.compute_utci_approx(future_df)
                 utci_base = ce.compute_utci_approx(base_df)
                 if not utci_future.notna().any() or not utci_base.notna().any():
                     raise ValueError("UTCI calculation returned no valid hours; check model dependencies and input coverage.")
-                tmp_uf = pd.DataFrame({"UTCI": utci_future}, index=future_df.index)
-                grid_utci = _build_diurnal_grid(tmp_uf, "UTCI")
-                st.markdown(f"#### Diurnal Heatmap — UTCI (Future {target_year})")
-                if grid_utci is not None:
-                    _utci_date_labels = _date_axis_labels(grid_utci)
-                    _utci_date_ticks = _monthly_date_ticks(_utci_date_labels)
-                    fig_utci_h = go.Figure(go.Heatmap(
-                        z=grid_utci.values, x=_utci_date_labels, y=_hour_labels,
-                        colorscale=[[0, "#2166ac"], [0.35, "#67a9cf"], [0.5, "#fddbc7"],
-                                    [0.7, "#ef8a62"], [1, "#b2182b"]],
-                        colorbar=dict(title="UTCI °C"),
-                        hovertemplate=f"Date: %{{x}}, {target_year}<br>Hour: %{{y}}<br>UTCI: %{{z:.1f}} °C<extra></extra>",
-                    ))
-                    fig_utci_h.update_layout(height=380, margin=dict(l=60, r=10, t=30, b=40),
-                                             xaxis=dict(title=f"Date ({target_year})", tickmode="array", tickvals=_utci_date_ticks, ticktext=_utci_date_ticks, showgrid=False),
-                                             yaxis=dict(autorange="reversed", showgrid=False), template=PLOTLY_TEMPLATE,
-                                             paper_bgcolor="#f8fbff", plot_bgcolor="#f8fbff", font=dict(color="#243447"),
-                                             title=f"Future UTCI by Hour and Day ({target_year})")
-                    _st_plotly_chart(fig_utci_h, use_container_width=True)
             except Exception as utci_exc:
                 utci_future = None
                 utci_base = None
-                st.caption(f"UTCI could not be calculated: {utci_exc}")
+                utci_error = str(utci_exc)
+                st.caption(f"UTCI could not be calculated: {utci_error}")
+
+            if utci_future is not None:
+                try:
+                    tmp_uf = pd.DataFrame({"UTCI": utci_future}, index=future_df.index)
+                    grid_utci = _build_diurnal_grid(tmp_uf, "UTCI")
+                    st.markdown(f"#### Diurnal Heatmap — UTCI (Future {target_year})")
+                    if grid_utci is not None:
+                        _utci_date_labels = _date_axis_labels(grid_utci)
+                        _utci_date_ticks = _monthly_date_ticks(_utci_date_labels)
+                        fig_utci_h = go.Figure(go.Heatmap(
+                            z=grid_utci.values, x=_utci_date_labels, y=[f"{int(hour):02d}:00" for hour in grid_utci.index],
+                            colorscale=[[0, "#2166ac"], [0.35, "#67a9cf"], [0.5, "#fddbc7"],
+                                        [0.7, "#ef8a62"], [1, "#b2182b"]],
+                            colorbar=dict(title="UTCI °C"),
+                            hovertemplate=f"Date: %{{x}}, {target_year}<br>Hour: %{{y}}<br>UTCI: %{{z:.1f}} °C<extra></extra>",
+                        ))
+                        fig_utci_h.update_layout(height=380, margin=dict(l=60, r=10, t=30, b=40),
+                                                 xaxis=dict(title=f"Date ({target_year})", tickmode="array", tickvals=_utci_date_ticks, ticktext=_utci_date_ticks, showgrid=False),
+                                                 yaxis=dict(autorange="reversed", showgrid=False), template=PLOTLY_TEMPLATE,
+                                                 paper_bgcolor="#f8fbff", plot_bgcolor="#f8fbff", font=dict(color="#243447"),
+                                                 title=f"Future UTCI by Hour and Day ({target_year})")
+                        _st_plotly_chart(fig_utci_h, use_container_width=True)
+                except Exception as utci_chart_exc:
+                    st.caption(f"UTCI heatmap unavailable: {utci_chart_exc}")
 
             # ── ANNUAL DISTRIBUTION ───────────────────────────────
             st.markdown("#### Annual Temperature Distribution")
@@ -19377,7 +19328,7 @@ def render_future_climate_page():
                                                 paper_bgcolor="#f8fbff", plot_bgcolor="#f8fbff", font=dict(color="#243447"))
                     _st_plotly_chart(fig_utci_dist, use_container_width=True)
                 else:
-                    st.caption("UTCI distribution unavailable. See the calculation status above.")
+                    st.caption(f"UTCI distribution unavailable: {utci_error or 'No valid UTCI hours.'}")
 
             # ── SHIFT PLOT (MONTHLY BOX) ──────────────────────────
             st.markdown("#### Monthly Shift Plot — Temperature")
@@ -19454,14 +19405,14 @@ def render_future_climate_page():
                         trace.customdata = di_order
                         trace.hovertemplate = "%{y}<br>%{customdata}: %{x:.1f}%<extra></extra>"
                     _st_plotly_chart(fig_di, use_container_width=True)
-                    st.caption("Green: comfortable · Yellow: slight discomfort · Orange: discomfort · Red: strong discomfort · Dark red: medical emergency. Hover for category shares.")
+                    st.caption("Hover for category shares.")
 
                 # UTCI breakdown
                 with sb2:
                     if utci_cats_f is not None and utci_cats_b is not None:
                         st.caption("UTCI Stress Categories")
                         utci_order = ["Extreme cold stress", "Very strong cold stress",
-                                      "Strong cold stress", "Moderate cold stress",
+                                      "Strong cold stress", "Moderate cold stress", "Slight cold stress",
                                       "No thermal stress", "Moderate heat stress",
                                       "Strong heat stress", "Very strong heat stress",
                                       "Extreme heat stress"]
@@ -19491,7 +19442,7 @@ def render_future_climate_page():
                         fig_utci_bar.update_traces(textangle=0, customdata=utci_order, hovertemplate="%{y}<br>%{customdata}: %{x:.1f}%<extra></extra>")
                         _st_plotly_chart(fig_utci_bar, use_container_width=True)
                     else:
-                        st.caption("UTCI breakdown unavailable.")
+                        st.caption(f"UTCI breakdown unavailable: {utci_error or 'No valid UTCI hours.'}")
             except Exception as _stress_exc:
                 st.warning(f"Could not compute stress breakdown: {_stress_exc}")
 
@@ -19517,6 +19468,11 @@ def render_future_climate_page():
                 if "relhum" in future_df:
                     preview_cols.append("relhum")
                 st.dataframe(future_df[preview_cols].tail(168), use_container_width=True, height=260)
+
+
+    st.divider()
+    st.caption("Engine: [Future Weather Generator](https://future-weather-generator.adai.pt/), Rodrigues, Carvalho and Fernandes · CMIP6 Global v5.2.0 · CC BY-NC-SA. Reference: [WCRP Coupled Model Intercomparison Project Phase 6 (CMIP6)](https://www.wcrp-cmip.org/cmip-phases/cmip6/). "
+               "[Eyring et al. (2016), experimental design and organization](https://doi.org/10.5194/gmd-9-1937-2016).")
 
 
 # Module level footer removed as it rendered before page content.

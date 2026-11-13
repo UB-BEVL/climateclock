@@ -45,7 +45,7 @@ def setup() -> None:
     if not ENVIRONMENT.exists():
         command = find_python()
         print(f"Creating the ClimateClock environment with {command[0]}", flush=True)
-        subprocess.run([*command, "-m", "venv", str(ENVIRONMENT)], check=True)
+        subprocess.run([*command, "-m", "venv", str(ENVIRONMENT)], check=True, stdin=subprocess.DEVNULL, stdout=sys.stdout, stderr=sys.stderr)
     if not supported([str(PYTHON)]):
         raise RuntimeError(f"{ENVIRONMENT} is not a working Python 3.11/3.12 environment. Rename that folder and run this launcher again.")
 
@@ -56,24 +56,33 @@ def setup() -> None:
         print("Installing the project's dependencies (first run or requirements changed)...", flush=True)
         subprocess.run(
             [str(PYTHON), "-m", "pip", "install", "--disable-pip-version-check", "--no-cache-dir", "--no-compile", "-r", str(requirements)],
-            cwd=ROOT, check=True,
+            cwd=ROOT, check=True, stdin=subprocess.DEVNULL, stdout=sys.stdout, stderr=sys.stderr,
         )
-        subprocess.run([str(PYTHON), "-m", "pip", "check"], cwd=ROOT, check=True)
+        subprocess.run([str(PYTHON), "-m", "pip", "check"], cwd=ROOT, check=True, stdin=subprocess.DEVNULL, stdout=sys.stdout, stderr=sys.stderr)
         subprocess.run(
             [str(PYTHON), "-c", "from pythermalcomfort.models import utci, pmv_ppd_ashrae; print('UTCI and PMV imports OK')"],
-            cwd=ROOT, check=True,
+            cwd=ROOT, check=True, stdin=subprocess.DEVNULL, stdout=sys.stdout, stderr=sys.stderr,
         )
         marker.write_text(fingerprint + "\n")
 
 
 def main() -> int:
+    # Detached Windows launches cannot safely inherit a console handle.
+    logs = ROOT / "weather_cache" / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    if not sys.stdout or not sys.stdout.isatty():
+        sys.stdout = open(logs / "launcher.log", "a", encoding="utf-8", buffering=1)
+    if not sys.stderr or not sys.stderr.isatty():
+        sys.stderr = open(logs / "launcher.log", "a", encoding="utf-8", buffering=1)
     setup()
     arguments = sys.argv[1:]
     if arguments == ["--setup-only"]:
         print(f"Ready: {PYTHON}", flush=True)
         return 0
     print(f"Starting ClimateClock with {PYTHON}", flush=True)
-    return subprocess.call([str(PYTHON), "-m", "streamlit", "run", str(ROOT / "app.py"), *arguments], cwd=ROOT)
+    with (logs / "streamlit.log").open("a", encoding="utf-8", buffering=1) as log:
+        return subprocess.call([str(PYTHON), "-m", "streamlit", "run", str(ROOT / "app.py"), *arguments],
+                               cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
 
 
 if __name__ == "__main__":

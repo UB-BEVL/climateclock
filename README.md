@@ -139,3 +139,28 @@ The engineer's view of the climate's thermodynamic properties.
 * If the charts appear blank, ensure an EPW file corresponds to the correct geographic location and contains valid hourly data.
 * **Performance**: Loading extreme datasets spanning decades may cause the browser to temporarily throttle. The application uses smart caching and data downcasting (Float32) to mitigate memory overhead.
 * **Browser Compatibility**: Recommended for use on Chromium-based browsers (Chrome, Edge) or Firefox. Safar's WebGL implementation may occasionally struggle with the 3D Sun Path.
+
+
+### Official Future Weather Generator
+
+Long-Term Prediction uses the official FWG CMIP6 Global v5.2.0 distribution (Engine 1.1.0), not synthetic climate deltas. Install Java 21 and run `python tools/install_fwg.py` on each app host before using generation. The distribution download is approximately 3.7 GB; allow additional space for extraction and cached results. Runtime files are excluded from Git.
+
+`FWG_JAR` overrides the distribution path, `FWG_JAVA` overrides the Java executable, and `FWG_CACHE` selects a writable cache directory. The default cache is `climateclock-fwg` inside the operating system temporary directory, outside OneDrive and with shorter Windows paths. A full annual EPW is required. Generation runs automatically when baseline or scenario changes and produces both 2050 (2036–2065) and 2080 (2066–2095) ensemble EPWs for the chosen SSP. Temperature-only/custom delta controls are not part of this engine workflow. Sensor bias correction, when available, is applied to the input baseline before FWG runs.
+
+Completed, validated runs are reused; errors never fall back to fabricated climate signals. Runtime logs and FWG manifests remain in the cached run folder. On hosted deployments, provision Java, the pinned distribution, writable storage and sufficient memory before enabling this feature; changing Python code alone does not install the engine.
+
+FWG by Eugénio Rodrigues, David Carvalho and Marco S. Fernandes is distributed under CC BY-NC-SA. See https://future-weather-generator.adai.pt/download/ and https://future-weather-generator.adai.pt/documentation/cli-reference.html. Scientific reference: Rodrigues et al. (2023), https://doi.org/10.1016/j.buildenv.2023.110104.
+
+
+On Windows, the bundled, version-checked compatibility sidecar fixes an access-denied canonical-path lookup while retaining checksum validation and scientific bytecode. See `tools/fwg_compat/README.md` for source, build steps and attribution. Expanded climate CSVs use NTFS compression where available.
+
+The visible default is a **two-model ensemble (CanESM5 + CNRM-CM6-1)**, not the full 23-model ensemble. The climate-model selector lists the installed catalog and supports larger ensembles. This avoids exhausting modest local disks; users needing broader model coverage must provision sufficient free space. Model selection is included in both UI and persistent cache identity. Real EPW validation can be run with `python tools/verify_fwg_real.py --epw INPUT.epw --output OUTPUT_DIRECTORY`.
+
+
+### Portable local climate assistant
+
+The configured assistant uses Qwen2.5 1.5B Q4_K_M (approximately 986 MB) with the CPU build of llama.cpp b12328. Runtime files live under `vendor/llama` and are excluded from Git. The GGUF download was verified against its Ollama registry SHA256. Source distributions: https://github.com/ggml-org/llama.cpp/releases/tag/b12328 and https://ollama.com/library/qwen2.5:1.5b .
+
+The `[slm]` secrets section selects `model = "qwen2.5:1.5b"`, `api_url = "http://127.0.0.1:11434/v1/chat/completions"`, and `local_managed = true`. The existing API-key field is a local compatibility value, not a cloud credential. Requests explicitly marked managed start the installed server on demand and reuse it thereafter. Other provider configurations are unchanged. The server binds only to loopback, uses four CPU threads, and logs to `weather_cache/logs/local-ai.log`. No cloud API is called for answers; only the app's compact climate summary is sent to the local process. Startup and inference require the app and model to be on the same Windows computer.
+
+On the Buffalo EPW test, the assistant correctly reported 9.0 C annual mean dry-bulb temperature and 70.9% relative humidity, distinguished typical-year data from live weather, and declined to infer flood risk without rainfall data. This is a small language model: responses still require review, especially design advice beyond supplied measurements.
